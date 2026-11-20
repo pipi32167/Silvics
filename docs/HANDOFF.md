@@ -92,7 +92,7 @@ xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-取产物路径（**不要假设在 `.build` 下**，这台机器的 `BUILT_PRODUCTS_DIR` 被重定向了）：
+取产物路径。这台机器的 Xcode 全局设了 `IDEBuildLocationStyle=Custom`，`-derivedDataPath .build` **不决定**产物位置：
 
 ```bash
 xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
@@ -107,6 +107,9 @@ rm -rf "$HOME/Library/Application Support/Silvics"
 open -a "<BUILT_PRODUCTS_DIR>/Silvics.app" --env SILVICS_SEED=1
 ```
 
+同一台机器上所有 Xcode 构建共用 `/Volumes/WD_BLACK_2T/tmp/Xcode/Build/Intermediates.noindex`。
+原仓库与克隆同时构建会报 `database is locked`。跑之前先 `pkill -f xcodebuild`。
+
 跑测试（输出必须重定向，否则被系统日志淹没）：
 
 ```bash
@@ -117,6 +120,18 @@ grep -E "Test Case.*(passed|failed)|TEST (SUCCEEDED|FAILED)" /tmp/t.log
 ```
 
 数据库位置：`~/Library/Application Support/Silvics/silvics.sqlite`（WAL 模式）。
+
+### 交接已验证
+
+2026-11-20 从一个空目录干净克隆 `https://github.com/pipi32167/Silvics.git` 后：
+
+```text
+xcodegen generate          → 生成工程
+xcodebuild ... build       → BUILD SUCCEEDED
+xcodebuild ... test        → 25 tests, 0 failures, TEST SUCCEEDED
+```
+
+也就是说下一任 agent 不需要本机的任何残留物就能起来。
 
 ## 6. 截图与自动化验收
 

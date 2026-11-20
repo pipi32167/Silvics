@@ -22,7 +22,7 @@ xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   CODE_SIGNING_ALLOWED=NO test > /tmp/silvics-test.log 2>&1
 grep -E "Test Case.*(passed|failed)|TEST (SUCCEEDED|FAILED)" /tmp/silvics-test.log
 
-# 产物路径。不要假设在 .build 下，本机 BUILT_PRODUCTS_DIR 被重定向。
+# 查产物路径
 xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR
 
@@ -31,7 +31,19 @@ rm -rf "$HOME/Library/Application Support/Silvics"
 open -a "<BUILT_PRODUCTS_DIR>/Silvics.app" --env SILVICS_SEED=1
 ```
 
-`xcodebuild` 并发会锁 `build.db`。报 `database is locked` 时先 `pkill -f xcodebuild`。
+### 构建位置陷阱
+
+本机 Xcode 全局设了 `IDEBuildLocationStyle=Custom`：
+
+```bash
+defaults read com.apple.dt.Xcode IDECustomBuildProductsPath
+# /Volumes/WD_BLACK_2T/tmp/Xcode/Build/Products
+```
+
+后果有两条，都踩过：
+
+1. `-derivedDataPath .build` 不决定产物位置。全部构建输出到上面那个绝对路径，`.build` 只放部分中间产物。要拿 App 路径就用上面那条 `-showBuildSettings` 查，不要猜。
+2. 同一台机器上所有 Xcode 构建共用一套中间产物目录。两个构建并行（或原仓库与克隆同时构建）会报 `database is locked`。跑构建前先 `pkill -f xcodebuild`。
 
 ## 测试
 
