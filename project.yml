@@ -1,0 +1,89 @@
+name: Silvics
+options:
+  bundleIdPrefix: com.silvics
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    ENABLE_APP_SANDBOX: NO
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    DEAD_CODE_STRIPPING: YES
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    Release:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.12.0
+  Markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    from: 0.9.0
+
+targets:
+  Silvics:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Silvics
+    dependencies:
+      - package: GRDB
+        product: GRDB
+      - package: Markdown
+        product: Markdown
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleName: Silvics
+        CFBundleDisplayName: Silvics
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundlePackageType: APPL
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.productivity
+        NSHighResolutionCapable: true
+        NSPrincipalClass: NSApplication
+        NSSupportsAutomaticTermination: false
+        NSSupportsSuddenTermination: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.silvics.app
+        PRODUCT_NAME: Silvics
+        INFOPLIST_FILE: Support/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ""
+
+  SilvicsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/SilvicsTests
+    dependencies:
+      - target: Silvics
+
+schemes:
+  Silvics:
+    build:
+      targets:
+        Silvics: all
+        SilvicsTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SilvicsTests
+    archive:
+      config: Release

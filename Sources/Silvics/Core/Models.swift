@@ -1,0 +1,236 @@
+import Foundation
+import GRDB
+
+// MARK: - 文本归一化
+
+enum TextNormalizer {
+    /// 标题匹配键：小写、去首尾空白、全角转半角、压缩连续空白。
+    /// `[[ ]]` 解析与重复检测都按它比对。
+    static func key(_ raw: String) -> String {
+        var out = ""
+        out.reserveCapacity(raw.count)
+        for scalar in raw.unicodeScalars {
+            // 全角 ASCII（U+FF01...U+FF5E）转半角
+            if scalar.value >= 0xFF01 && scalar.value <= 0xFF5E {
+                out.unicodeScalars.append(Unicode.Scalar(scalar.value - 0xFEE0)!)
+            } else if scalar.value == 0x3000 {
+                out.append(" ")
+            } else {
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    /// 正文正文的稳定哈希。
+    static func bodyHash(_ body: String) -> String {
+        var hasher = Hasher()
+        hasher.combine(body)
+        let h = hasher.finalize()
+        return String(h, radix: 16)
+    }
+
+    /// 标题里禁止出现的字符。理由见设计文档 7.4。
+    static let forbiddenTitleScalars: Set<Character> = ["[", "]", "(", ")"]
+
+    /// 校验标题。返回 nil 表示通过，否则返回给用户看的说明。
+    static func validateTitle(_ raw: String) -> String? {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return "标题不能为空" }
+        if t.count < 4 { return "标题至少 4 个字。写成一句可读的断言。" }
+        if t.count > 40 { return "标题不超过 40 个字。长标题说明它该拆成两条。" }
+        if t.contains(where: { forbiddenTitleScalars.contains($0) }) {
+            return "标题不能含 [ ] ( ) 这四个字符"
+        }
+        if isDateLike(t) { return "标题不要写日期。写成一句断言，例如「稀疏重复优于集中突击」。" }
+        if let prefix = bureaucraticPrefix(t) {
+            return "标题不要以「\(prefix)」开头。写成一句断言。"
+        }
+        return nil
+    }
+
+    private static func isDateLike(_ t: String) -> Bool {
+        let patterns = [
+            #"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$"#,
+            #"^\d{1,2}月\d{1,2}日$"#,
+            #"^\d{4}年\d{1,2}月(\d{1,2}日)?$"#,
+            #"^第?\d+章$"#,
+            #"^(周|星期)[一二三四五六日天]$"#,
+        ]
+        return patterns.contains { t.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func bureaucraticPrefix(_ t: String) -> String? {
+        ["读书笔记", "会议记录", "会议纪要", "TODO", "待办", "备忘", "随手记"]
+            .first { t.hasPrefix($0) }
+    }
+}
+
+// MARK: - 状态
+
+/// 笔记成熟度。用数字花园的三级术语，与「常绿笔记」的定位一致。
+enum NoteStatus: String, Codable, CaseIterable, DatabaseValueConvertible, Sendable {
+    case seedling
+    case budding
+    case evergreen
+
+    var label: String {
+        switch self {
+        case .seedling: return "幼苗"
+        case .budding: return "抽枝"
+        case .evergreen: return "常绿"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .seedling: return "leaf"
+        case .budding: return "leaf.fill"
+        case .evergreen: return "tree"
+        }
+    }
+}
+
+// MARK: - 笔记
+
+/// 一条笔记。正文是唯一真相，其余表都是可重建的索引。
+struct Note: Identifiable, Equatable, Hashable, Codable {
+    var id: String
+    var title: String
+    /// 标题的匹配键。见 `TextNormalizer.key`。
+    var titleKey: String
+    var body: String
+    var status: NoteStatus
+    var createdAt: Int64
+    var updatedAt: Int64
+    /// 正文哈希。用于判定是否需要重算索引。
+    var bodyHash: String
+
+    static func makeId() -> String {
+        let ms = Int64(Date().timeIntervalSince1970 * 1000)
+        let suffix = String(UInt32.random(in: 0..<UInt32.max), radix: 36)
+        return "n\(ms)\(suffix)"
+    }
+
+    /// 新建一条空笔记。
+    static func draft(title: String) -> Note {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return Note(
+            id: makeId(),
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            titleKey: TextNormalizer.key(title),
+            body: "",
+            status: .seedling,
+            createdAt: now,
+            updatedAt: now,
+            bodyHash: TextNormalizer.bodyHash("")
+        )
+    }
+}
+
+extension Note: FetchableRecord, PersistableRecord {
+    static let databaseTableName = "note"
+
+    enum Columns {
+        static let id = Column(CodingKeys.id)
+        static let titleKey = Column(CodingKeys.titleKey)
+        static let updatedAt = Column(CodingKeys.updatedAt)
+    }
+}
+
+// MARK: - 引用
+
+enum LinkStatus: String, Codable, DatabaseValueConvertible, Sendable {
+    case resolved
+    case dangling
+}
+
+/// 从正文解析出的一条有向边。索引，可重建。
+struct NoteLink: Identifiable, Equatable, Codable {
+    var id: Int64?
+    var fromId: String
+    var toId: String?
+    var rawTarget: String
+    var displayText: String
+    var anchor: String?
+    /// UTF-16 位置，与 `NSTextStorage` 一致。
+    var location: Int
+    var length: Int
+    var status: LinkStatus
+}
+
+extension NoteLink: FetchableRecord, MutablePersistableRecord {
+    static let databaseTableName = "link"
+
+    enum Columns {
+        static let fromId = Column(CodingKeys.fromId)
+        static let toId = Column(CodingKeys.toId)
+    }
+
+    mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+}
+
+// MARK: - 提及（P2 使用）
+
+enum MentionKind: String, Codable, DatabaseValueConvertible, Sendable {
+    case exact
+    case alias
+    case partial
+}
+
+/// 正文中出现、但还没变成引用的已有标题。
+struct NoteMention: Identifiable, Equatable, Codable {
+    var id: Int64?
+    var noteId: String
+    var targetId: String
+    var location: Int
+    var length: Int
+    var kind: MentionKind
+    var dismissed: Bool
+}
+
+extension NoteMention: FetchableRecord, MutablePersistableRecord {
+    static let databaseTableName = "mention"
+
+    mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+}
+
+// MARK: - 界面模型
+
+/// 反向链接面板的一行：来源笔记 + 命中处上下文。
+struct Backlink: Identifiable, Equatable, Hashable {
+    var sourceId: String
+    var sourceTitle: String
+    var snippet: String
+    var isDangling: Bool
+
+    var id: String { sourceId }
+}
+
+/// 侧栏列表的一行。
+struct NoteSummary: Identifiable, Equatable, Hashable {
+    var id: String
+    var title: String
+    var status: NoteStatus
+    var backlinkCount: Int
+    var outgoingCount: Int
+    var snippet: String
+    var updatedAt: Int64
+}
+
+/// `[[` 补全的一项。
+struct CompletionItem: Identifiable, Equatable, Hashable {
+    var id: String
+    var title: String
+    var status: NoteStatus
+    var backlinkCount: Int
+    /// 为 true 表示「新建这条笔记」。
+    var isCreate: Bool
+}
