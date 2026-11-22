@@ -17,7 +17,18 @@ final class AppState: ObservableObject {
     @Published var searchQuery: String = ""
     @Published private(set) var statusMessage: String?
     @Published var isShowingNewNote: Bool = false
+    @Published var isShowingMentionsSheet: Bool = false
+    @Published var isShowingAliasSheet: Bool = false
+    @Published var isShowingRenameSheet: Bool = false
+    /// 当前笔记的未链接提及（L2）。
+    @Published private(set) var mentions: [MentionOccurrence] = []
+    /// 全库提及，按目标聚合。批量面板用。
+    @Published private(set) var mentionGroups: [MentionGroup] = []
+    /// 当前笔记的别名。
+    @Published private(set) var aliases: [String] = []
     @Published private(set) var isCompletionVisible: Bool = false
+    /// 上次批量转换的撤销信息。`nil` 表示没有可撤销的转换。
+    @Published private(set) var lastConversionSummary: String?
     /// 已解析的标题键集合。驱动引用是实线还是虚线。
     @Published private(set) var resolvedKeys: Set<String> = []
 
@@ -28,6 +39,8 @@ final class AppState: ObservableObject {
     private var saveTask: Task<Void, Never>?
     /// 最近一次落库的正文，用于跳过无变化的保存。
     private var lastSavedBody: String = ""
+    /// 上次批量转换前的正文。按笔记 id 存。
+    private var conversionUndo: [String: String]?
 
     // MARK: - 启动
 
@@ -64,7 +77,10 @@ final class AppState: ObservableObject {
                 backlinks = []
                 outgoing = []
                 danglingTargets = []
+                mentions = []
+                aliases = []
             }
+            refreshMentionGroups()
         } catch {
             statusMessage = "载入失败：\(error.localizedDescription)"
         }
@@ -81,9 +97,16 @@ final class AppState: ObservableObject {
             backlinks = try repo.backlinks(to: id)
             outgoing = try repo.outgoing(from: id)
             danglingTargets = try repo.danglingTargets()
+            mentions = try repo.mentions(in: id)
+            aliases = try repo.aliases(noteId: id)
         } catch {
             statusMessage = "打开笔记失败：\(error.localizedDescription)"
         }
+    }
+
+    /// 全库提及聚合。批量面板与菜单状态用。
+    func refreshMentionGroups() {
+        mentionGroups = (try? repo.mentionGroups()) ?? []
     }
 
     // MARK: - 选择
@@ -175,7 +198,9 @@ final class AppState: ObservableObject {
                 backlinks = try repo.backlinks(to: id)
                 outgoing = try repo.outgoing(from: id)
                 danglingTargets = try repo.danglingTargets()
+                mentions = try repo.mentions(in: id)
             }
+            refreshMentionGroups()
         } catch {
             statusMessage = "保存失败：\(error.localizedDescription)"
         }
@@ -228,6 +253,139 @@ final class AppState: ObservableObject {
             statusMessage = "索引已重建。"
         } catch {
             statusMessage = "重建失败：\(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - 提及（L2）
+
+    /// 当前笔记的提及区间与目标标题。编辑区用它画点状下划线。
+    func mentionDecorations() -> [MentionDecoration] {
+        mentions.map {
+            MentionDecoration(
+                range: NSRange(location: $0.location, length: $0.length),
+                title: $0.targetTitle
+            )
+        }
+    }
+
+    func dismissMention(id: Int64) {
+        do {
+            try repo.dismissMention(id: id)
+            reloadCurrent()
+        } catch {
+            statusMessage = "忽略提及失败：\(error.localizedDescription)"
+        }
+    }
+
+    var canUndoConversion: Bool { conversionUndo != nil }
+
+    /// 把提及转成引用。整批一个事务，失败不改任何正文。
+    @discardableResult
+    func convertMentions(ids: [Int64]) -> Bool {
+        guard !ids.isEmpty else { return false }
+        flushPendingSave()
+        do {
+            let conversions = try repo.convertMentions(occurrenceIds: ids)
+            guard !conversions.isEmpty else {
+                reloadCurrent()
+                return false
+            }
+            conversionUndo = Dictionary(uniqueKeysWithValues: conversions.map { ($0.id, $0.previousBody) })
+            let inserted = conversions.reduce(0) { $0 + $1.insertedCount }
+            let summary = "已把 \(inserted) 处提及转成引用，涉及 \(conversions.count) 篇笔记。"
+            lastConversionSummary = summary
+            loadAll()
+            reloadCurrent()
+            statusMessage = summary
+            return true
+        } catch {
+            statusMessage = "转换失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// 单个目标在全部笔记里的提及 id。侧栏「全部转换」用。
+    func occurrenceIds(forTarget targetId: String) -> [Int64] {
+        mentionGroups.first { $0.targetId == targetId }?.occurrences.map(\.id) ?? []
+    }
+
+    /// 只算不改，供 diff 预览。
+    func previewMentionConversion(ids: [Int64]) -> [NoteConversion] {
+        (try? repo.previewMentionConversion(occurrenceIds: ids)) ?? []
+    }
+
+    func undoLastConversion() {
+        guard let undo = conversionUndo else { return }
+        do {
+            try repo.restoreBodies(undo)
+            conversionUndo = nil
+            lastConversionSummary = nil
+            loadAll()
+            reloadCurrent()
+            statusMessage = "已撤销上次批量转换。"
+        } catch {
+            statusMessage = "撤销失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func reloadCurrent() {
+        if let id = selection { loadNote(id: id) }
+        refreshMentionGroups()
+    }
+
+    // MARK: - 别名
+
+    /// 加别名。返回错误说明，nil 表示成功。
+    func addAlias(_ name: String) -> String? {
+        guard let id = selection else { return "没有选中笔记" }
+        do {
+            let message = try repo.addAlias(noteId: id, name: name)
+            if message == nil {
+                aliases = try repo.aliases(noteId: id)
+                loadAll()
+                reloadCurrent()
+            }
+            return message
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func removeAlias(_ name: String) {
+        guard let id = selection else { return }
+        do {
+            _ = try repo.removeAlias(noteId: id, name: name)
+            aliases = try repo.aliases(noteId: id)
+            loadAll()
+            reloadCurrent()
+        } catch {
+            statusMessage = "删除别名失败：\(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - 改名
+
+    func renameImpact(newTitle: String) -> [RenameImpact] {
+        guard let id = selection else { return [] }
+        return (try? repo.renameImpact(noteId: id, newTitle: newTitle)) ?? []
+    }
+
+    /// 改名并批量重写正文引用。返回错误说明，nil 表示成功。
+    func rename(newTitle: String) -> String? {
+        guard let id = selection else { return "没有选中笔记" }
+        flushPendingSave()
+        do {
+            let changed = try repo.rename(noteId: id, newTitle: newTitle)
+            selection = id
+            loadAll()
+            reloadCurrent()
+            isShowingRenameSheet = false
+            statusMessage = changed > 0
+                ? "已改名，并改写了 \(changed) 篇笔记里的旧引用。"
+                : "已改名。"
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
 

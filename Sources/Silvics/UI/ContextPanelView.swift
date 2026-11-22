@@ -15,6 +15,7 @@ struct ContextPanelView: View {
                         .padding(.top, 20)
                 } else {
                     backlinkSection
+                    mentionSection
                     outgoingSection
                     danglingSection
                 }
@@ -92,6 +93,79 @@ struct ContextPanelView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 未链接提及
+
+    private var mentionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("未链接提及")
+                    .font(.system(size: 10, weight: .semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Text("\(app.mentions.count)")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                if !app.mentions.isEmpty {
+                    Button("整理") {
+                        app.refreshMentionGroups()
+                        app.isShowingMentionsSheet = true
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10))
+                }
+            }
+
+            if app.mentions.isEmpty {
+                hint("正文里写到已有标题时，这里会出现。点中带点状下划线的文字按 ⌘⇧K 可转成引用。")
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(app.mentions) { mention in
+                        HStack(alignment: .top, spacing: 5) {
+                            Image(systemName: mention.kind == .alias ? "tag" : "link")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Color(nsColor: Theme.mentionUnderline))
+                                .padding(.top, 3)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mention.targetTitle)
+                                    .font(.system(size: 12))
+                                    .lineLimit(1)
+                                Text(mention.snippet)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+
+                            Spacer(minLength: 0)
+
+                            Button {
+                                app.select(mention.noteId)
+                            } label: {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("回到这篇笔记")
+
+                            Button {
+                                app.dismissMention(id: mention.id)
+                            } label: {
+                                Image(systemName: "eye.slash")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("忽略这条提及")
+                        }
+                        .padding(.vertical, 3)
                     }
                 }
             }

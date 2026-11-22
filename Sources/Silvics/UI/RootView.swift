@@ -19,6 +19,18 @@ struct RootView: View {
             NewNoteSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingMentionsSheet) {
+            MentionSheet()
+                .environmentObject(app)
+        }
+        .sheet(isPresented: $app.isShowingAliasSheet) {
+            AliasSheet()
+                .environmentObject(app)
+        }
+        .sheet(isPresented: $app.isShowingRenameSheet) {
+            RenameSheet()
+                .environmentObject(app)
+        }
         .overlay(alignment: .bottom) {
             StatusBanner()
         }
@@ -85,7 +97,9 @@ private struct EditorPane: View {
             if let note = app.current {
                 NoteEditorView(
                     initialText: note.body,
+                    text: note.body,
                     resolvedKeys: app.resolvedKeys,
+                    mentions: app.mentionDecorations(),
                     onChange: { text in app.bodyDidChange(text) },
                     completionProvider: { query, limit in app.completionItems(query: query, limit: limit) },
                     onCreateNote: { title in app.createIfNeeded(title: title) },
@@ -104,12 +118,31 @@ private struct EditorPane: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             if let note = app.current {
-                Text(note.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                Button {
+                    app.isShowingRenameSheet = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(note.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Image(systemName: "pencil")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("重命名。正文里的旧引用会跟着改。")
 
                 statusPicker
+
+                if !app.aliases.isEmpty {
+                    Label("\(app.aliases.count)", systemImage: "tag")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help("别名：" + app.aliases.joined(separator: "、"))
+                }
 
                 Spacer()
 

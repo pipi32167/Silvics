@@ -8,6 +8,9 @@ Silvics：单人用的 macOS 原生笔记应用。Markdown 纯文本 + `[[ ]]` �
 工程由 xcodegen 从 `project.yml` 生成。`Silvics.xcodeproj` 与 `Support/Info.plist` 是产物。
 
 ```bash
+# 本机 Xcode 不在默认位置，必须设。不设会报「requires Xcode」。
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
 # 生成工程。新增 .swift 文件后必须重跑，否则编译报「找不到符号」。
 xcodegen generate
 
@@ -22,41 +25,49 @@ xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   CODE_SIGNING_ALLOWED=NO test > /tmp/silvics-test.log 2>&1
 grep -E "Test Case.*(passed|failed)|TEST (SUCCEEDED|FAILED)" /tmp/silvics-test.log
 
-# 查产物路径
-xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
-  -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR
+# 查产物路径（本机固定为 .build/Build/Products/Debug/Silvics.app）
+ls .build/Build/Products/Debug/Silvics.app
 
 # 带演示数据启动。仅 DEBUG 构建，且库为空时生效，灌 20 条互相引用的笔记。
 rm -rf "$HOME/Library/Application Support/Silvics"
-open -a "<BUILT_PRODUCTS_DIR>/Silvics.app" --env SILVICS_SEED=1
+open -a .build/Build/Products/Debug/Silvics.app --env SILVICS_SEED=1
 ```
 
-### 构建位置陷阱
+### SPM 拉依赖卡住
 
-本机 Xcode 全局设了 `IDEBuildLocationStyle=Custom`：
+本机到 `github.com` 的 HTTPS 不通。首次构建卡在 `Fetching from https://github.com/...` 时挂代理：
 
 ```bash
-defaults read com.apple.dt.Xcode IDECustomBuildProductsPath
-# /Volumes/WD_BLACK_2T/tmp/Xcode/Build/Products
+export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=http://127.0.0.1:7890
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0=http://127.0.0.1:7890
 ```
 
-后果有两条，都踩过：
+依赖拉好后不再需要代理。SSH 推送与 `api.github.com` 直连可用。
 
-1. `-derivedDataPath .build` 不决定产物位置。全部构建输出到上面那个绝对路径，`.build` 只放部分中间产物。要拿 App 路径就用上面那条 `-showBuildSettings` 查，不要猜。
-2. 同一台机器上所有 Xcode 构建共用一套中间产物目录。两个构建并行（或原仓库与克隆同时构建）会报 `database is locked`。跑构建前先 `pkill -f xcodebuild`。
+### 不要跑 Release 测试
+
+测试目标用 `@testable import`，`-configuration Release` 下报 `Unable to resolve Swift module dependency: 'Silvics'`。要 Release 性能数字就单独 `swiftc -O` 编相关文件。
 
 ## 测试
 
-测试文件 `Tests/SilvicsTests/EditorKitTests.swift`，XCTest，25 项。
+测试文件在 `Tests/SilvicsTests/`，XCTest，共 73 项（P1 的 27 项 + P2 新增 46 项）。
 
-改 `Sources/Silvics/EditorKit/` 或 `Sources/Silvics/Core/` 时，先补失败测试再改实现。
-这两个目录不得导入 SwiftUI 或 AppKit 的 UI 部分，否则跑不了单测。
+`EditorKit/` 与 `Core/` 不得导入 SwiftUI 或 AppKit 的 UI 部分，否则跑不了单测。
+
+改 `EditorKit/` 或 `Core/` 时，先补失败测试再改实现。
 
 这三条是回归测试，改动时不许删：
 
 - `testStrongRangeUsesUTF8Columns` —— `SourceLocation.column` 的单位是 UTF-8 字节。
 - `testDanglingResolvesWhenTargetCreatedLater` —— 后建的目标笔记要自动接上已有的悬空边。
 - `testResolvedBecomesDanglingAfterRename` —— 目标改名后旧边要退回悬空。
+
+P2 新增的回归测试，同样不许删：
+
+- `testOverlappingPatternsAllReported` —— Aho–Corasick 的 `out` 要沿 fail 链合并。
+- `testOffsetStaysCorrectAfterLengthChangingCharacter` —— 归一化逐字符映射 UTF-16 偏移。
+- `testAliasProducesMentionAndResolvesLink` —— 别名既要能产生提及，也要能被 `[[ ]]` 解析。
+- `testRenameRewritesBodies` —— 改名要改正文，并保留显示名与锚点。
 
 ## 硬约束
 
@@ -65,7 +76,10 @@ defaults read com.apple.dt.Xcode IDECustomBuildProductsPath
 - `[[ ]]` 解析用自写的 `WikiScanner`。不要改成 swift-markdown 的自定义语法。
 - `NSTextView.isRichText` 必须保持 `true`。改成 `false` 会清掉程序化应用的属性。
 - App Sandbox 保持关闭。开启后连不上本地 Ollama。
-- `link` 表的时间列名是 `location`。不要改回 `offset`，SQLite 保留字。
+- `link` 表的时间列名是 `location`。不要改回 `offset`，SQLite 保留字。`mention` 表同理。
+- `resolveAllLinks` 必须把 `alias` 表算进去。唯一入口是 `GRDBNoteRepository.linkTargets(in:)`。
+- 提及扫描不得在按键时重建自动机。用 `MentionIndex.scanner(in:)`，它按标题集合指纹缓存。
+- 索引重算只能走 `reindexAll(note:in:)`。顺序：引用 → 引用解析 → FTS → 提及。
 - L3（概念抽取）与 L4（语义近邻）的建议永不改写用户正文。
 
 ## 目录约定
@@ -74,3 +88,4 @@ defaults read com.apple.dt.Xcode IDECustomBuildProductsPath
 - 设计文档与交接文档放 `docs/`。
 - 截图证据放 `/tmp/reports/silvics-*`，不入库。
 - 截图取窗口 ID 用 `CGWindowListCopyWindowInfo`。`screencapture -l` 不包含 `NSPanel` 浮层，抓浮层要全屏再裁。
+- 本机 `screencapture` 没有屏幕录制权限，直接跑会报 `could not create image from display`。要截图先给终端授权。

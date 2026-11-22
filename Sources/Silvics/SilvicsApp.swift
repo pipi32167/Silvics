@@ -28,6 +28,33 @@ struct SilvicsApp: App {
 
                 Divider()
 
+                Button("重命名笔记…") {
+                    app.isShowingRenameSheet = true
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(app.current == nil)
+
+                Button("编辑别名…") {
+                    app.isShowingAliasSheet = true
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(app.current == nil)
+
+                Divider()
+
+                Button("整理未链接提及…") {
+                    app.refreshMentionGroups()
+                    app.isShowingMentionsSheet = true
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+
+                Button("撤销上次批量转换") {
+                    app.undoLastConversion()
+                }
+                .disabled(!app.canUndoConversion)
+
+                Divider()
+
                 Button("重建全部索引") {
                     app.rebuildIndexes()
                 }

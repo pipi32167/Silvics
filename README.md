@@ -25,6 +25,16 @@ L3 与 L4 永不改写用户正文。自动改一次错，整个连接层的信�
 
 ![引用补全](docs/images/completion.png)
 
+**L2 已落地：未链接提及。** 正文里写到已有标题（或别名）时，该片段带点状下划线，右侧面板列出可一键转换。批量整理分三步：选择 → 看 diff → 转换，转换可撤销。
+
+| 动作 | 快捷键 |
+| --- | --- |
+| 把光标所在提及转成引用 | `⌘⇧K` |
+| 整理未链接提及 | `⌘⇧M` |
+| 重命名笔记（连带改写正文引用） | `⌘⇧R` |
+| 编辑别名 | `⌘⇧A` |
+| 立即保存 | `⌘S` |
+
 ## 技术栈
 
 | 层 | 选择 | 理由 |
@@ -41,10 +51,22 @@ L3 与 L4 永不改写用户正文。自动改一次错，整个连接层的信�
 需要 Xcode 26+、macOS 14+、`xcodegen`。
 
 ```bash
+# 本机 Xcode 不在默认位置时必须设
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
 xcodegen generate
 xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   -destination 'platform=macOS' -derivedDataPath .build \
   CODE_SIGNING_ALLOWED=NO build
+```
+
+产物在 `.build/Build/Products/Debug/Silvics.app`。
+
+SPM 拉依赖时如果卡在 `Fetching from https://github.com/...`，说明到 GitHub 的 HTTPS 不通，挂代理再跑：
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=http://127.0.0.1:7890
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0=http://127.0.0.1:7890
 ```
 
 跑测试：
@@ -64,4 +86,7 @@ grep -E "TEST (SUCCEEDED|FAILED)" /tmp/silvics-test.log
 ## 进度
 
 P1 完成：写作、`[[` 补全、引用与悬空样式、反向链接面板、自动保存、全文搜索。
-P2 未开始：未链接提及、Aho–Corasick 扫描、别名、标题改名重写引用。
+
+P2 完成：Aho–Corasick 提及扫描（Release 实测 0.035 ms / 1000 标题）、未链接提及面板、批量转换与 diff 预览、撤销、别名、改名时批量重写正文引用。
+
+P3 未开始：`⌘P` Quick Open、孤儿笔记视图、标签、搜索实测。

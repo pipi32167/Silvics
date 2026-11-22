@@ -2,9 +2,9 @@
 
 写给接手这个项目的下一个 agent。读完这一份就能继续干活。
 
-- 交接时间：2026-11-20
-- 项目路径：`/Volumes/WD_BLACK_2T/projects/silvics`
-- 当前阶段：P1 完成，P2 未开始
+- 交接时间：2026-11-21
+- 项目路径：`~/work/dev/Silvics`
+- 当前阶段：P1、P2 完成，P3 未开始
 - 设计文档：[设计文档.md](设计文档.md)（先读它，共 13 章）
 
 ---
@@ -19,17 +19,31 @@ Silvics 是一个单人用的 macOS 原生笔记应用。笔记正文是 Markdow
 
 | 项 | 值 |
 | --- | --- |
-| macOS | 26.5.2 |
-| Xcode | 26.5 |
-| Swift | 6.3.2 |
-| 工程生成 | `xcodegen` 2.x（已装） |
-| 依赖 | GRDB.swift 7.12+、swift-markdown 0.9+，均由 SPM 拉取 |
+| macOS | 27.0.1 |
+| Xcode | 27.2（`/Applications/Xcode.app`） |
+| Swift | 6.4 |
+| 工程生成 | `xcodegen` 2.48（`brew install xcodegen`，已在 PATH） |
+| 依赖 | GRDB.swift 7.12+、swift-markdown 0.9+，由 SPM 拉取 |
 | 沙盒 | 关闭，必须关闭 |
+
+### 本机环境与上一台机器不同，必须知道
+
+1. **`xcodebuild` 默认指向 CommandLineTools，直接跑会报错。** 每次构建前设 `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`。
+2. **`github.com` 直连不通。** SPM 拉包会卡在 `Fetching from https://...`。构建时挂本地代理：
+
+   ```bash
+   export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 ALL_PROXY=http://127.0.0.1:7890
+   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0=http://127.0.0.1:7890
+   ```
+
+   依赖拉好之后，后续构建不需要代理。
+3. **`api.github.com`、`codeload.github.com` 直连可用，SSH 推送也可用。** 只有 `github.com` 的 HTTPS 与 git-over-https 不通。
+4. **上一份文档记的「构建位置陷阱」在这台机器上不存在。** `defaults read com.apple.dt.Xcode IDEBuildLocationStyle` 无值，`-derivedDataPath .build` 正常生效，产物在 `.build/Build/Products/Debug/Silvics.app`。
 
 ## 3. 目录
 
 ```text
-silvics/
+Silvics/
 ├── project.yml                 ← 工程定义。改配置改这里，不要改 .xcodeproj
 ├── Silvics.xcodeproj/          ← xcodegen 生成物，不入库
 ├── Support/Info.plist          ← xcodegen 生成物，不入库
@@ -41,169 +55,193 @@ silvics/
 │   ├── Core/
 │   │   ├── Models.swift        Note / NoteLink / NoteMention / 视图模型 / 标题校验
 │   │   ├── AppDatabase.swift   GRDB 建库与迁移 v1
-│   │   ├── NoteStore.swift     GRDBNoteRepository：读写、重算索引、搜索
+│   │   ├── NoteStore.swift     读写、重算索引、搜索、引用解析
+│   │   ├── MentionIndex.swift  提及索引：自动机缓存、写入、查询、批量转换
+│   │   ├── NoteStoreMentions.swift  提及的仓库方法（转换 / 撤销 / 预览）
+│   │   ├── NoteStoreAliases.swift   别名 CRUD、改名批量重写正文
 │   │   └── DebugLog.swift      写 /tmp/silvics-debug.log，仅 DEBUG
 │   ├── EditorKit/              不导入 SwiftUI / AppKit UI，可单测
 │   │   ├── WikiScanner.swift   `[[ ]]` 扫描器（跳过代码块、行内代码、URL）
+│   │   ├── MentionScanner.swift  Aho–Corasick 提及扫描 + 归一化 + 门槛
+│   │   ├── StopWords.swift     提及停用词表
 │   │   ├── MarkdownStyler.swift swift-markdown AST → NSRange（UTF-8 字节映射）
+│   │   ├── LineDiff.swift      行级 diff，批量转换预览用
 │   │   └── Theme.swift         字体、颜色、段落样式
 │   └── UI/
 │       ├── RootView.swift      三栏 NavigationSplitView + 状态条
-│       ├── SidebarView.swift   搜索、笔记列表、孤儿计数
-│       ├── EditorView.swift    NSTextView 桥、样式应用、补全、⌘ 点击引用
+│       ├── SidebarView.swift   搜索、笔记列表
+│       ├── EditorView.swift    NSTextView 桥、样式、补全、提及下划线、⌘⇧K
 │       ├── CompletionPanel.swift  `[[` 补全浮层（无标题 NSPanel）
-│       ├── ContextPanelView.swift 反向链接 / 出链 / 悬空引用
-│       └── NewNoteSheet.swift  新建笔记 + 标题校验 + 查重
+│       ├── ContextPanelView.swift 反向链接 / 提及 / 出链 / 悬空
+│       ├── NewNoteSheet.swift  新建笔记 + 标题校验 + 查重
+│       ├── MentionSheet.swift  未链接提及批量整理（选择 → diff → 转换）
+│       ├── AliasSheet.swift    别名增删
+│       └── RenameSheet.swift   改名 + 影响预览
 ├── Tests/SilvicsTests/
-│   └── EditorKitTests.swift    25 个单测
+│   ├── EditorKitTests.swift    27 个 P1 单测
+│   ├── MentionTests.swift      扫描器 / 归一化 / 门槛 / 性能
+│   ├── MentionDatabaseTests.swift  提及、别名、改名、转义
+│   └── LineDiffTests.swift     diff
 └── docs/
     ├── 设计文档.md
     └── HANDOFF.md              ← 本文件
 ```
 
-代码量：约 3400 行 Swift，含测试。
+代码量：约 6000 行 Swift，含测试。
 
-## 4. P1 已完成
+## 4. 已完成
 
-按验收标准逐条对照。
+### P1
 
 | 验收项 | 状态 | 证据 |
 | --- | --- | --- |
 | Xcode 项目 | 完成 | `project.yml` → `xcodegen generate` |
 | GRDB 建库与迁移 v1 | 完成 | 8 张表，含 FTS5 trigram |
-| 三栏布局 | 完成 | 截图 05 |
-| NSTextView 编辑区 | 完成 | 截图 02、05、06 |
-| `[[` 补全浮层 | 完成 | 截图 06 |
-| 引用与悬空样式 | 完成 | 截图 05（绿色实线）/ 悬空为灰色虚线 |
-| 反向链接面板 | 完成 | 截图 05（4 条，带上下文片段） |
+| 三栏布局 | 完成 | P1 截图 |
+| NSTextView 编辑区 | 完成 | P1 截图 |
+| `[[` 补全浮层 | 完成 | P1 截图 |
+| 引用与悬空样式 | 完成 | 绿色实线 / 灰色虚线 |
+| 反向链接面板 | 完成 | 带上下文片段 |
 | 自动保存（500 ms 防抖 + 失焦/退出 flush） | 完成 | 切换笔记后重开数据仍在 |
-| 连写多条互相引用的笔记不丢数据 | 完成 | 演示数据 20 条 / 31 条边，重启后完整 |
-| 单测 | 25 项全过 | `xcodebuild test` |
+| 单测 | 完成 | 见第 5 节 |
 
-额外做了设计文档里没写但必须有的：标题校验（拒日期、拒官僚前缀、拒 `[ ] ( )`）、新建时查重（标题二元组 Jaccard 相似度前 3）、悬空引用一键新建、索引重建菜单项、状态条。
+### P2
+
+| 验收项 | 状态 | 证据 |
+| --- | --- | --- |
+| Aho–Corasick 提及扫描 | 完成 | Release 实测 1000 标题 / 805 字正文 **0.035 ms**（预算 1 ms） |
+| 排除代码块、行内代码、已有引用 | 完成 | `testCodeBlockMentionIgnored`、`testExistingWikiLinkNotAMention` |
+| 中文三条门槛 | 完成 | 长度 ≥4 汉字、停用词、单篇同目标上限 20 |
+| 写入 `mention` 表 | 完成 | 真机验证：演示数据 20 条笔记产出 2 条提及，目标与偏移正确 |
+| 编辑区点状下划线 + `⌘⇧K` 转换 | 完成 | 转换走 `shouldChangeText`，可 `⌘Z` |
+| 侧栏「未链接提及」区 | 完成 | 右侧面板新增一段，带转换 / 忽略 / 整理 |
+| 批量转换 + diff 预览 | 完成 | `MentionSheet`：选择 → 行级 diff → 转换 |
+| 批量转换可撤销 | 完成 | 菜单「撤销上次批量转换」，或面板里的按钮 |
+| 别名 | 完成 | 表已有，新增 CRUD、UI、提及匹配、`[[别名]]` 解析 |
+| 改名时批量重写正文引用 | 完成 | 先给影响预览，改后旧标题自动进别名 |
+| 单测 | 完成 | 73 项全过 |
+
+额外修掉：`completionItems` 与短查询搜索里 `LIKE` 未转义 `%` / `_` 的 bug。
 
 ## 5. 怎么跑
 
 ```bash
-cd /Volumes/WD_BLACK_2T/projects/silvics
-xcodegen generate                      # 新增源文件后必须重跑
+cd ~/work/dev/Silvics
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # 必须
+xcodegen generate                                                  # 新增源文件后必须重跑
 xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   -destination 'platform=macOS' -derivedDataPath .build \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-取产物路径。这台机器的 Xcode 全局设了 `IDEBuildLocationStyle=Custom`，`-derivedDataPath .build` **不决定**产物位置：
-
-```bash
-xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
-  -showBuildSettings 2>/dev/null | grep -E "BUILT_PRODUCTS_DIR"
-# 实测为 /Volumes/WD_BLACK_2T/tmp/Xcode/Build/Products/Debug
-```
+产物：`.build/Build/Products/Debug/Silvics.app`。
 
 带演示数据启动：
 
 ```bash
 rm -rf "$HOME/Library/Application Support/Silvics"
-open -a "<BUILT_PRODUCTS_DIR>/Silvics.app" --env SILVICS_SEED=1
+open -a .build/Build/Products/Debug/Silvics.app --env SILVICS_SEED=1
 ```
-
-同一台机器上所有 Xcode 构建共用 `/Volumes/WD_BLACK_2T/tmp/Xcode/Build/Intermediates.noindex`。
-原仓库与克隆同时构建会报 `database is locked`。跑之前先 `pkill -f xcodebuild`。
 
 跑测试（输出必须重定向，否则被系统日志淹没）：
 
 ```bash
 xcodebuild -project Silvics.xcodeproj -scheme Silvics -configuration Debug \
   -destination 'platform=macOS' -derivedDataPath .build \
-  CODE_SIGNING_ALLOWED=NO test > /tmp/t.log 2>&1
-grep -E "Test Case.*(passed|failed)|TEST (SUCCEEDED|FAILED)" /tmp/t.log
+  CODE_SIGNING_ALLOWED=NO test > /tmp/silvics-test.log 2>&1
+grep -E "Test Case.*(passed|failed)|TEST (SUCCEEDED|FAILED)" /tmp/silvics-test.log
 ```
 
-数据库位置：`~/Library/Application Support/Silvics/silvics.sqlite`（WAL 模式）。
+数据库位置：`~/Library/Application Support/Silvics/silvics.sqlite`（WAL 模式）。可直接用 `sqlite3` 查证索引表：
 
-### 交接已验证
+```bash
+sqlite3 "$HOME/Library/Application Support/Silvics/silvics.sqlite" \
+  "select count(*) from note; select count(*) from link; select count(*) from mention;"
+```
 
-2026-11-20 从一个空目录干净克隆 `https://github.com/pipi32167/Silvics.git` 后：
+**不要用 `xcodebuild test -configuration Release`。** 测试目标是 `@testable import`，Release 下编译报 `Unable to resolve Swift module dependency`。需要 Release 性能数字时，用 `swiftc -O` 单独编 `MentionScanner.swift` + `StopWords.swift` 跑脚本。
+
+### 本机已验证
 
 ```text
-xcodegen generate          → 生成工程
-xcodebuild ... build       → BUILD SUCCEEDED
-xcodebuild ... test        → 25 tests, 0 failures, TEST SUCCEEDED
+xcodegen generate                 → 生成工程
+xcodebuild ... build              → BUILD SUCCEEDED
+xcodebuild ... test               → 73 tests, 0 failures, TEST SUCCEEDED
+open -a Silvics.app --env SILVICS_SEED=1
+  → 20 条笔记 / 31 条边 / 2 条提及，数据正确
 ```
-
-也就是说下一任 agent 不需要本机的任何残留物就能起来。
 
 ## 6. 截图与自动化验收
 
 - 单窗口截图：`screencapture -x -o -l<windowID> out.png`
-- **取窗口 ID**：编译 `/tmp/wininfo.swift`（`CGWindowListCopyWindowInfo`），别用 AppleScript，拿不到 CGWindowID。
-- **坑**：`-l` 只抓该窗口，`[[` 补全浮层是独立 `NSPanel`，**不在截图里**。抓浮层必须 `screencapture -x` 全屏再裁。窗口在点坐标下的位置同样从 `wininfo` 取，截图是 2 倍图。
-- **坑**：自动化的前提是 Silvics 真的在最前。`osascript ... set frontmost` 会被别的 App 抢。每次动作前用 `tell application "System Events" to get name of first process whose frontmost is true` 确认，必要时用 `open -a <app>` + `tell application "Silvics" to activate`。
-- 已产出截图在 `/tmp/reports/silvics-p1/artifacts/raw/`：`02-main-fixed.png`、`05-note-dense-links.png`、`06-completion.png`。`01-main.png`、`03-backlinks.png`、`04-completion.png` 是过程图，含已修复的缺陷，不要当验收证据。
-- **未自动验证**：真实中文输入法（IME）组合期行为。这需要人工在系统拼音输入法下敲一段中文，确认候选窗位置、无丢字、无重排。P1 的验收标准里有这一项，目前只有「粘贴中文」这一路测过，**必须人工补测**。
+- 取窗口 ID：编译 `/tmp/wininfo.swift`（`CGWindowListCopyWindowInfo`）。
+- **本机 `screencapture` 无屏幕录制权限**，`could not create image from display`。P2 的界面没有截图证据，只有数据库与单测证据。需要截图时先给终端/客户端授予「屏幕录制」权限，再重跑上面两条命令。
+- 自动化按键（System Events）同样受限，`osascript` 会超时等授权。没有人工点一遍之前，不要声称界面已验收。
 
 ## 7. 必须知道的坑（已经踩过，别再踩）
 
-1. **`swift-markdown` 的 `SourceLocation.column` 是 UTF-8 字节。** 不是字符，不是 UTF-16。按字符映射会让整篇中文的样式全部错位。已有回归测试 `testStrongRangeUsesUTF8Columns` 守着。
-2. **新增源文件后必须重跑 `xcodegen generate`。** `project.yml` 里是按目录声明 sources，工程在生成时固定文件列表。漏跑的表现是「文件明明存在，编译却说找不到符号」。踩过一次。
-3. **先写的 `[[尚未存在的概念]]` 不会自动接上。** 目标笔记后建出来时必须重算。`NoteStore.resolveAllLinks` 就是干这个的，每次 `save` 都调。漏了的表现是「标题明明在库里，悬空引用却一堆」。踩过一次，已有两个测试守着。
-4. **切换笔记会复用/重建 `NoteEditorView`，旧的 `NSPanel` 必须显式收掉。** 漏了会留一个孤立空面板。已在 `dismantleNSView` 与 `deinit` 里处理。
-5. **`isRichText` 必须是 `true`。** 改成 `false` 后 `NSTextView` 会在编辑时用统一字体覆盖整段，我们程序化应用的属性全被清掉。粘贴降级为纯文本靠 `importsGraphics = false` 与关闭自动替换实现，不靠这个开关。
-6. **`App Sandbox` 必须关。** 开了连不上 `127.0.0.1` 的 Ollama。
-7. **`link` 表的列名不要叫 `offset`**，SQLite 保留字。已改名 `location`。
-8. **`NLEmbedding` 的中文句向量不可用。** 实测相关 0.9454 / 无关 0.9405，差距 0.005。L4 必须走云端 BYOK。数据在设计文档 8.5。
-9. **不要给 `swift-markdown` 加 `[[ ]]` 自定义语法。** 编辑器要的是字符区间不是 AST，用自写的 `WikiScanner`。
-10. **`xcodebuild` 并发会锁 build.db。** 报 `database is locked` 时先 `pkill -f xcodebuild`，或先杀掉在跑的 App。
+1. **`swift-markdown` 的 `SourceLocation.column` 是 UTF-8 字节。** 不是字符，不是 UTF-16。回归测试 `testStrongRangeUsesUTF8Columns`。
+2. **新增源文件后必须重跑 `xcodegen generate`。** 否则报「找不到符号」。
+3. **先写的 `[[尚未存在的概念]]` 不会自动接上。** 每次 `save` 都调 `resolveAllLinks`。
+4. **`resolveAllLinks` 必须把 `alias` 表算进去。** 只查 `note.titleKey` 会让 `[[别名]]` 在下次全库重算后错变成悬空。已修，`linkTargets(in:)` 是唯一入口。
+5. **切换笔记会复用/重建 `NoteEditorView`，旧的 `NSPanel` 必须显式收掉。**
+6. **`isRichText` 必须是 `true`。** 粘贴降级靠 `importsGraphics = false`。
+7. **`App Sandbox` 必须关。**
+8. **`link` / `mention` 表的位置列名是 `location`**，不要用 `offset`（SQLite 保留字）。
+9. **`NLEmbedding` 的中文句向量不可用**（相关 0.9454 / 无关 0.9405）。L4 必须云端 BYOK。
+10. **不要给 `swift-markdown` 加 `[[ ]]` 自定义语法。** 用自写 `WikiScanner`。
+11. **`xcodebuild` 并发会锁 build.db。** 报 `database is locked` 时先 `pkill -f xcodebuild`。
+12. **GRDB 的 `conn.changesCount` 是「最后一条语句」的变更数。** 在 `execute` 之后又跑了别的语句（例如重建索引），再读 `changesCount` 就是错的。已踩：`removeAlias` 曾因此永远返回 false。
+13. **提及的归一化必须逐字符做。** 一个字符小写后可能变成多个标量（`İ` → `i̇`）。`MentionText.normalize` 记录每个标量对应的原文 UTF-16 起点与长度，区间才不会偏。
+14. **自动机构建是 10 ms 量级（1000 条标题、12005 节点）。** 不能在每次按键时重建。`MentionIndex.scanner` 按标题集合指纹缓存，标题或别名变更才重建。
+15. **提及与引用的写入顺序**：`reindex` → `resolveAllLinks` → `updateFTS` → `MentionIndex.reindex`，统一收在 `GRDBNoteRepository.reindexAll`。别在别处拆开写。
 
 ## 8. 已知缺陷与未做
 
 | 项 | 说明 |
 | --- | --- |
-| 中文输入法未实测 | 见第 6 节。P1 验收缺口，优先级最高 |
-| 补全面板位置 | 用 `layoutManager` 算光标矩形。TextKit 2 下这是兼容层，多行折行处位置可能偏。需实测校正 |
-| 补全不响应鼠标滚轮 | 列表超过 6 项时靠 ↑↓ 滚动 |
-| 无 `⌘P` Quick Open | 设计文档 5.2 有，P3 做 |
-| 搜索只到 FTS5 | 已实现但有 bug：`completionItems` 里 `titleKey LIKE` 未转义 `%` 与 `_` |
-| 无撤销回归测试 | `undoManager.disableUndoRegistration` 包了属性应用，但没测过连续撤销 |
-| 属性应用是全量 | 每次输入全量 `setAttributes` + 全量分析。800 字实测 0.25 ms 解析，可接受；超过 5000 字的笔记会开始掉帧，设计文档 7.4 写了要改段落级增量 |
-| `DebugLog` 留在 DEBUG 构建里 | 写 `/tmp/silvics-debug.log`。Release 不编译 |
-| `DemoSeeder` 留在 DEBUG 构建里 | 仅在 `SILVICS_SEEED=1` 且库为空时生效 |
+| 中文输入法未实测 | P1 遗留。需要人工在系统拼音输入法下敲一段中文。优先级最高 |
+| P2 界面未人工验收 | 本机无屏幕录制权限，无法截图。逻辑有单测与数据库证据，视觉效果需人工确认 |
+| 补全面板位置 | TextKit 2 下用 `layoutManager` 算光标矩形，多行折行处可能偏 |
+| 补全不响应鼠标滚轮 | 列表超过 6 项时靠 ↑↓ |
+| 提及下划线刷新延迟 | 保存是 500 ms 防抖，转换后下划线消失要等保存完成 |
+| 批量转换的撤销只有一级 | 只记最近一次批量转换的正文快照。做第二次转换会覆盖 |
+| 属性应用是全量 | 超过 5000 字的笔记会开始掉帧，设计文档 7.4 要改段落级增量 |
+| `DebugLog` 与 `DemoSeeder` | 只在 DEBUG 编译 |
+| `LineDiff` 大文本退化 | 行数乘积超过 250000 时不做 LCS，整块标记为变更 |
 
-## 9. 下一步：P2
+## 9. 下一步：P3
 
-按设计文档第 9 章。P2 的验收标准：1000 条测试数据下，单篇提及扫描不超过 1 ms（设计文档实测 0.099 ms）。
+按设计文档第 9 章。
 
-任务清单，按顺序做：
+1. **`⌘P` Quick Open**：全库标题模糊匹配，键盘上下选择。
+2. **孤儿笔记视图**：`orphanCount` 已有，缺列表入口。
+3. **标签**：`tag` 表已建好，缺解析（`#tag`）、写入、筛选。
+4. **状态切换批量操作**：现在只能单条改。
+5. **搜索**：FTS5 已可用，补高亮与「搜索首个结果 < 100 ms」的实测数据。
+6. 补测中文输入法（见第 8 节第一项）。
 
-1. **Aho–Corasick 提及扫描器**。新建 `Sources/Silvics/EditorKit/MentionScanner.swift`。转移表键用 `[UInt32: Int]`，中文标量直接作键。`out` 数组沿 fail 链合并保证重叠命中。返回 `(patternIndex, endOffset)`，用 `endOffset - title.count` 反推起点。
-2. **过滤三类区间**：代码块、行内代码、已是引用的区间。区间由 `MarkdownStyler` 与 `WikiScanner` 的现有输出提供。
-3. **中文三条门槛**：匹配片段长度不小于 4 汉字、不在停用词表、单篇同目标上限 20 次。
-4. **写入 `mention` 表**。表已建好（`AppDatabase` 迁移 v1），`NoteMention` 模型已有。
-5. **侧栏「未链接提及」区**。`ContextPanelView` 加一段，仿 `backlinks` 的写法。
-6. **批量转换 + diff 预览**。转换是不可逆文本改动，必须先给 diff 再让用户确认。
-7. **别名（alias）**。表已建好，`NoteStore.reindex` 已在读 `alias` 表解析引用，但没有写入路径。需要 UI 与 CRUD。
-8. **标题改名时批量重写正文引用**。`resolveAllLinks` 已能退回悬空，但没做「把旧标题改写成新标题」。
-9. **补测中文输入法**（第 8 节第一项）。
-
-P3 及之后见设计文档第 9 章。
+P3 验收标准：1000 条数据下搜索首屏不超过 100 ms。
 
 ## 10. 不要做的事
 
-- 不要引入第三方 Markdown 编辑器库。Swift 侧没有可用的，STTextView 是 GPLv3。
-- 不要在 P1/P2 阶段做「隐藏 Markdown 语法标记」。设计文档 7.4 的方案 B，风险见第 6 章。
-- 不要让 L3/L4 改写用户正文。设计文档 3.1 的铁律。
-- 不要把连接表当真源。真源永远是 `note.body`，索引随时可重建。
+- 不要引入第三方 Markdown 编辑器库。STTextView 是 GPLv3。
+- 不要在 P3 之前做「隐藏 Markdown 语法标记」，风险见设计文档第 6 章。
+- 不要让 L3/L4 改写用户正文。
+- 不要把连接表当真源。真源永远是 `note.body`。
 - 不要改 `~/.pi/agent/AGENTS.md`。项目规则只写本仓库的 `AGENTS.md`。
 
 ## 11. 历史决策记录
 
 | 决策 | 结论 | 理由位置 |
 | --- | --- | --- |
-| Web 还是原生 | 原生 Swift | 设计文档第 6 章，含 CodeMirror 中文 IME 缺陷证据 |
+| Web 还是原生 | 原生 Swift | 设计文档第 6 章 |
 | 应用名 | Silvics | 设计文档 11.1 |
-| 编辑器 | 原生 NSTextView，不用 STTextView | 设计文档 7.3 |
-| 存储 | GRDB + SQLite，不用 SwiftData | 设计文档 7.1（SwiftData 无 FTS） |
-| 引用解析 | 自写扫描器，不用 swift-markdown | 设计文档 7.4 |
-| 提及扫描 | Aho–Corasick，不用朴素匹配 | 设计文档 8.4（朴素 214 ms，AC 0.099 ms） |
-| L4 向量 | 云端 BYOK，不用 NLEmbedding | 设计文档 8.5（实测差距 0.005） |
-| 语法渲染 | 保留标记 + 样式化，不隐藏 | 设计文档 7.4 方案 A |
+| 编辑器 | 原生 NSTextView | 设计文档 7.3 |
+| 存储 | GRDB + SQLite | 设计文档 7.1 |
+| 引用解析 | 自写扫描器 | 设计文档 7.4 |
+| 提及扫描 | Aho–Corasick + 指纹缓存 | 设计文档 8.4，本机 Release 0.035 ms |
+| 提及门槛 | ≥4 汉字；中英混写 2 汉字即可；单拉丁词 ≥8 字符 | 实现时对设计文档的补充，见 `MentionGate` |
+| L4 向量 | 云端 BYOK | 设计文档 8.5 |
+| 语法渲染 | 保留标记 + 样式化 | 设计文档 7.4 |
+| 批量转换的撤销 | 正文快照 + 菜单项，不用 `NSUndoManager` | 跨多篇笔记的程序化改写进不了同一个 undo 组 |
