@@ -14,6 +14,22 @@ protocol NoteRepository {
     func noteExists(titleKey: String) throws -> Bool
     func orphanCount() throws -> Int
     func recentTitles(limit: Int) throws -> [String]
+
+    // 提及（L2）
+    func mentions(in noteId: String) throws -> [MentionOccurrence]
+    func mentionGroups() throws -> [MentionGroup]
+    func dismissMention(id: Int64) throws
+    func convertMentions(occurrenceIds: [Int64]) throws -> [NoteConversion]
+    /// 只算不改，给 diff 预览用。
+    func previewMentionConversion(occurrenceIds: [Int64]) throws -> [NoteConversion]
+    func restoreBodies(_ bodies: [String: String]) throws
+
+    // 别名与改名
+    func aliases(noteId: String) throws -> [String]
+    func addAlias(noteId: String, name: String) throws -> String?
+    func removeAlias(noteId: String, name: String) throws -> Bool
+    func renameImpact(noteId: String, newTitle: String) throws -> [RenameImpact]
+    func rename(noteId: String, newTitle: String) throws -> Int
 }
 
 /// GRDB 实现。
@@ -141,10 +157,10 @@ struct GRDBNoteRepository: NoteRepository {
             if !key.isEmpty {
                 let notes = try Note.fetchAll(conn, sql: """
                     SELECT * FROM note
-                    WHERE \(key.isEmpty ? "1" : "titleKey LIKE ?")
+                    WHERE titleKey LIKE ? ESCAPE '\\'
                     ORDER BY updatedAt DESC
                     LIMIT 40
-                    """, arguments: key.isEmpty ? [] : ["%\(key)%"])
+                    """, arguments: ["%\(Self.likeEscaped(key))%"])
 
                 // 排序：前缀命中优先，其次被引用次数多。
                 let counts = try Self.backlinkCounts(conn)
@@ -210,12 +226,26 @@ struct GRDBNoteRepository: NoteRepository {
             updated.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
 
             try updated.save(conn)
-            try Self.reindex(note: updated, in: conn)
-            // 目标笔记可能是后建的，或标题刚改过。每次都重解析一遍。
-            try Self.resolveAllLinks(in: conn)
-            try Self.updateFTS(note: updated, in: conn)
+            try Self.reindexAll(note: updated, in: conn)
             return updated
         }
+    }
+
+    /// `LIKE` 的特殊字符转义。不转义会让 `%` 与 `_` 变成通配符。
+    static func likeEscaped(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    /// 正文索引全量重算：引用、引用解析、全文索引、提及。
+    static func reindexAll(note: Note, in conn: Database) throws {
+        try Self.reindex(note: note, in: conn)
+        try Self.resolveAllLinks(in: conn)
+        try Self.updateFTS(note: note, in: conn)
+        let scanner = try MentionIndex.scanner(in: conn)
+        try MentionIndex.reindex(note: note, scanner: scanner, in: conn)
     }
 
     func delete(id: String) throws {
@@ -227,14 +257,8 @@ struct GRDBNoteRepository: NoteRepository {
 
     // MARK: - 索引
 
-    /// 从正文重解析引用边。正文是唯一真相。
-    static func reindex(note: Note, in db: Database) throws {
-        try db.execute(sql: "DELETE FROM link WHERE fromId = ?", arguments: [note.id])
-
-        let links = WikiScanner.scan(note.body)
-        guard !links.isEmpty else { return }
-
-        // 标题键 → id 查表
+    /// 在当前库内把「标题或别名」映射到笔记 id。引用解析与提及扫描共用。
+    static func linkTargets(in db: Database) throws -> [String: String] {
         var idByKey: [String: String] = [:]
         for row in try Row.fetchAll(db, sql: "SELECT id, titleKey FROM note") {
             idByKey[row["titleKey"]] = row["id"]
@@ -242,6 +266,18 @@ struct GRDBNoteRepository: NoteRepository {
         for row in try Row.fetchAll(db, sql: "SELECT noteId, nameKey FROM alias") {
             idByKey[row["nameKey"]] = row["noteId"]
         }
+        return idByKey
+    }
+
+    /// 从正文重解析引用边。正文是唯一真相。
+    static func reindex(note: Note, in db: Database) throws {
+        try db.execute(sql: "DELETE FROM link WHERE fromId = ?", arguments: [note.id])
+
+        let links = WikiScanner.scan(note.body)
+        guard !links.isEmpty else { return }
+
+        // 标题键与别名键 → id 查表
+        let idByKey = try linkTargets(in: db)
 
         for link in links {
             let targetKey = TextNormalizer.key(link.target)
@@ -267,11 +303,9 @@ struct GRDBNoteRepository: NoteRepository {
     /// 必须做的事：先写的 `[[尚未存在的概念]]` 会留成悬空边。
     /// 目标笔记后来建出来时，只有重算才能把边接上。
     /// 标题改名时同理，旧边要退回悬空。
+    /// 别名表也要参与解析，否则 `[[别名]]` 在下次全库重算后会被错改成悬空。
     static func resolveAllLinks(in db: Database) throws {
-        var idByKey: [String: String] = [:]
-        for row in try Row.fetchAll(db, sql: "SELECT id, titleKey FROM note") {
-            idByKey[row["titleKey"]] = row["id"]
-        }
+        let idByKey = try linkTargets(in: db)
         for row in try Row.fetchAll(db, sql: "SELECT id, rawTarget, toId, status FROM link") {
             let linkId: Int64 = row["id"]
             let rawTarget: String = row["rawTarget"]
@@ -297,6 +331,8 @@ struct GRDBNoteRepository: NoteRepository {
             for note in notes {
                 try Self.reindex(note: note, in: conn)
             }
+            try Self.resolveAllLinks(in: conn)
+            try MentionIndex.rebuildAll(in: conn)
         }
     }
 
@@ -329,9 +365,9 @@ struct GRDBNoteRepository: NoteRepository {
             } else {
                 rows = try Row.fetchAll(conn, sql: """
                     SELECT id, title, status, body, updatedAt FROM note
-                    WHERE title LIKE ? OR body LIKE ?
+                    WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'
                     ORDER BY updatedAt DESC LIMIT ?
-                    """, arguments: ["%\(q)%", "%\(q)%", limit])
+                    """, arguments: ["%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%", limit])
             }
             let counts = try Self.backlinkCounts(conn)
             return rows.map { row in

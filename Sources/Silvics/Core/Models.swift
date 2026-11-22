@@ -202,6 +202,50 @@ extension NoteMention: FetchableRecord, MutablePersistableRecord {
     }
 }
 
+/// 一处置信度足够的未链接提及，带上下文片段。
+struct MentionOccurrence: Identifiable, Equatable, Hashable {
+    var id: Int64
+    var noteId: String
+    var noteTitle: String
+    var targetId: String
+    var targetTitle: String
+    /// UTF-16 位置。
+    var location: Int
+    var length: Int
+    var kind: MentionKind
+    var snippet: String
+}
+
+/// 按目标聚合的提及。批量面板的一行。
+struct MentionGroup: Identifiable, Equatable {
+    var targetId: String
+    var targetTitle: String
+    var occurrences: [MentionOccurrence]
+    /// 出现在几篇笔记里。
+    var noteCount: Int
+
+    var id: String { targetId }
+    var count: Int { occurrences.count }
+}
+
+/// 一次正文改写：改前、改后、插入了几处引用。
+struct NoteConversion: Identifiable, Equatable {
+    var note: Note
+    var previousBody: String
+    var insertedCount: Int
+
+    var id: String { note.id }
+}
+
+/// 改名影响预览。
+struct RenameImpact: Identifiable, Equatable {
+    var noteId: String
+    var noteTitle: String
+    var occurrences: Int
+
+    var id: String { noteId }
+}
+
 // MARK: - 界面模型
 
 /// 反向链接面板的一行：来源笔记 + 命中处上下文。
