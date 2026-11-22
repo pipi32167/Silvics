@@ -4,8 +4,13 @@ struct SidebarView: View {
     @EnvironmentObject private var app: AppState
 
     private var rows: [NoteSummary] {
-        let q = app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        return q.isEmpty ? app.summaries : app.search(query: q)
+        app.visibleSummaries()
+    }
+
+    private var scopeTitle: String {
+        app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? app.sidebarScope.title
+            : "搜索结果"
     }
 
     var body: some View {
@@ -16,10 +21,25 @@ struct SidebarView: View {
                 get: { app.selection },
                 set: { app.select($0) }
             )) {
-                if rows.isEmpty {
-                    emptyRow
-                } else {
-                    Section {
+                Section {
+                    scopeRow(.all, symbol: "tray.full", count: app.summaries.count)
+                    scopeRow(.orphans, symbol: "circle.dashed", count: app.orphanCount)
+                    ForEach(app.tags) { tag in
+                        scopeRow(.tag(tag.name), symbol: "number", count: tag.count)
+                    }
+                } header: {
+                    HStack {
+                        Text("视图")
+                        Spacer()
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                }
+
+                Section {
+                    if rows.isEmpty {
+                        emptyRow
+                    } else {
                         ForEach(rows) { note in
                             NoteRow(summary: note, isSelected: note.id == app.selection)
                                 .tag(note.id)
@@ -29,16 +49,16 @@ struct SidebarView: View {
                                     }
                                 }
                         }
-                    } header: {
-                        HStack {
-                            Text(app.searchQuery.isEmpty ? "全部" : "搜索结果")
-                            Spacer()
-                            Text("\(rows.count)")
-                                .monospacedDigit()
-                        }
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.tertiary)
                     }
+                } header: {
+                    HStack {
+                        Text(scopeTitle)
+                        Spacer()
+                        Text("\(rows.count)")
+                            .monospacedDigit()
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
                 }
             }
             .listStyle(.sidebar)
@@ -58,6 +78,32 @@ struct SidebarView: View {
                 .help("新建笔记 ⌘N")
             }
         }
+    }
+
+    // MARK: - 范围行
+
+    private func scopeRow(_ scope: SidebarScope, symbol: String, count: Int) -> some View {
+        Button {
+            app.selectScope(scope)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10))
+                    .foregroundStyle(app.sidebarScope == scope ? Color.accentColor : Color.secondary)
+                Text(scope.title)
+                    .font(.system(size: 11.5, weight: app.sidebarScope == scope ? .medium : .regular))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+                Text("\(count)")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
     }
 
     private var searchField: some View {
@@ -94,6 +140,8 @@ struct SidebarView: View {
         HStack(spacing: 12) {
             Label("\(app.orphanCount)", systemImage: "circle.dashed")
                 .help("孤儿笔记：既无出链也无入链")
+            Label("\(app.tags.count)", systemImage: "number")
+                .help("标签数量")
             Spacer()
             Label("\(app.summaries.count)", systemImage: "square.stack")
         }
@@ -106,7 +154,7 @@ struct SidebarView: View {
 
     private var emptyRow: some View {
         HStack {
-            Text(app.summaries.isEmpty ? "还没有笔记。按 ⌘N 开始。" : "没有匹配结果")
+            Text(app.summaries.isEmpty ? "还没有笔记。按 ⌘N 开始。" : "这个范围里没有笔记")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Spacer()

@@ -2,9 +2,9 @@
 
 写给接手这个项目的下一个 agent。读完这一份就能继续干活。
 
-- 交接时间：2026-11-21
+- 交接时间：2026-11-22
 - 项目路径：`~/work/dev/Silvics`
-- 当前阶段：P1、P2 完成，P3 未开始
+- 当前阶段：P1、P2、P3 完成，P4 未开始
 - 设计文档：[设计文档.md](设计文档.md)（先读它，共 13 章）
 
 ---
@@ -59,10 +59,13 @@ Silvics/
 │   │   ├── MentionIndex.swift  提及索引：自动机缓存、写入、查询、批量转换
 │   │   ├── NoteStoreMentions.swift  提及的仓库方法（转换 / 撤销 / 预览）
 │   │   ├── NoteStoreAliases.swift   别名 CRUD、改名批量重写正文
+│   │   ├── NoteStoreLists.swift     标签筛选、孤儿、Quick Open 排序
+│   │   ├── TagIndex.swift      标签索引：从正文扫 #标签
 │   │   └── DebugLog.swift      写 /tmp/silvics-debug.log，仅 DEBUG
 │   ├── EditorKit/              不导入 SwiftUI / AppKit UI，可单测
 │   │   ├── WikiScanner.swift   `[[ ]]` 扫描器（跳过代码块、行内代码、URL）
 │   │   ├── MentionScanner.swift  Aho–Corasick 提及扫描 + 归一化 + 门槛
+│   │   ├── TagScanner.swift    `#标签` 扫描（跳过标题、代码、引用、URL）
 │   │   ├── StopWords.swift     提及停用词表
 │   │   ├── MarkdownStyler.swift swift-markdown AST → NSRange（UTF-8 字节映射）
 │   │   ├── LineDiff.swift      行级 diff，批量转换预览用
@@ -81,13 +84,14 @@ Silvics/
 │   ├── EditorKitTests.swift    27 个 P1 单测
 │   ├── MentionTests.swift      扫描器 / 归一化 / 门槛 / 性能
 │   ├── MentionDatabaseTests.swift  提及、别名、改名、转义
+│   ├── TagAndListTests.swift   标签、孤儿、Quick Open、搜索性能
 │   └── LineDiffTests.swift     diff
 └── docs/
     ├── 设计文档.md
     └── HANDOFF.md              ← 本文件
 ```
 
-代码量：约 6000 行 Swift，含测试。
+代码量：约 7000 行 Swift，含测试。
 
 ## 4. 已完成
 
@@ -119,9 +123,21 @@ Silvics/
 | 批量转换可撤销 | 完成 | 菜单「撤销上次批量转换」，或面板里的按钮 |
 | 别名 | 完成 | 表已有，新增 CRUD、UI、提及匹配、`[[别名]]` 解析 |
 | 改名时批量重写正文引用 | 完成 | 先给影响预览，改后旧标题自动进别名 |
-| 单测 | 完成 | 73 项全过 |
+| 单测 | 完成 | 99 项全过 |
 
 额外修掉：`completionItems` 与短查询搜索里 `LIKE` 未转义 `%` / `_` 的 bug。
+
+### P3
+
+| 验收项 | 状态 | 证据 |
+| --- | --- | --- |
+| `⌘P` Quick Open | 完成 | `QuickOpenSheet`，前缀 → 包含 → 二元组相似度排序，空查询给最近更新 |
+| 孤儿笔记视图 | 完成 | 侧栏「孤儿笔记」范围 + `⌘⇧O`，演示数据 21 条里有 1 条 |
+| 标签 | 完成 | `TagScanner` 扫 `#标签`（跳过 ATX 标题、代码块、行内代码、`[[ ]]`、URL） |
+| 标签筛选 | 完成 | 侧栏标签列表按使用次数排序，点击切范围 |
+| 搜索摘要 | 完成 | 以命中处为中心取片段，前后加省略号 |
+| 搜索性能 | 完成 | 1000 条笔记，Debug 实测 **4.7 ms**（验收线 100 ms） |
+| 单测 | 完成 | 99 项全过 |
 
 ## 5. 怎么跑
 
@@ -166,9 +182,9 @@ sqlite3 "$HOME/Library/Application Support/Silvics/silvics.sqlite" \
 ```text
 xcodegen generate                 → 生成工程
 xcodebuild ... build              → BUILD SUCCEEDED
-xcodebuild ... test               → 73 tests, 0 failures, TEST SUCCEEDED
+xcodebuild ... test               → 99 tests, 0 failures, TEST SUCCEEDED
 open -a Silvics.app --env SILVICS_SEED=1
-  → 20 条笔记 / 31 条边 / 2 条提及，数据正确
+  → 21 条笔记 / 31 条边 / 2 条提及 / 5 个标签 / 1 条孤儿，数据正确
 ```
 
 ## 6. 截图与自动化验收
@@ -209,19 +225,21 @@ open -a Silvics.app --env SILVICS_SEED=1
 | 属性应用是全量 | 超过 5000 字的笔记会开始掉帧，设计文档 7.4 要改段落级增量 |
 | `DebugLog` 与 `DemoSeeder` | 只在 DEBUG 编译 |
 | `LineDiff` 大文本退化 | 行数乘积超过 250000 时不做 LCS，整块标记为变更 |
+| 标签无改名 / 无删除入口 | 只能改正文里的 `#标签` 来增删 |
+| Quick Open 不搜正文 | 只按标题。全文走侧栏搜索框 |
+| 搜索没有高亮 | 摘要已居中到命中处，但正文里不高亮 |
 
-## 9. 下一步：P3
+## 9. 下一步：P4
 
 按设计文档第 9 章。
 
-1. **`⌘P` Quick Open**：全库标题模糊匹配，键盘上下选择。
-2. **孤儿笔记视图**：`orphanCount` 已有，缺列表入口。
-3. **标签**：`tag` 表已建好，缺解析（`#tag`）、写入、筛选。
-4. **状态切换批量操作**：现在只能单条改。
-5. **搜索**：FTS5 已可用，补高亮与「搜索首个结果 < 100 ms」的实测数据。
-6. 补测中文输入法（见第 8 节第一项）。
+1. **BYOK 设置**：服务商预设、Keychain 存 key、「测试连接」按钮。模型与预设见设计文档 8.6。
+2. **L3 概念线索**：`NLTokenizer` 分词 + 停用词 + 词频，与库内标题模糊匹配，给「建立引用 / 新建笔记 / 忽略」三个动作。永不改正文。
+3. **L4 相关笔记**：云端 embedding（`text-embedding-3-large` / `bge-m3` 等），阈值 0.82，标注「推测」。`NLEmbedding` 只做默认关闭的离线降级。
+4. **未配 key 时的优雅降级**：L4 灰显并提示，L3 走纯本地路径。
+5. 补测中文输入法（见第 8 节第一项）。
 
-P3 验收标准：1000 条数据下搜索首屏不超过 100 ms。
+P4 验收标准：三个服务商各测通一次；未配 key 时功能不报错。
 
 ## 10. 不要做的事
 
@@ -245,3 +263,5 @@ P3 验收标准：1000 条数据下搜索首屏不超过 100 ms。
 | L4 向量 | 云端 BYOK | 设计文档 8.5 |
 | 语法渲染 | 保留标记 + 样式化 | 设计文档 7.4 |
 | 批量转换的撤销 | 正文快照 + 菜单项，不用 `NSUndoManager` | 跨多篇笔记的程序化改写进不了同一个 undo 组 |
+| 标签解析 | 自写 `TagScanner`，不用正则 | `#` 前后边界在中文标点上难写对；扫描还要排除代码与引用区间 |
+| Quick Open 排序 | 前缀 → 包含 → 二元组 Jaccard | 1000 条标题在内存里排序，单次查询毫秒级，不需要索引 |

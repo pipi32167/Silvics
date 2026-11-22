@@ -15,6 +15,11 @@ final class AppState: ObservableObject {
     @Published private(set) var danglingTargets: [String] = []
     @Published private(set) var orphanCount: Int = 0
     @Published var searchQuery: String = ""
+    /// 侧栏当前范围：全部 / 孤儿 / 某个标签。
+    @Published var sidebarScope: SidebarScope = .all
+    /// 全部标签与使用次数。
+    @Published private(set) var tags: [TagCount] = []
+    @Published var isShowingQuickOpen: Bool = false
     @Published private(set) var statusMessage: String?
     @Published var isShowingNewNote: Bool = false
     @Published var isShowingMentionsSheet: Bool = false
@@ -65,7 +70,11 @@ final class AppState: ObservableObject {
         do {
             summaries = try repo.summaries()
             orphanCount = try repo.orphanCount()
+            tags = try repo.allTags()
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
+            if case .tag(let name) = sidebarScope, !tags.contains(where: { $0.name == name }) {
+                sidebarScope = .all
+            }
 
             if let id = selection, summaries.contains(where: { $0.id == id }) {
                 loadNote(id: id)
@@ -116,6 +125,38 @@ final class AppState: ObservableObject {
         flushPendingSave()
         selection = id
         loadNote(id: id)
+    }
+
+    /// 侧栏列表。搜索优先，其次是当前范围。
+    func visibleSummaries() -> [NoteSummary] {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.isEmpty else { return search(query: q) }
+        switch sidebarScope {
+        case .all, .search:
+            return summaries
+        case .orphans:
+            return summaries.filter { $0.backlinkCount == 0 && $0.outgoingCount == 0 }
+        case .tag(let name):
+            let ids = Set(occurrenceSummaryIds(tagged: name))
+            return summaries.filter { ids.contains($0.id) }
+        }
+    }
+
+    /// 当前范围里笔记的数量。侧栏标题用。
+    func visibleCount() -> Int { visibleSummaries().count }
+
+    private func occurrenceSummaryIds(tagged name: String) -> [String] {
+        (try? repo.summaries(tagged: name))?.map(\.id) ?? []
+    }
+
+    func selectScope(_ scope: SidebarScope) {
+        sidebarScope = scope
+        searchQuery = ""
+    }
+
+    /// `⌘P` Quick Open 的查询。
+    func quickOpenItems(query: String, limit: Int = 12) -> [QuickOpenItem] {
+        (try? repo.quickOpen(query: query, limit: limit)) ?? []
     }
 
     func filteredSummaries() -> [NoteSummary] {

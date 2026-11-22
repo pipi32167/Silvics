@@ -50,7 +50,7 @@ export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0=http://
 
 ## 测试
 
-测试文件在 `Tests/SilvicsTests/`，XCTest，共 73 项（P1 的 27 项 + P2 新增 46 项）。
+测试文件在 `Tests/SilvicsTests/`，XCTest，共 99 项（P1 27 + P2 46 + P3 26）。
 
 `EditorKit/` 与 `Core/` 不得导入 SwiftUI 或 AppKit 的 UI 部分，否则跑不了单测。
 
@@ -68,6 +68,8 @@ P2 新增的回归测试，同样不许删：
 - `testOffsetStaysCorrectAfterLengthChangingCharacter` —— 归一化逐字符映射 UTF-16 偏移。
 - `testAliasProducesMentionAndResolvesLink` —— 别名既要能产生提及，也要能被 `[[ ]]` 解析。
 - `testRenameRewritesBodies` —— 改名要改正文，并保留显示名与锚点。
+- `testHeadingIsNotTag` —— ATX 标题的 `#` 不是标签。
+- `testSearchFirstScreenUnderBudgetWithThousandNotes` —— 1000 条笔记搜索预算 100 ms。
 
 ## 硬约束
 
@@ -79,7 +81,7 @@ P2 新增的回归测试，同样不许删：
 - `link` 表的时间列名是 `location`。不要改回 `offset`，SQLite 保留字。`mention` 表同理。
 - `resolveAllLinks` 必须把 `alias` 表算进去。唯一入口是 `GRDBNoteRepository.linkTargets(in:)`。
 - 提及扫描不得在按键时重建自动机。用 `MentionIndex.scanner(in:)`，它按标题集合指纹缓存。
-- 索引重算只能走 `reindexAll(note:in:)`。顺序：引用 → 引用解析 → FTS → 提及。
+- 索引重算只能走 `reindexAll(note:in:)`。顺序：引用 → 引用解析 → FTS → 提及 → 标签。
 - L3（概念抽取）与 L4（语义近邻）的建议永不改写用户正文。
 
 ## 目录约定

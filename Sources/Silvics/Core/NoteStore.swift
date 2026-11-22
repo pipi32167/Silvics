@@ -30,6 +30,12 @@ protocol NoteRepository {
     func removeAlias(noteId: String, name: String) throws -> Bool
     func renameImpact(noteId: String, newTitle: String) throws -> [RenameImpact]
     func rename(noteId: String, newTitle: String) throws -> Int
+
+    // 标签与列表
+    func allTags() throws -> [TagCount]
+    func summaries(tagged name: String) throws -> [NoteSummary]
+    func orphans() throws -> [NoteSummary]
+    func quickOpen(query: String, limit: Int) throws -> [QuickOpenItem]
 }
 
 /// GRDB 实现。
@@ -246,6 +252,7 @@ struct GRDBNoteRepository: NoteRepository {
         try Self.updateFTS(note: note, in: conn)
         let scanner = try MentionIndex.scanner(in: conn)
         try MentionIndex.reindex(note: note, scanner: scanner, in: conn)
+        try TagIndex.reindex(note: note, in: conn)
     }
 
     func delete(id: String) throws {
@@ -333,6 +340,7 @@ struct GRDBNoteRepository: NoteRepository {
             }
             try Self.resolveAllLinks(in: conn)
             try MentionIndex.rebuildAll(in: conn)
+            try TagIndex.rebuildAll(in: conn)
         }
     }
 
@@ -379,7 +387,7 @@ struct GRDBNoteRepository: NoteRepository {
                     status: NoteStatus(rawValue: row["status"]) ?? .seedling,
                     backlinkCount: counts[id] ?? 0,
                     outgoingCount: 0,
-                    snippet: Self.snippet(of: body),
+                    snippet: q.isEmpty ? Self.snippet(of: body) : Self.snippet(around: q, in: body),
                     updatedAt: row["updatedAt"]
                 )
             }
@@ -396,16 +404,36 @@ struct GRDBNoteRepository: NoteRepository {
 
     /// 列表用摘要：正文首段，剥掉标记。
     static func snippet(of body: String, limit: Int = 70) -> String {
-        // 先把 [[目标|显示名]] 换回显示名
-        var ns = body as NSString
-        for link in WikiScanner.scan(body).reversed() {
-            let range = NSRange(link.range, in: body)
+        cleaned(body, limit: limit)
+    }
+
+    /// 搜索摘要：以命中处为中心取一段。
+    static func snippet(around query: String, in body: String, limit: Int = 90) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return cleaned(body, limit: limit) }
+        let ns = body as NSString
+        let found = ns.range(of: trimmed, options: [.caseInsensitive])
+        guard found.location != NSNotFound else { return cleaned(body, limit: limit) }
+
+        let start = max(0, found.location - 28)
+        let end = min(ns.length, NSMaxRange(found) + 46)
+        let piece = ns.substring(with: NSRange(location: start, length: end - start))
+        var text = cleaned(piece, limit: limit)
+        if start > 0 { text = "…" + text }
+        if end < ns.length { text += "…" }
+        return text
+    }
+
+    /// 剥掉 Markdown 标记并压缩空白。
+    static func cleaned(_ raw: String, limit: Int) -> String {
+        var ns = raw as NSString
+        for link in WikiScanner.scan(raw).reversed() {
+            let range = NSRange(link.range, in: raw)
             guard range.location + range.length <= ns.length else { continue }
             ns = ns.replacingCharacters(in: range, with: link.display ?? link.target) as NSString
         }
         var text = ns as String
 
-        // 再剥掉结构符号
         let patterns = [
             #"(?m)^#{1,6}\s+"#,
             #"(?m)^>\s?"#,
@@ -421,10 +449,11 @@ struct GRDBNoteRepository: NoteRepository {
             text = re.stringByReplacingMatches(in: text, range: range, withTemplate: "$1")
         }
 
-        let collapsed = text
+        return text
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
-        return String(collapsed.prefix(limit))
+            .prefix(limit)
+            .description
     }
 
     /// 引用命中处的上下文片段。

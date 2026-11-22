@@ -21,6 +21,18 @@ struct SilvicsApp: App {
                 .keyboardShortcut("n", modifiers: .command)
             }
             CommandGroup(after: .saveItem) {
+                Button("打开笔记…") {
+                    app.isShowingQuickOpen = true
+                }
+                .keyboardShortcut("p", modifiers: .command)
+
+                Button("孤儿笔记") {
+                    app.selectScope(.orphans)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Divider()
+
                 Button("立即保存") {
                     app.flushPendingSave()
                 }

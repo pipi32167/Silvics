@@ -31,6 +31,10 @@ struct RootView: View {
             RenameSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingQuickOpen) {
+            QuickOpenSheet()
+                .environmentObject(app)
+        }
         .overlay(alignment: .bottom) {
             StatusBanner()
         }

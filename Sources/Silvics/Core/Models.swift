@@ -269,6 +269,40 @@ struct NoteSummary: Identifiable, Equatable, Hashable {
     var updatedAt: Int64
 }
 
+/// 侧栏标签列表的一项。
+struct TagCount: Identifiable, Equatable, Hashable {
+    var name: String
+    var count: Int
+
+    var id: String { name }
+}
+
+/// `⌘P` Quick Open 的一项。
+struct QuickOpenItem: Identifiable, Equatable, Hashable {
+    var id: String
+    var title: String
+    var status: NoteStatus
+    var backlinkCount: Int
+    var tags: [String]
+}
+
+/// 侧栏当前看的列表。
+enum SidebarScope: Equatable, Hashable {
+    case all
+    case orphans
+    case tag(String)
+    case search
+
+    var title: String {
+        switch self {
+        case .all: return "全部"
+        case .orphans: return "孤儿笔记"
+        case .tag(let name): return "#\(name)"
+        case .search: return "搜索结果"
+        }
+    }
+}
+
 /// `[[` 补全的一项。
 struct CompletionItem: Identifiable, Equatable, Hashable {
     var id: String
