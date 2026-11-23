@@ -51,6 +51,7 @@ Silvics/
 │   ├── SilvicsApp.swift        入口、菜单、AppDelegate（退出前 flush）
 │   ├── App/
 │   │   ├── AppState.swift      单一状态源，@MainActor
+│   │   ├── DebugCapture.swift  仅 DEBUG：窗口自绘成 PNG，取证用
 │   │   └── DemoSeeder.swift    仅 DEBUG，SILVICS_SEED=1 时灌 20 条演示笔记
 │   ├── Core/
 │   │   ├── Models.swift        Note / NoteLink / NoteMention / 视图模型 / 标题校验
@@ -189,10 +190,35 @@ open -a Silvics.app --env SILVICS_SEED=1
 
 ## 6. 截图与自动化验收
 
-- 单窗口截图：`screencapture -x -o -l<windowID> out.png`
+### 首选：App 自绘取证（不需要任何权限）
+
+`Sources/Silvics/App/DebugCapture.swift`（仅 DEBUG）把窗口 `cacheDisplay` 成 PNG。不走 WindowServer，不需要屏幕录制授权，也不受窗口遮挡影响。
+
+```bash
+open -a .build/Build/Products/Debug/Silvics.app \
+  --env SILVICS_CAPTURE=/tmp/reports/silvics-p3/01-main.png \
+  --env SILVICS_SELECT=笔记标题应当写成断言句 \
+  --env SILVICS_SHOW=quickopen|mentions|mentions-preview|alias|rename \
+  --env SILVICS_RENAME_TO=分散重复优于集中突击
+```
+
+- `SILVICS_CAPTURE`：图片路径。可见窗口多于一个时写 `<name>-0.png`、`<name>-1.png`。
+- `SILVICS_SELECT`：按标题子串选中笔记。
+- `SILVICS_SHOW`：启动后直接打开某个面板。`mentions-preview` 会直接跳到 diff 预览。
+- `SILVICS_RENAME_TO`：给改名面板预填新标题，用来看影响列表。
+
+坑：`NSVisualEffectView`（侧栏选中行的材质）离屏栅格化会画成黑块。`DebugCapture` 捕获前把它们临时改成 `.contentBackground`，事后恢复。改动这块代码时别删那段。
+
+### 备选：`screencapture`
+
+- 单窗口：`screencapture -x -o -l<windowID> out.png`
 - 取窗口 ID：编译 `/tmp/wininfo.swift`（`CGWindowListCopyWindowInfo`）。
-- **本机 `screencapture` 无屏幕录制权限**，`could not create image from display`。P2 的界面没有截图证据，只有数据库与单测证据。需要截图时先给终端/客户端授予「屏幕录制」权限，再重跑上面两条命令。
+- 本机 `screencapture` 无屏幕录制权限，报 `could not create image from display`。要真截屏得给 `Paseo.app` 授予「屏幕与系统音频录制」并完全重启它。
 - 自动化按键（System Events）同样受限，`osascript` 会超时等授权。没有人工点一遍之前，不要声称界面已验收。
+
+### 已有证据
+
+`/tmp/reports/silvics-p3/`：主界面、带提及的笔记、Quick Open、提及面板、diff 预览、改名影响、别名面板（不入库）。
 
 ## 7. 必须知道的坑（已经踩过，别再踩）
 

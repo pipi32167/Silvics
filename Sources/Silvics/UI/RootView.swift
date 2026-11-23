@@ -44,6 +44,8 @@ struct RootView: View {
                 let n = DemoSeeder.seedIfEmpty(app)
                 if n > 0 { print("[Silvics] seeded \(n) notes") }
             }
+            DebugCapture.applyShowFlag(app)
+            DebugCapture.schedule()
             #endif
         }
     }

@@ -89,5 +89,16 @@ P2 新增的回归测试，同样不许删：
 - 新增源文件放 `Sources/Silvics/<层>/`。依赖只允许 `UI → App → Core/EditorKit`，反向不行。
 - 设计文档与交接文档放 `docs/`。
 - 截图证据放 `/tmp/reports/silvics-*`，不入库。
-- 截图取窗口 ID 用 `CGWindowListCopyWindowInfo`。`screencapture -l` 不包含 `NSPanel` 浮层，抓浮层要全屏再裁。
-- 本机 `screencapture` 没有屏幕录制权限，直接跑会报 `could not create image from display`。要截图先给终端授权。
+- **优先用 `DebugCapture` 取证，不要等屏幕录制授权。** 它让 App 自己把窗口画成 PNG，不需要任何 TCC 权限：
+
+  ```bash
+  open -a .build/Build/Products/Debug/Silvics.app \
+    --env SILVICS_CAPTURE=/tmp/reports/out.png \
+    --env SILVICS_SELECT=标题关键字 \
+    --env SILVICS_SHOW=quickopen|mentions|mentions-preview|alias|rename \
+    --env SILVICS_RENAME_TO=新标题
+  ```
+
+  多个可见窗口（主窗 + sheet）时输出 `out-0.png`、`out-1.png`。
+- 本机 `screencapture` 没有屏幕录制权限，直接跑报 `could not create image from display`。要真截屏得先给 Paseo 授权并重启它。
+- 需要 `screencapture` 时用 `CGWindowListCopyWindowInfo` 取窗口 ID。`-l` 不包含 `NSPanel` 浮层，抓浮层要全屏再裁。

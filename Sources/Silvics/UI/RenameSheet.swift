@@ -89,6 +89,9 @@ struct RenameSheet: View {
         .frame(width: 520, height: 440)
         .onAppear {
             title = app.current?.title ?? ""
+            #if DEBUG
+            if let preset = ProcessInfo.processInfo.environment["SILVICS_RENAME_TO"] { title = preset }
+            #endif
             fieldFocused = true
         }
     }

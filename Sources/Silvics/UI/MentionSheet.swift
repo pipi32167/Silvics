@@ -42,7 +42,16 @@ struct MentionSheet: View {
         }
         .padding(20)
         .frame(width: 680, height: 560)
-        .onAppear { app.refreshMentionGroups() }
+        .onAppear {
+            app.refreshMentionGroups()
+            #if DEBUG
+            // 仅用于取证：`SILVICS_SHOW=mentions-preview` 启动时直接进 diff 预览。
+            if ProcessInfo.processInfo.environment["SILVICS_SHOW"] == "mentions-preview" {
+                selectedTargets = Set(groups.map(\.targetId))
+                makePreview()
+            }
+            #endif
+        }
     }
 
     // MARK: - 头尾
