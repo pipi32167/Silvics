@@ -249,8 +249,8 @@ scripts/release.sh 0.1.1             # 提交版本号、打 tag、推送、建 
 
 版本号只由脚本写进 `project.yml`。细节见 `docs/RELEASE.md`。
 
-- 当前线上版本：**v0.1.2**（2026-11-24）。DMG 3.5 MB，ad-hoc 签名，arm64。
-- 版本历史：0.1.0 写作内核 → 0.1.1 vault 备份与 git 同步 → 0.1.2 设置页 / BYOK / 本地 magpie / 冲突 LLM 合并。
+- 当前线上版本：**v0.1.3**（2026-11-24）。DMG 3.6 MB，ad-hoc 签名，arm64。
+- 版本历史：0.1.0 写作内核 → 0.1.1 vault 备份与 git 同步 → 0.1.2 设置页 / BYOK / 本地 magpie / 冲突 LLM 合并 → 0.1.3 同步设置并入设置窗口（修关窗丢配置）。
   sha256 `1818e531390d8ab0c79c7fc48d1d21dea4a3b6085c09975a93e19cbefa00fbaa`。
   0.1.1 内容：笔记真相层从 sqlite 挪到 vault 目录，新增导出/恢复/校验、git 双向同步、diff3 合并。
 - 发布脚本会问一次 `继续？[y/N]`。非交互跑要 `<<< "y"`，否则只构建不发布。
