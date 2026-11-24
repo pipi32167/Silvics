@@ -120,8 +120,8 @@ build_app() {
     build > "${TMPDIR:-/tmp}/silvics-release-build.log" 2>&1 \
     || { tail -30 "${TMPDIR:-/tmp}/silvics-release-build.log"; die "构建失败"; }
 
-  APP_PATH="$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
-    -showBuildSettings 2>/dev/null | sed -n 's/ *BUILT_PRODUCTS_DIR = //p' | head -1)/$APP_NAME"
+  # `-showBuildSettings` 不带 `-derivedDataPath` 会报默认 DerivedData 路径，直接用推导路径。
+  APP_PATH="$ROOT/$DERIVED/Build/Products/Release/$APP_NAME"
   [ -d "$APP_PATH" ] || die "找不到产物：$APP_PATH"
   ok "$APP_PATH"
 }
