@@ -124,6 +124,35 @@ grep -E "TEST (SUCCEEDED|FAILED)" /tmp/silvics-test.log
 - [docs/设计文档.md](docs/设计文档.md)：完整设计，含本机实测数据（UTF-8 字节偏移坑、Aho–Corasick 对比、`NLEmbedding` 中文不可用）
 - [docs/HANDOFF.md](docs/HANDOFF.md)：进度、已知缺陷、下一步
 
+## 日记编辑器原型
+
+日记编辑器的低保真原型是纯静态页面，零依赖、零构建。代码在 `prototype/journal/`。
+
+起本地服务：
+
+```bash
+cd prototype/journal
+python3 -m http.server 8791
+# 打开 http://127.0.0.1:8791/index.html
+```
+
+页内用例 77 条。点左栏「边界用例」按钮，或在页面控制台执行：
+
+```js
+window.runEdgeCases() // { pass: 77, fail: 0 }
+```
+
+另有 9 条输入法与撤销用例只能在真机人工确认。
+
+端到端审计 28 条，覆盖真键入、回车、退格、粘贴、方向键、300 行耗时。服务必须先起：
+
+```bash
+ego-browser nodejs < prototype/journal/audit-codeblock.mjs
+# 末行应为 28/28 通过
+```
+
+用例库与移植说明见 [docs/日记编辑器边界用例.md](docs/日记编辑器边界用例.md)。
+
 ## 进度
 
 P1 完成：写作、`[[` 补全、引用与悬空样式、反向链接面板、自动保存、全文搜索。
