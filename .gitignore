@@ -4,6 +4,7 @@ Support/Info.plist
 
 # 构建产物
 .build/
+dist/
 DerivedData/
 *.xcuserstate
 xcuserdata/

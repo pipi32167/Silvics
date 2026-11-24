@@ -60,6 +60,19 @@ export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.proxy GIT_CONFIG_VALUE_0=http://
 
 测试目标用 `@testable import`，`-configuration Release` 下报 `Unable to resolve Swift module dependency: 'Silvics'`。要 Release 性能数字就单独 `swiftc -O` 编相关文件。
 
+## 发布
+
+版本号只由脚本写，不要手改 `project.yml` 里的 `CFBundleShortVersionString` / `CFBundleVersion`，也不要手打 tag。
+
+```bash
+scripts/release.sh 0.1.1 --dry-run   # 只构建 + 打包，落到 dist/
+scripts/release.sh 0.1.1             # 提交版本号、打 tag、推送、建 GitHub Release
+scripts/release.sh --rollback 0.1.1  # 删 release 与 tag
+scripts/release.sh --check-upload    # 验证上传通道
+```
+
+细节见 `docs/RELEASE.md`。包是 ad-hoc 签名（无开发者证书），下载者首次打开需右键「打开」。
+
 ## 测试
 
 测试文件在 `Tests/SilvicsTests/`，XCTest，共 99 项（P1 27 + P2 46 + P3 26）。

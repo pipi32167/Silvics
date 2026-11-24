@@ -1,10 +1,15 @@
 # Silvics
 
+[![release](https://img.shields.io/github/v/release/pipi32167/Silvics?label=release)](https://github.com/pipi32167/Silvics/releases/latest)
+
 <img src="docs/images/app-icon-128.png" width="88" align="right" alt="图标">
 
 单人用的 macOS 原生笔记应用。笔记正文是 Markdown 纯文本，写概念名时自动找出已有笔记并提示建立连接。
 
 名字取自 **silvics**（林业术语，研究林木如何生长），对应「笔记需要培育，不需要归档」。
+
+下载：[最新版本](https://github.com/pipi32167/Silvics/releases/latest)（DMG，macOS 14+，Apple 芯片）。
+ad-hoc 签名，首次打开需右键「打开」。安装细节见 [docs/RELEASE.md](docs/RELEASE.md)。
 
 ![主界面](docs/images/main-window.png)
 
@@ -97,6 +102,7 @@ grep -E "TEST (SUCCEEDED|FAILED)" /tmp/silvics-test.log
 
 ## 文档
 
+- [docs/RELEASE.md](docs/RELEASE.md)：版本策略与发布脚本
 - [docs/设计文档.md](docs/设计文档.md)：完整设计，含本机实测数据（UTF-8 字节偏移坑、Aho–Corasick 对比、`NLEmbedding` 中文不可用）
 - [docs/HANDOFF.md](docs/HANDOFF.md)：进度、已知缺陷、下一步
 
