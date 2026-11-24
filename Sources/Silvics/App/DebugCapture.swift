@@ -60,7 +60,7 @@ enum DebugCapture {
             SettingsWindowController.show(app: app, tab: .about)
         case "alias": app.isShowingAliasSheet = true
         case "rename": app.isShowingRenameSheet = true
-        case "sync": app.isShowingSyncSheet = true
+        case "sync": SettingsWindowController.show(app: app, tab: .sync)
         default: break
         }
         applySyncFlags(app)
@@ -83,10 +83,6 @@ enum DebugCapture {
         }
         if touched { app.saveSyncSettings(settings) }
 
-        if let renderPath = env["SILVICS_RENDER"], !renderPath.isEmpty {
-            renderSyncSheet(app, to: renderPath)
-        }
-
         if env["SILVICS_SYNC"] == "1" {
             app.performSyncWork({ sync in
                 let report = try sync.sync()
@@ -100,30 +96,6 @@ enum DebugCapture {
                 DebugLog.write("sync-done: " + lines.joined(separator: " | "))
             })
         }
-    }
-
-    /// `SILVICS_RENDER=<png 路径>`：用 `ImageRenderer` 把同步面板离屏画成 PNG。
-    ///
-    /// 窗口自绘（`dataWithPDF` / `cacheDisplay`）抓不到 SwiftUI 的 Text 层，
-    /// 这台机器又没有真实显示会话，所以面板的观感证据走这条离屏渲染。
-    @MainActor
-    static func renderSyncSheet(_ app: AppState, to path: String) {
-        let renderer = ImageRenderer(
-            content: SyncSheet(settings: app.syncSettings)
-                .environmentObject(app)
-                .frame(width: 640, height: 520)
-        )
-        renderer.scale = 2
-        guard let image = renderer.nsImage,
-              let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:])
-        else {
-            DebugLog.write("render: 失败")
-            return
-        }
-        try? png.write(to: URL(fileURLWithPath: path))
-        DebugLog.write("render: \(path)")
     }
 
     /// 把 `NSVisualEffectView` 临时改成不透明背景色。
