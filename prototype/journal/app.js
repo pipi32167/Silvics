@@ -888,7 +888,21 @@ function onDocInput(e) {
   if (composing) return; // 组合期不碰模型，等 compositionend
   const j = currentJournal();
   if (!j) return;
+
+  const el = activeLineEl();
+  const offset = el ? offsetInLine(el) : 0;
+  const lineIndex = el ? Number(el.dataset.i) : 0;
   syncActiveLine(j);
+
+  // 改到围栏行时，下半个代码块的语言/范围可能变了，必须立刻重排整块。
+  // 只在这一种情况下重绘，其他输入不动 DOM，避免光标抖动。
+  const raw = Model.lines(j.body)[lineIndex] || "";
+  if (/^\s*```/.test(raw)) {
+    renderDocInto(j);
+    const next = activeLineEl();
+    if (next) placeCaret(next, offset);
+  }
+
   refreshCounts();
   save();
   updateCaretInfo();

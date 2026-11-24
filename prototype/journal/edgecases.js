@@ -643,6 +643,21 @@
         ]);
       })
     ),
+    dom("H14", "高亮", "改围栏行的语言标记后，块内立刻重高亮", () =>
+      withJournal((S) => {
+        const j = S.getState().journals.find((x) => x.date === "2026-11-23");
+        j.body = "```\nfunc f() {}\n```";
+        S.selectJournalByDate("2026-11-23");
+        S.activateLine(0, 3);
+        const el = document.querySelector("#doc .line.active");
+        el.textContent = "```swift";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return truthy(
+          document.querySelectorAll("#doc span.tok-kw").length > 0,
+          "围栏行改完后应立刻出现关键字高亮"
+        );
+      })
+    ),
     dom("E19", "编辑", "Home / End 移到当前行首尾", () =>
       withJournal((S) => {
         S.activateLine(8, 3);
