@@ -5,6 +5,15 @@ struct SilvicsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var app = AppState()
 
+    init() {
+        #if DEBUG
+        // 仅 DEBUG：`SILVICS_INVERT_DRILL=<dir>` 跑保存链路倒转的两次启动演练，跑完就退出。
+        InvertDrill.runIfRequested()
+        // 仅 DEBUG：`SILVICS_VAULT_SWITCH_DRILL=<dir>` 跑「换 vault 目录 + 删库重建」的三次启动演练。
+        VaultSwitchDrill.runIfRequested()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

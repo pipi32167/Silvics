@@ -3,9 +3,11 @@ import XCTest
 
 final class MentionDatabaseTests: XCTestCase {
 
+    private let vault = TempVault("repo")
+
     private func makeRepo() throws -> (AppDatabase, GRDBNoteRepository) {
         let db = try AppDatabase.makeInMemory()
-        return (db, GRDBNoteRepository(db: db))
+        return (db, vault.repo(db))
     }
 
     // MARK: - 写入

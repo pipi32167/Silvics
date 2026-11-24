@@ -4,6 +4,9 @@ import XCTest
 /// 批次 1：类型注册表 + frontmatter 分层 + 未知键保留。
 final class NoteTypeTests: XCTestCase {
 
+    /// 保存先写 vault 文件，测试要落到临时目录。
+    private let vault = TempVault("type")
+
     // MARK: - 注册表
 
     func testUnknownTypeFallsBackToNote() {
@@ -161,7 +164,7 @@ final class NoteTypeTests: XCTestCase {
     // MARK: - 迁移
 
     func testFreshDatabaseHasTypeAndMeta() throws {
-        let repo = GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        let repo = vault.repo(try AppDatabase.makeInMemory())
         let note = try repo.create(title: "稀疏重复优于集中突击")
         XCTAssertEqual(note.type, NoteTypes.noteID)
         XCTAssertEqual(note.meta, "{}")
@@ -170,7 +173,7 @@ final class NoteTypeTests: XCTestCase {
     }
 
     func testMetaFieldsRoundTripThroughDatabase() throws {
-        let repo = GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        let repo = vault.repo(try AppDatabase.makeInMemory())
         var note = try repo.create(title: "2026-11-24")
         note.type = NoteTypes.journalID
         note.setMetaFields(["date": "2026-11-24", "carryFrom": "2026-11-23"])
@@ -186,7 +189,7 @@ final class NoteTypeTests: XCTestCase {
 
     func testVaultRoundTripKeepsTypeMetaAndUnknownKeys() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
 
         var note = try repo.create(title: "2026-11-24")
         note.type = NoteTypes.journalID
@@ -207,7 +210,7 @@ final class NoteTypeTests: XCTestCase {
         let sync = VaultSync(repo: repo, settings: settings)
         try sync.exportAll()
 
-        let fresh = GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        let fresh = vault.repo(try AppDatabase.makeInMemory())
         let restore = VaultSync(repo: fresh, settings: settings)
         _ = try restore.importAll()
 
@@ -221,7 +224,7 @@ final class NoteTypeTests: XCTestCase {
 
     func testExportAfterImportDoesNotLoseUnknownKeys() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("silvics-type-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }

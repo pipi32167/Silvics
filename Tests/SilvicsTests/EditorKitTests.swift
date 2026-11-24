@@ -145,9 +145,12 @@ final class TitleValidationTests: XCTestCase {
 
 final class DatabaseTests: XCTestCase {
 
+    /// 保存先写 vault 文件，测试要落到临时目录。
+    private let vault = TempVault("db")
+
     func testCreateAndBacklink() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
 
         let a = try repo.create(title: "间隔重复能提高长期留存")
         _ = try repo.create(title: "遗忘曲线决定复习时机")
@@ -164,7 +167,7 @@ final class DatabaseTests: XCTestCase {
 
     func testDanglingLink() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
         var note = try repo.create(title: "主动回忆比重读有效")
         note.body = "参见[[还没写的概念]]。"
         _ = try repo.save(note)
@@ -177,7 +180,7 @@ final class DatabaseTests: XCTestCase {
     /// 先写引用、后建目标笔记，边必须自动接上。
     func testDanglingResolvesWhenTargetCreatedLater() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
 
         var source = try repo.create(title: "笔记应该密集链接")
         source.body = "理由见[[联想式组织优于层级分类]]。"
@@ -202,7 +205,7 @@ final class DatabaseTests: XCTestCase {
     /// 目标笔记改名后，旧引用必须退回悬空。
     func testResolvedBecomesDanglingAfterRename() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
 
         var target = try repo.create(title: "联想式组织优于层级分类")
         var source = try repo.create(title: "笔记应该密集链接")
@@ -222,14 +225,14 @@ final class DatabaseTests: XCTestCase {
 
     func testDuplicateTitleRejected() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
         _ = try repo.create(title: "稀疏重复优于集中突击")
         XCTAssertThrowsError(try repo.create(title: "稀疏重复优于集中突击"))
     }
 
     func testSearchChinese() throws {
         let db = try AppDatabase.makeInMemory()
-        let repo = GRDBNoteRepository(db: db)
+        let repo = vault.repo(db)
         var note = try repo.create(title: "间隔重复能提高长期留存")
         note.body = "稀疏重复优于集中突击。"
         _ = try repo.save(note)

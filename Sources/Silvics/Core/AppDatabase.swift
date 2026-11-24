@@ -29,6 +29,11 @@ final class AppDatabase {
 
     static func makeOnDisk() throws -> AppDatabase {
         let url = try defaultDirectory().appendingPathComponent("silvics.sqlite")
+        return try makeOnDisk(at: url)
+    }
+
+    /// 指定路径打开磁盘库。演练用，避免碰用户目录。
+    static func makeOnDisk(at url: URL) throws -> AppDatabase {
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.journalMode = .wal

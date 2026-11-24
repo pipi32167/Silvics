@@ -48,9 +48,11 @@ final class GitSyncTests: XCTestCase {
 
     /// 一台「设备」：自己的库 + 自己的 vault 目录。
     private func makeDevice(_ name: String, remote: URL) throws -> (repo: GRDBNoteRepository, sync: VaultSync) {
-        let repo = GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        // 一台设备一套目录：仓库写文件与同步导出的必须是同一个 vault。
+        let deviceVault = root.appendingPathComponent(name, isDirectory: true)
+        let repo = GRDBNoteRepository(db: try AppDatabase.makeInMemory(), vaultURL: deviceVault)
         var settings = SyncSettings()
-        settings.vaultPath = root.appendingPathComponent(name, isDirectory: true).path
+        settings.vaultPath = deviceVault.path
         settings.remoteURL = remote.path
         settings.authorName = name
         settings.authorEmail = "\(name)@example.com"
@@ -192,7 +194,10 @@ final class GitSyncTests: XCTestCase {
         _ = try a.sync.sync()
 
         // 同一台机器：库被清空，vault 与仓库都还在
-        let wiped = GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        let wiped = GRDBNoteRepository(
+            db: try AppDatabase.makeInMemory(),
+            vaultURL: URL(fileURLWithPath: a.sync.settings.vaultPath, isDirectory: true)
+        )
         var settings = SyncSettings()
         settings.vaultPath = a.sync.settings.vaultPath
         settings.remoteURL = remote.path

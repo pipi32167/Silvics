@@ -55,7 +55,7 @@ final class AppState: ObservableObject {
 
     // MARK: - 内部
 
-    private let repo: GRDBNoteRepository
+    private var repo: GRDBNoteRepository
     private let database: AppDatabase
     /// 模型服务的读写与校验。密钥走 Keychain。
     let providerService = ProviderService()
@@ -89,8 +89,24 @@ final class AppState: ObservableObject {
         appearance = AppearanceSettings.load()
         Theme.apply(appearance)
         providerSettings = providerService.settings
+        healFromVault()
         loadAll(selectFirst: true)
         startSyncTimers()
+    }
+
+    /// 启动自愈：先把库里已有内容补写一份到当前 vault（当前目录空了才写），再从 vault 重建缺失的东西。
+    private func healFromVault() {
+        do {
+            var messages: [String] = []
+            if let seeded = try repo.seedVaultIfNeeded() { messages.append(seeded) }
+            if let repaired = try repo.repairFromVaultIfNeeded() { messages.append(repaired) }
+            guard !messages.isEmpty else { return }
+            let line = messages.joined(separator: "；")
+            statusMessage = [statusMessage, line].compactMap { $0 }.joined(separator: "；")
+            DebugLog.write("heal: \(line)")
+        } catch {
+            statusMessage = "vault 自愈失败：\(error.localizedDescription)"
+        }
     }
 
     // MARK: - 同步时机
@@ -711,8 +727,15 @@ extension AppState {
     }
 
     func saveSyncSettings(_ settings: SyncSettings) {
+        let previousVault = syncSettings.vaultURL.standardizedFileURL
         syncSettings = settings
         settings.save()
+        // 保存先写 vault，目录得跟着设置走，否则改完目录还会往旧目录写。
+        repo.vaultURL = settings.vaultURL
+        // 换到另一个目录：新目录可能是空的，当场补一次播种，不用等下次启动。
+        if settings.vaultURL.standardizedFileURL != previousVault {
+            healFromVault()
+        }
     }
 
     /// 后台跑一次 vault 操作，回到主线程刷新界面。

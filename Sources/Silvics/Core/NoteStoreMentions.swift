@@ -20,11 +20,11 @@ extension GRDBNoteRepository {
 
     /// 忽略一条提及。同一目标在本篇里一并忽略，避免反复出现。
     func dismissMention(id: Int64) throws {
-        try db.writer.write { conn in
+        let noteId: String? = try db.writer.write { conn in
             let targetId = try String.fetchOne(
                 conn, sql: "SELECT targetId FROM mention WHERE id = ?", arguments: [id]
             )
-            guard let targetId else { return }
+            guard let targetId else { return nil }
             let noteId = try String.fetchOne(
                 conn, sql: "SELECT noteId FROM mention WHERE id = ?", arguments: [id]
             )
@@ -32,20 +32,25 @@ extension GRDBNoteRepository {
                 sql: "UPDATE mention SET dismissed = 1 WHERE noteId = ? AND targetId = ?",
                 arguments: [noteId, targetId]
             )
+            return noteId
         }
+        // 忽略项只存库里，必须回写文件。
+        if let noteId { try NoteWriter.flush(noteIds: [noteId], repo: self) }
     }
 
     /// 批量把提及转成引用。整批包在一个事务里。
     ///
     /// - Returns: 每篇受影响笔记的改前 / 改后正文。界面用它做 diff 预览与撤销。
     func convertMentions(occurrenceIds: [Int64]) throws -> [NoteConversion] {
-        try db.writer.write { conn in
+        let conversions = try db.writer.write { conn in
             let conversions = try MentionIndex.convert(occurrenceIds: occurrenceIds, in: conn)
             for conversion in conversions {
                 try Self.applyBody(conversion.note, in: conn)
             }
             return conversions
         }
+        try NoteWriter.flush(noteIds: conversions.map(\.note.id), repo: self)
+        return conversions
     }
 
     /// 只算不改：给批量面板的 diff 预览用。
@@ -57,14 +62,18 @@ extension GRDBNoteRepository {
 
     /// 撤销一次批量转换：把正文写回改前的内容，并重算索引。
     func restoreBodies(_ bodies: [String: String]) throws {
-        try db.writer.write { conn in
+        let restored: [String] = try db.writer.write { conn in
+            var ids: [String] = []
             for (noteId, body) in bodies {
                 guard var note = try Note.fetchOne(conn, key: noteId) else { continue }
                 guard note.body != body else { continue }
                 note.body = body
                 try Self.applyBody(note, in: conn)
+                ids.append(noteId)
             }
+            return ids
         }
+        try NoteWriter.flush(noteIds: restored, repo: self)
     }
 
     /// 全库重扫提及。标题、别名、笔记集合变化后调用。

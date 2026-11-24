@@ -14,6 +14,159 @@ struct VaultImportReport: Equatable {
 /// vault 与数据库之间的搬运。备份、恢复、同步共用。
 extension GRDBNoteRepository {
 
+    // MARK: - 文件位置
+
+    /// 一篇笔记在 vault 里的文件。
+    func vaultFileURL(for id: String) -> URL {
+        vaultURL
+            .appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
+            .appendingPathComponent(VaultFormat.fileName(for: id))
+    }
+
+    /// 别名与已忽略的提及。只存在库里，encode 前必须取出来，否则写进文件就丢了。
+    func vaultMetadata(for noteId: String) throws -> (aliases: [String], dismissed: [String]) {
+        try db.reader.read { conn in
+            let aliases = try String.fetchAll(
+                conn,
+                sql: "SELECT name FROM alias WHERE noteId = ? ORDER BY name",
+                arguments: [noteId]
+            )
+            let dismissed = try String.fetchAll(
+                conn,
+                sql: "SELECT targetId FROM mention WHERE noteId = ? AND dismissed = 1 ORDER BY targetId",
+                arguments: [noteId]
+            )
+            return (aliases, dismissed)
+        }
+    }
+
+    /// 直接读 vault 目录。与 `VaultSync.readVaultNotes` 同一套规则，只是不需要设置对象。
+    func vaultNotesOnDisk() throws -> [VaultFormat.Note] {
+        let dir = vaultURL.appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var notes: [VaultFormat.Note] = []
+        for name in names.sorted() where name.hasSuffix(".md") {
+            let url = dir.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            guard let note = try? VaultFormat.decode(text) else { continue }
+            notes.append(note)
+        }
+        return notes
+    }
+
+    /// 当前 vault 的 `notes/` 里有多少个 `.md` 文件。
+    ///
+    /// 数文件而不是数「能解码的笔记」：解不出来的文件也算 vault 里已有内容，
+    /// 不能被播种当成空目录覆盖掉。
+    func vaultNoteFileCountOnDisk() -> Int {
+        let dir = vaultURL.appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { $0.hasSuffix(".md") }.count
+    }
+
+    // MARK: - 索引过期标记
+
+    func metaValue(_ key: String) throws -> String? {
+        try db.reader.read { conn in
+            try String.fetchOne(conn, sql: "SELECT value FROM meta WHERE key = ?", arguments: [key])
+        }
+    }
+
+    func setMetaValue(_ key: String, _ value: String) throws {
+        try db.writer.write { conn in
+            try conn.execute(
+                sql: "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                arguments: [key, value]
+            )
+        }
+    }
+
+    func deleteMetaValue(_ key: String) throws {
+        try db.writer.write { conn in
+            try conn.execute(sql: "DELETE FROM meta WHERE key = ?", arguments: [key])
+        }
+    }
+
+    /// 上次保存写完了文件但没写完索引。库是索引，可以从文件重算。
+    func isIndexDirty() throws -> Bool {
+        try metaValue("indexDirty") == "1"
+    }
+
+    func setIndexDirty(_ dirty: Bool) throws {
+        try setMetaValue("indexDirty", dirty ? "1" : "0")
+    }
+
+    // MARK: - 启动自愈
+
+    /// 老库第一次升级到「文件是真相」：库里已有笔记、当前 vault 里还没有文件时，
+    /// 先把库全量写一份到 vault（只写不删），之后删库才能重建。
+    ///
+    /// 判断依据是**当前这个 vault 目录里有没有笔记文件**，不是一个全局开关。
+    /// 用户把 vault 换到另一个目录后要能重新播一次，否则新目录一直空着，删库就丢内容。
+    /// 导出本身幂等（内容没变不碰字节），每次启动扫一遍目录的开销可以忽略。
+    @discardableResult
+    func seedVaultIfNeeded() throws -> String? {
+        try migrateLegacyVaultSeedFlag()
+
+        let noteCount = try db.reader.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM note") ?? 0
+        }
+        guard noteCount > 0 else { return nil }
+        // 当前 vault 里已经有笔记文件，就是「这个目录已播种」，不再碰。
+        guard vaultNoteFileCountOnDisk() == 0 else { return nil }
+
+        var settings = SyncSettings()
+        settings.vaultPath = vaultURL.path
+        let written = try VaultSync(repo: self, settings: settings).exportAll()
+        // 只留痕：播到了哪个目录。不参与任何判断。
+        try setMetaValue("vaultSeededPath", vaultURL.path)
+        return "已把库里 \(noteCount) 篇写入 vault（\(written) 个文件）"
+    }
+
+    /// 旧版本用 `meta.vaultSeeded` 当全局开关，换了 vault 目录就不再播种，新目录永远空着。
+    /// 现在按目录判断；旧键搬到 `legacyVaultSeeded` 留痕后删掉，免得以后又被当成依据。
+    private func migrateLegacyVaultSeedFlag() throws {
+        guard let legacy = try metaValue("vaultSeeded") else { return }
+        if try metaValue("legacyVaultSeeded") == nil {
+            try setMetaValue("legacyVaultSeeded", legacy)
+        }
+        try deleteMetaValue("vaultSeeded")
+    }
+
+    /// 启动时自愈：库空了，或上次索引没写完，就拿 vault 里的文件重建。
+    ///
+    /// 返回给用户看的一行说明；不需要修时返回 `nil`。
+    /// 这里是「删掉 silvics.sqlite 也能起来」的落地处。
+    @discardableResult
+    func repairFromVaultIfNeeded() throws -> String? {
+        let noteCount = try db.reader.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM note") ?? 0
+        }
+        let dirty = try isIndexDirty()
+        guard noteCount == 0 || dirty else { return nil }
+
+        let disk = try vaultNotesOnDisk()
+        guard !disk.isEmpty else {
+            // vault 没有文件。库空就是真的空；索引脏就从库里的正文重算。
+            guard noteCount > 0 else {
+                // 库空 + vault 空：不知道发生了什么，一个标记都别写。
+                // 保持 indexDirty 原样，下次启动照旧进这个方法再试一次。
+                return nil
+            }
+            try rebuildAllIndexes()
+            try setIndexDirty(false)
+            return "索引已从正文重算（\(noteCount) 篇）"
+        }
+
+        let report = try importVaultNotes(disk)
+        try setIndexDirty(false)
+        var line = "已从 vault 重建 \(disk.count) 篇（新增 \(report.inserted)，更新 \(report.updated)，未变 \(report.unchanged)）"
+        if !report.titleConflicts.isEmpty {
+            line += "，\(report.titleConflicts.count) 篇标题冲突已跳过"
+        }
+        return line
+    }
+
     /// 本机标识。冲突文件名与同步提交信息要用。
     func deviceId() throws -> String {
         try db.writer.write { conn in

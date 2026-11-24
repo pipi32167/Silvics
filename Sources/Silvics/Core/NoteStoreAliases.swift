@@ -24,7 +24,7 @@ extension GRDBNoteRepository {
         guard !key.isEmpty else { return "别名不能为空" }
         if let message = TextNormalizer.validateTitle(trimmed) { return message }
 
-        return try db.writer.write { conn in
+        let message: String? = try db.writer.write { conn in
             if let ownTitle = try String.fetchOne(
                 conn, sql: "SELECT titleKey FROM note WHERE id = ?", arguments: [noteId]
             ), ownTitle == key {
@@ -49,12 +49,15 @@ extension GRDBNoteRepository {
             try MentionIndex.rebuildAll(in: conn)
             return nil
         }
+        // 别名只存在库里，必须写回文件，否则删库重建就丢。
+        if message == nil { try NoteWriter.flush(noteIds: [noteId], repo: self) }
+        return message
     }
 
     @discardableResult
     func removeAlias(noteId: String, name: String) throws -> Bool {
         let key = TextNormalizer.key(name)
-        return try db.writer.write { conn in
+        let deleted = try db.writer.write { conn in
             try conn.execute(
                 sql: "DELETE FROM alias WHERE noteId = ? AND nameKey = ?",
                 arguments: [noteId, key]
@@ -63,6 +66,8 @@ extension GRDBNoteRepository {
             try MentionIndex.rebuildAll(in: conn)
             return deleted
         }
+        if deleted { try NoteWriter.flush(noteIds: [noteId], repo: self) }
+        return deleted
     }
 
     // MARK: - 改名
@@ -103,15 +108,18 @@ extension GRDBNoteRepository {
             throw RenameError.invalidTitle(message)
         }
 
-        return try db.writer.write { conn in
-            guard var note = try Note.fetchOne(conn, key: noteId) else { return 0 }
+        let changed = try db.writer.write { conn -> [String] in
+            guard var note = try Note.fetchOne(conn, key: noteId) else { return [] }
             let oldTitle = note.title
             let oldKey = TextNormalizer.key(oldTitle)
-            guard oldKey != newKey else { return 0 }
+            guard oldKey != newKey else { return [] }
             return try Self.performRename(
                 note: &note, oldKey: oldKey, oldTitle: oldTitle, newTitle: trimmed, in: conn
             )
         }
+        // 改名改了标题与正文，文件要跟着写，否则删库重建会退回旧标题。
+        try NoteWriter.flush(noteIds: changed, repo: self)
+        return changed.filter { $0 != noteId }.count
     }
 
     private static func performRename(
@@ -120,7 +128,7 @@ extension GRDBNoteRepository {
         oldTitle: String,
         newTitle: String,
         in conn: Database
-    ) throws -> Int {
+    ) throws -> [String] {
         // 1. 全库改写 `[[旧标题]]`、`[[旧标题|x]]`、`[[旧标题#a]]`。
         var rewritten: [Note] = []
         for var candidate in try Note.fetchAll(conn) {
@@ -156,8 +164,8 @@ extension GRDBNoteRepository {
         try resolveAllLinks(in: conn)
         try MentionIndex.rebuildAll(in: conn)
 
-        let titleChangedInBodies = rewritten.filter { $0.id != note.id }.count
-        return titleChangedInBodies
+        // 被改写的正文也要回写文件。改过标题的那篇排在前面。
+        return [note.id] + rewritten.map(\.id)
     }
 
     /// 把命中的引用整段改写成新标题，保留显示名与锚点。
