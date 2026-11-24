@@ -47,6 +47,15 @@ protocol NoteRepository {
 /// GRDB 实现。
 struct GRDBNoteRepository: NoteRepository {
     let db: AppDatabase
+    /// vault 目录。保存先写它，库只是索引。
+    var vaultURL: URL
+
+    /// `vaultURL` 不传时取同步设置里的目录（默认 `~/Documents/Silvics Vault`）。
+    /// **测试必须传临时目录**，否则会往用户文档目录写东西。
+    init(db: AppDatabase, vaultURL: URL? = nil) {
+        self.db = db
+        self.vaultURL = vaultURL ?? SyncSettings.load().vaultURL
+    }
 
     // MARK: - 读
 
@@ -228,18 +237,34 @@ struct GRDBNoteRepository: NoteRepository {
         return note
     }
 
-    /// 保存并重建该笔记的索引（link 表 + FTS）。
+    /// 保存：先写 vault 文件，再写库并重建该笔记的索引（link / FTS / 提及 / 标签）。
     @discardableResult
     func save(_ note: Note) throws -> Note {
-        try db.writer.write { conn in
-            var updated = note
-            updated.titleKey = TextNormalizer.key(updated.title)
-            updated.bodyHash = TextNormalizer.bodyHash(updated.body)
-            updated.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
+        try saveDetailed(note).note
+    }
 
-            try updated.save(conn)
-            try Self.reindexAll(note: updated, in: conn)
-            return updated
+    /// 与 `save` 相同，但把「有没有真的写文件」也带出来。幂等性要靠它断言。
+    @discardableResult
+    func saveDetailed(_ note: Note) throws -> NoteWriter.Outcome {
+        try NoteWriter.save(note, repo: self)
+    }
+
+    /// 只写库与索引。文件已经落盘，这里失败由调用方标 `indexDirty`。
+    func writeNoteRow(_ note: Note) throws {
+        try db.writer.write { conn in
+            try note.save(conn)
+            try Self.reindexAll(note: note, in: conn)
+        }
+    }
+
+    /// 这个标题键是不是被别的 id 占着。
+    func titleTaken(_ titleKey: String, excluding id: String) throws -> Bool {
+        try db.reader.read { conn in
+            try Bool.fetchOne(
+                conn,
+                sql: "SELECT EXISTS(SELECT 1 FROM note WHERE titleKey = ? AND id <> ?)",
+                arguments: [titleKey, id]
+            ) ?? false
         }
     }
 

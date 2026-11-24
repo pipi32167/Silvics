@@ -202,6 +202,23 @@ Silvics/
 
 顺手修了两个存量 bug：`TextNormalizer.bodyHash` 用 `Hasher` 跨进程不稳定；`MentionIndex.rebuildAll` 会清掉 `dismissed`。
 
+### 日记批次（分支 `feat/journal-save-invert`）
+
+设计见 [笔记类型与元数据.md](笔记类型与元数据.md) 第 6、7 节。
+
+| 批次 | 验收项 | 状态 | 证据 |
+| --- | --- | --- | --- |
+| 1 | `type` + 类型注册表 + `meta` 类型段 + frontmatter 分层与未知键保留 + v2 迁移 | 完成 | `NoteTypeTests` |
+| 2 | 保存倒转：先写 vault 文件，再更新 sqlite 索引 | 完成 | `NoteWriterTests` 10 项；`SILVICS_INVERT_DRILL` 两次启动演练 40 个字段全一致 |
+
+批次 2 的三条新约束：
+
+- 保存 = 编码 → 比字节（没变就一个字节都不碰）→ 原子写 → 写库 + 重算这一篇索引。文件失败不写库，库失败标 `meta.indexDirty=1` 并抛错。
+- `GRDBNoteRepository(db:vaultURL:)` 可注入目录，默认取 `SyncSettings.load().vaultURL`。**测试必须传临时目录**（`TempVault`）。
+- 启动自愈 `repairFromVaultIfNeeded()`：库空或 `indexDirty=1` 而 vault 有文件时全量导入并清标记。
+
+改名、别名、批量转换、撤销、忽略提及这些「直接改库」的老通路，事后走 `NoteWriter.flush` 把文件补齐。
+
 ## 5. 怎么跑
 
 ```bash
@@ -389,6 +406,8 @@ open -a .build/Build/Products/Debug/Silvics.app \
 | 深色 / 着色图标未接入 | 母版已在生成器里，需 deployment target ≥ 26 或转 Icon Composer |
 | MenuBarIcon 未接入 | 资源已进 catalog，界面还没用；将来加托盘才接线 |
 | 图标无 3D / 材质 | 纯扁平双色。macOS 26 的 Liquid Glass 图标要另做，当前是保守的 Big Sur 风格 |
+| 日记文件仍在 `notes/` | `NoteType.fileDir` 已定义 `journal/`，但 vault 读、导出、保存都还只认 `notes/`。类型目录留到批次 3 一起做 |
+| 改 vault 目录不需要重启 | `AppState.saveSyncSettings` 会把新目录同步给仓库。但已经写过旧目录的文件不会自动搬过去 |
 
 ## 9. 下一步：P4
 

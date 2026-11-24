@@ -112,8 +112,10 @@ final class VaultRoundTripTests: XCTestCase {
         try? FileManager.default.removeItem(at: tmp)
     }
 
+    /// 保存先写 vault 文件。这里让仓库直接指向本用例的 vault 目录，
+    /// 保存与导出写的是同一份文件，与真机行为一致。
     private func makeRepo() throws -> GRDBNoteRepository {
-        GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        GRDBNoteRepository(db: try AppDatabase.makeInMemory(), vaultURL: tmp)
     }
 
     private func makeSync(_ repo: GRDBNoteRepository, vault: URL) -> VaultSync {
