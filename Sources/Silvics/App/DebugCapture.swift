@@ -51,6 +51,11 @@ enum DebugCapture {
             app.isShowingMentionsSheet = true
         case "settings":
             SettingsWindowController.show(app: app, tab: .appearance)
+        case "settings-providers-demo":
+            seedDemoProvider(app)
+            SettingsWindowController.show(app: app, tab: .providers)
+        case "settings-providers":
+            SettingsWindowController.show(app: app, tab: .providers)
         case "settings-about":
             SettingsWindowController.show(app: app, tab: .about)
         case "alias": app.isShowingAliasSheet = true
@@ -201,6 +206,22 @@ enum DebugCapture {
             ) else { return }
             textView.keyDown(with: event)
             print("[selftest] 已在 caret=\(caret) 发送 ⌘⇧K，目标《\(mention.targetTitle)》")
+        }
+    }
+
+    /// 仅用于取证：加一个假的 OpenAI 配置，验证 Keychain 写入与「已配置密钥」状态。
+    @MainActor
+    static func seedDemoProvider(_ app: AppState) {
+        app.refreshProviders()
+        guard app.providerSettings.providers.isEmpty,
+              let preset = ProviderPresets.named("OpenAI") else { return }
+        let config = preset.config()
+        let errors = app.saveProvider(config, secret: "sk-demo-invalid-0000")
+        if errors.isEmpty {
+            app.bindProvider(.chat, to: config.id)
+            print("[Silvics] seeded demo provider")
+        } else {
+            print("[Silvics] seed provider failed: \(errors)")
         }
     }
 

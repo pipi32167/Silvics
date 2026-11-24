@@ -139,9 +139,13 @@ Silvics/
 | 正文字号 / 代码字号 / 行距 | 完成 | 滑块即时生效，落 UserDefaults |
 | 字体族（无衬线 / 衬线 / 等宽） | 完成 | 编辑区与预览同步 |
 | 样式不进正文 | 完成 | `testBaseAttributesCarryCurrentFont` 等 13 + 5 项测试 |
-| 模型服务（BYOK） | 未做 | 见 issue #2 与 `docs/需求-设置页.md` |
+| 模型服务（BYOK） | 完成 | 12 家预设 + 自定义、Keychain 存 key、测试连接（401 实测映射为中文）、L3/L4 各自绑定、未配置时提示原因 |
+| 导入导出配置 | 完成 | JSON 不含密钥；重复服务导入时跳过 |
+| 恢复全部设置 | 完成 | 清 UserDefaults + 全部 `provider-*` 钥匙串项 |
 
 `Theme` 从静态常量改为 `Theme.apply(settings)` 驱动；`AppearanceSettings` 存 UserDefaults（key `silvics.appearance.settings`），与 `SyncSettings` 一致。
+
+模型服务：`ProviderService` 负责校验、增删、绑定、导入导出；`KeychainSecretStore` 只存密钥；`ProviderProbe` 拼 OpenAI 兼容 / Anthropic / Gemini 三种请求并做错误码映射。L3（概念线索）与 L4（相关笔记）本体还没做，等 P4 接上 `effective(_:)`。
 
 ### P3
 

@@ -85,7 +85,7 @@ scripts/release.sh --check-upload    # 验证上传通道
 
 ## 测试
 
-`Tests/SilvicsTests/`，XCTest，共 134 项（P1–P3 99 项 + 备份与同步 35 项）。
+`Tests/SilvicsTests/`，XCTest，共 156 项（P1–P3、备份与同步、设置页）。
 
 `EditorKit/` 与 `Core/` 不得导入 SwiftUI 或 AppKit 的 UI 部分。改这两个目录时先补失败测试再改实现。
 
@@ -113,6 +113,8 @@ scripts/release.sh --check-upload    # 验证上传通道
 - 提及扫描不得在按键时重建自动机，用 `MentionIndex.scanner(in:)`（按标题集合指纹缓存）。
 - 索引重算只能走 `reindexAll(note:in:)`，顺序：引用 → 引用解析 → FTS → 提及 → 标签。
 - L3（概念抽取）与 L4（语义近邻）的建议永不改写用户正文。
+- 模型服务的密钥只进 Keychain（`service=com.silvics.app.provider`，`account=provider-<uuid>`）。UserDefaults 与导出 JSON 里只有 `keyAccount` 引用，任何日志不得写明文。
+- 单测不得碰真钥匙串：用 `InMemorySecretStore`。
 - **vault 导出只写不删。** 库空了不能连带清空 vault（备份会一起没）。删除笔记走 `VaultSync.removeFromVault(id:)`。
 - **绝不让 git 做合并。** `git merge` 会把冲突标记写进正文。合并走 `LineMerge`，git 只收已解决干净的提交。
 - **判断 git 成败只看退出码。** `git remote get-url` 失败时也会往 stdout 写 `error: ...`，拿输出判空会误判。

@@ -4,6 +4,7 @@ import SwiftUI
 /// 关于页：版本、数据目录、链接，以及重置入口。
 struct AboutSettingsPane: View {
     @EnvironmentObject private var app: AppState
+    @State private var isConfirmingReset = false
 
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
@@ -81,18 +82,32 @@ struct AboutSettingsPane: View {
             }
 
             Section {
-                Button("恢复外观默认") {
-                    app.resetAppearance()
-                }
-                .controlSize(.small)
-                .disabled(app.appearance.isDefault)
+                HStack(spacing: 8) {
+                    Button("恢复外观默认") {
+                        app.resetAppearance()
+                    }
+                    .controlSize(.small)
+                    .disabled(app.appearance.isDefault)
 
-                Text("只重置字号、行距与字体族，不动笔记与其它设置。")
+                    Button("恢复全部设置…") {
+                        isConfirmingReset = true
+                    }
+                    .controlSize(.small)
+                    .tint(.red)
+                }
+
+                Text("外观默认只改字号、行距与字体。恢复全部设置会清空服务商与钥匙串里的密钥。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
                 Text("重置")
             }
+        }
+        .confirmationDialog("恢复全部设置？", isPresented: $isConfirmingReset, titleVisibility: .visible) {
+            Button("恢复全部设置", role: .destructive) { app.resetAllSettings() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("会清空外观设置、全部服务商与钥匙串里的密钥。笔记不受影响。")
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)

@@ -19,6 +19,10 @@ final class AppState: ObservableObject {
     @Published var sidebarScope: SidebarScope = .all
     /// 外观设置。改动即时生效并落 UserDefaults。
     @Published private(set) var appearance: AppearanceSettings = .init()
+    /// 模型服务设置。密钥在 Keychain，这里只有非敏感部分。
+    @Published private(set) var providerSettings = ProviderSettings()
+    /// 哪些 provider 已经存了密钥。列表里显示「已配置」用。
+    @Published private(set) var providersWithKey: Set<UUID> = []
     /// 全部标签与使用次数。
     @Published private(set) var tags: [TagCount] = []
     @Published var isShowingQuickOpen: Bool = false
@@ -49,6 +53,8 @@ final class AppState: ObservableObject {
 
     private let repo: GRDBNoteRepository
     private let database: AppDatabase
+    /// 模型服务的读写与校验。密钥走 Keychain。
+    let providerService = ProviderService()
     private var saveTask: Task<Void, Never>?
     /// 最近一次落库的正文，用于跳过无变化的保存。
     private var lastSavedBody: String = ""
@@ -73,6 +79,7 @@ final class AppState: ObservableObject {
         }
         appearance = AppearanceSettings.load()
         Theme.apply(appearance)
+        providerSettings = providerService.settings
         loadAll(selectFirst: true)
     }
 
@@ -315,6 +322,70 @@ final class AppState: ObservableObject {
 
     func resetAppearance() {
         updateAppearance(AppearanceSettings())
+    }
+
+    // MARK: - 模型服务
+
+    /// 重新读一遍 provider 列表与密钥状态。设置页出现时调用。
+    func refreshProviders() {
+        providerSettings = providerService.settings
+        var ready = Set<UUID>()
+        for provider in providerSettings.providers where providerService.hasSecret(for: provider.id) {
+            ready.insert(provider.id)
+        }
+        providersWithKey = ready
+    }
+
+    @discardableResult
+    func saveProvider(_ config: ProviderConfig, secret: String?) -> [String] {
+        let errors = providerService.upsert(config, secret: secret)
+        refreshProviders()
+        return errors
+    }
+
+    func deleteProvider(_ id: UUID) {
+        providerService.delete(id)
+        refreshProviders()
+    }
+
+    func bindProvider(_ role: ProviderRole, to id: UUID?) {
+        providerService.bind(role, to: id)
+        refreshProviders()
+    }
+
+    func maskedKey(for id: UUID) -> String? {
+        providerService.maskedSecret(for: id)
+    }
+
+    func hasKey(for id: UUID) -> Bool {
+        providersWithKey.contains(id)
+    }
+
+    func testProvider(_ id: UUID, role: ProviderRole) async -> ProbeResult {
+        guard let config = providerSettings.provider(id: id) else {
+            return ProbeResult(ok: false, message: "找不到这个服务", latencyMs: 0, detail: "")
+        }
+        guard let key = providerService.secret(for: id), !key.isEmpty else {
+            return ProbeResult(ok: false, message: "先填密钥再测试", latencyMs: 0, detail: "")
+        }
+        return await ProviderProbe.run(config: config, key: key, role: role)
+    }
+
+    func exportProviderConfig() -> Data? { providerService.exportJSON() }
+
+    @discardableResult
+    func importProviderConfig(_ data: Data) -> [String] {
+        let messages = providerService.importJSON(data)
+        refreshProviders()
+        return messages
+    }
+
+    /// 恢复全部设置：外观回默认、清空服务商与密钥。
+    func resetAllSettings() {
+        providerService.resetAll(alsoAppearance: true)
+        appearance = AppearanceSettings()
+        Theme.apply(appearance)
+        refreshProviders()
     }
 
     func rebuildIndexes() {
