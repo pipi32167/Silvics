@@ -8,6 +8,7 @@ Silvics：单人用的 macOS 原生笔记应用。笔记正文是 Markdown 纯�
 - `docs/HANDOFF.md` —— 进度、已知坑、下一步
 - `docs/RELEASE.md` —— 版本策略与发布脚本
 - `docs/备份与同步.md` —— vault 格式、git 同步流程、合并与冲突规则
+- `docs/日记编辑器边界用例.md` —— 日记编辑器的 58 条边界用例，实现时按编号写 XCTest
 
 ## 环境
 

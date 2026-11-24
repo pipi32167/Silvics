@@ -1,12 +1,17 @@
-/* Silvics 日记 · 低保真原型（v2）
+/* Silvics 日记 · 低保真原型（v3）
  *
- * 关键改动：日记就是一份 Markdown 文本，和概念笔记同构。
- * 模板只在新建时注入骨架；勾选、承接都是对文本的编辑，不是对结构化字段的编辑。
- * 单栏，可在「源码 / 预览」之间切换。
+ * v2：日记 = 一份 Markdown 文本，源码 / 预览切换。
+ * v3：改成 Typora 式混合模式 —— 光标所在行露源码，其他行渲染，边看边写。
+ *
+ * 核心约定：
+ *   文本是唯一真相（state.body），DOM 只是投影。
+ *   只有「当前行」是真 contenteditable，里面是原始文本；
+ *   其他行是渲染结果，不可编辑，点击后切换为本行的编辑态。
+ *   勾选待办 = 改文本里那一行，不引入第二份状态。
  */
 
 const TODAY = "2026-11-24";
-const STORAGE_KEY = "{{SECRET_0c4n1r7g}}";
+const STORAGE_KEY = "{{SECRET_9p2k4m6t}}";
 
 const SEED = {
   templates: [
@@ -41,7 +46,6 @@ const SEED = {
       body: "这条没有任何引用，也不引用别人 —— 用来演示孤儿计数。",
     },
   ],
-  // 日记 = 纯 Markdown 文本
   journals: [
     {
       id: "j20261121",
@@ -87,7 +91,8 @@ function load() {
   if (raw) {
     try {
       state = JSON.parse(raw);
-      if (!state.journalMode) state.journalMode = "source";
+      if (!state.mode) state.mode = "wysiwyg";
+      if (state.activeLine == null) state.activeLine = 0;
       return;
     } catch {
       /* 落回种子 */
@@ -100,7 +105,8 @@ function load() {
     search: "",
     selection: { type: "note", id: "n1" },
     journalMentions: false,
-    journalMode: "source",
+    mode: "wysiwyg",
+    activeLine: 0,
   };
 }
 
@@ -113,105 +119,234 @@ function save() {
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-function renderWikilinks(text) {
-  return esc(text).replace(/\[\[([^\]]+)\]\]/g, (_, target) =>
-    `<span class="wikilink" data-target="${esc(target)}">${esc(target)}</span>`
-  );
-}
-
-function weekday(date) {
-  const d = new Date(date + "T00:00:00");
-  return "周" + "日一二三四五六"[d.getDay()];
-}
-
+const weekday = (date) => "周" + "日一二三四五六"[new Date(date + "T00:00:00").getDay()];
 const noteByTitle = (t) => state.notes.find((n) => n.title === t);
 const journalByDate = (d) => state.journals.find((j) => j.date === d);
 const journalById = (id) => state.journals.find((j) => j.id === id);
 const todayJournalId = () => journalByDate(TODAY)?.id || null;
 
-// ---------- Markdown 极简解析 ----------
+// ---------- Markdown：行分类 ----------
 //
-// 只认三种：`## 标题`、`- [ ] / - [x]`、其余当段落。
-// 返回的行都带 line 号，勾选时靠它把「视图里的一次点击」写回「文本里的那一行」。
+// 只认四种行：标题、待办、段落、代码块。代码块是唯一带上下文（fence 状态）的。
 
-function parseBody(body) {
-  const lines = body.split("\n");
-  const blocks = [];
-  let para = null;
+const RE_HEADING = /^(#{1,3})\s+(.*)$/;
+const RE_FENCE = /^\s*```/;
+const RE_TODO = /^(\s*)[-*+]\s+\[([ xX])\]\s(.*)$/;
 
-  lines.forEach((raw, i) => {
-    const line = raw;
-    const heading = line.match(/^(#{1,3})\s+(.*)$/);
-    const todo = line.match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$/);
+function describeLines(body) {
+  const lines = String(body).split("\n");
+  let inFence = false;
+  return lines.map((raw, i) => {
+    if (RE_FENCE.test(raw)) {
+      inFence = !inFence;
+      return { kind: "fence", raw, i };
+    }
+    if (inFence) return { kind: "fence", raw, i };
 
-    if (heading) {
-      para = null;
-      blocks.push({ type: "heading", level: heading[1].length, text: heading[2], line: i });
-      return;
+    const h = raw.match(RE_HEADING);
+    // `#标签`（# 后面没空格）不是标题
+    if (h) return { kind: "heading", level: h[1].length, text: h[2], raw, i };
+
+    const t = raw.match(RE_TODO);
+    if (t) {
+      return {
+        kind: "todo",
+        indent: t[1].length,
+        done: t[2].toLowerCase() === "x",
+        text: t[3],
+        raw,
+        i,
+      };
     }
-    if (todo) {
-      para = null;
-      blocks.push({
-        type: "todo",
-        indent: todo[1].length,
-        done: todo[2].toLowerCase() === "x",
-        text: todo[3],
-        line: i,
-      });
-      return;
-    }
-    if (!line.trim()) {
-      para = null;
-      return;
-    }
-    if (!para) {
-      para = { type: "p", text: line, line: i };
-      blocks.push(para);
-    } else {
-      para.text += "\n" + line;
-    }
+
+    return { kind: raw.trim() ? "p" : "blank", text: raw, raw, i };
   });
-
-  return blocks;
 }
 
-/** 文本里所有未完成待办。 */
+/** 行内：`代码` / [[目标|显示]] / **粗** / *斜*。未闭合的一律当纯文本。 */
+const RE_INLINE = /(`[^`\n]*`)|(\[\[[^\]\n]*\]\])|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)/g;
+
+function inlineHTML(text) {
+  let out = "";
+  let last = 0;
+  RE_INLINE.lastIndex = 0;
+  let m;
+  while ((m = RE_INLINE.exec(text))) {
+    out += esc(text.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("`")) {
+      out += `<code>${esc(tok.slice(1, -1))}</code>`;
+    } else if (tok.startsWith("[[")) {
+      const inner = tok.slice(2, -2);
+      const [targetRaw, displayRaw] = inner.split("|");
+      const target = (targetRaw || "").split("#")[0].trim();
+      const display = (displayRaw || targetRaw || "").trim();
+      if (!target) {
+        out += esc(tok); // `[[ ]]` 空目标当纯文本
+      } else {
+        out += `<span class="wikilink" data-target="${esc(target)}">${esc(display)}</span>`;
+      }
+    } else if (tok.startsWith("**")) {
+      out += `<strong>${esc(tok.slice(2, -2))}</strong>`;
+    } else {
+      out += `<em>${esc(tok.slice(1, -1))}</em>`;
+    }
+    last = m.index + tok.length;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+
+// 空 `[[ ]]` 不该产生链接：上面正则要求中间至少 1 个字符，`[[ ]]` 会匹配到空格，这里兜一层
+function inlineHTMLSafe(text) {
+  return inlineHTML(text).replace(/(<span class="wikilink" data-target="">\s*<\/span>)/g, (m) => m);
+}
+
+/** 一行渲染成 HTML（非编辑态）。 */
+function renderLineHTML(d) {
+  switch (d.kind) {
+    case "fence":
+      return `<div class="line code" data-i="${d.i}">${esc(d.raw) || '<span class="zws"></span>'}</div>`;
+    case "heading":
+      return `<div class="line h${d.level}" data-i="${d.i}">${inlineHTML(d.text) || '<span class="zws"></span>'}</div>`;
+    case "todo":
+      return `<div class="line todo ${d.done ? "done" : ""}" data-i="${d.i}" style="padding-left:${d.indent ? 10 : 0}px">
+        <span class="todo-box ${d.done ? "on" : ""}" data-line="${d.i}" role="checkbox" aria-checked="${d.done}"></span>
+        <span class="todo-text">${inlineHTML(d.text)}</span>
+      </div>`;
+    case "blank":
+      return `<div class="line blank" data-i="${d.i}"><span class="zws"></span></div>`;
+    default:
+      return `<div class="line" data-i="${d.i}">${inlineHTML(d.text)}</div>`;
+  }
+}
+
+// ---------- 文本操作（纯函数，供编辑器与测试共用）----------
+
+const Model = {
+  lines: (body) => String(body).split("\n"),
+
+  splitLine(body, i, offset) {
+    const lines = Model.lines(body);
+    const raw = lines[i] ?? "";
+    const cut = Math.max(0, Math.min(offset, raw.length));
+    lines[i] = raw.slice(0, cut);
+    lines.splice(i + 1, 0, raw.slice(cut));
+    return { body: lines.join("\n"), line: i + 1, offset: 0 };
+  },
+
+  mergeBackward(body, i) {
+    const lines = Model.lines(body);
+    if (i <= 0) return { body, line: 0, offset: 0 };
+    const prev = lines[i - 1];
+    lines[i - 1] = prev + lines[i];
+    lines.splice(i, 1);
+    return { body: lines.join("\n"), line: i - 1, offset: prev.length };
+  },
+
+  mergeForward(body, i) {
+    const lines = Model.lines(body);
+    if (i >= lines.length - 1) return { body, line: i, offset: lines[i].length };
+    const merged = lines[i] + lines[i + 1];
+    lines[i] = merged;
+    lines.splice(i + 1, 1);
+    return { body: lines.join("\n"), line: i, offset: merged.length };
+  },
+
+  insertLines(body, i, newLines) {
+    const lines = Model.lines(body);
+    lines.splice(i, 0, ...newLines);
+    return { body: lines.join("\n"), line: i + newLines.length };
+  },
+
+  setLine(body, i, text) {
+    const lines = Model.lines(body);
+    if (i < 0 || i >= lines.length) return body;
+    lines[i] = text;
+    return lines.join("\n");
+  },
+
+  toggleTodo(body, lineIndex) {
+    const lines = Model.lines(body);
+    if (lines[lineIndex] == null) return body;
+    lines[lineIndex] = lines[lineIndex].replace(/- \[([ xX])\]/, (_, mark) =>
+      mark.toLowerCase() === "x" ? "- [ ]" : "- [x]"
+    );
+    return lines.join("\n");
+  },
+};
+
+// ---------- 承接 ----------
+
 function openTodosIn(body) {
-  return parseBody(body)
-    .filter((b) => b.type === "todo" && !b.done)
-    .map((b) => b.text);
+  return describeLines(body)
+    .filter((d) => d.kind === "todo" && !d.done)
+    .map((d) => d.text);
 }
 
-/** 翻转某一行的复选框，其余字符一个不动。 */
-function toggleTodoLine(body, lineIndex) {
-  const lines = body.split("\n");
-  lines[lineIndex] = lines[lineIndex].replace(/- \[([ xX])\]/, (_, mark) =>
-    mark.toLowerCase() === "x" ? "- [ ]" : "- [x]"
-  );
-  return lines.join("\n");
+function carryLines(fromDate, items) {
+  return [`## 承接（来自 ${fromDate.slice(5)}）`, ...items.map((t) => `- [ ] ${t}`)];
+}
+
+/**
+ * 把承接块插到第 atLine 行之前。
+ * `blockOnBlank` 为 true 时，如果上一行不是空行就补一个空行（避免标题贴在正文后面）。
+ */
+function insertCarry(body, atLine, fromDate, items, blockOnBlank = true) {
+  const lines = Model.lines(body);
+  const at = Math.max(0, Math.min(atLine, lines.length));
+  const block = carryLines(fromDate, items);
+  const prevIsBlank = at === 0 || lines[at - 1].trim() === "";
+  const nextIsBlank = at >= lines.length || lines[at].trim() === "";
+  const payload = [
+    ...(blockOnBlank && !prevIsBlank ? [""] : []),
+    ...block,
+    ...(nextIsBlank ? [] : [""]),
+  ];
+  lines.splice(at, 0, ...payload);
+  return { body: lines.join("\n"), line: at + payload.length };
+}
+
+function hasCarryFor(body, date) {
+  return body.includes(`## 承接（来自 ${date.slice(5)}）`);
 }
 
 // ---------- 派生数据 ----------
+
+function plainTextOf(body) {
+  // 代码块与行内代码里的内容不算引用，也不该参与提及扫描
+  let inFence = false;
+  return describeLines(body)
+    .filter((d) => {
+      if (d.kind === "fence") {
+        inFence = !inFence;
+        return false;
+      }
+      return !inFence;
+    })
+    .map((d) => (d.text || "").replace(/`[^`]*`/g, ""))
+    .join("\n");
+}
 
 function backlinksFor(title) {
   const out = [];
   for (const n of state.notes) {
     if (n.title === title) continue;
-    if (n.body.includes(`[[${title}]]`)) {
+    if (plainTextOf(n.body).includes(`[[${title}]]`)) {
       out.push({ type: "note", id: n.id, label: n.title, snippet: n.body.split("\n")[0] });
     }
   }
   for (const j of state.journals) {
-    if (!j.body.includes(`[[${title}]]`)) continue;
-    const hit = j.body.split("\n").find((l) => l.includes(`[[${title}]]`)) || "";
+    const text = plainTextOf(j.body);
+    if (!text.includes(`[[${title}]]`)) continue;
+    const hit = text.split("\n").find((l) => l.includes(`[[${title}]]`)) || "";
     out.push({ type: "journal", date: j.date, label: `${j.date} 日记`, snippet: hit });
   }
   return out;
 }
 
 function mentionsIn(j) {
-  const plain = j.body.replace(/\[\[[^\]]+\]\]/g, "");
+  const plain = plainTextOf(j.body).replace(/\[\[[^\]]+\]\]/g, "");
   return state.notes
     .filter((n) => plain.includes(n.title))
     .map((n) => ({
@@ -222,24 +357,24 @@ function mentionsIn(j) {
 
 function orphans() {
   return state.notes.filter((n) => {
-    const hasOut = /\[\[[^\]]+\]\]/.test(n.body);
+    const text = plainTextOf(n.body);
+    const hasOut = /\[\[[^\]]+\]\]/.test(text);
     const hasIn =
-      state.notes.some((o) => o.id !== n.id && o.body.includes(`[[${n.title}]]`)) ||
-      state.journals.some((j) => j.body.includes(`[[${n.title}]]`));
+      state.notes.some((o) => o.id !== n.id && plainTextOf(o.body).includes(`[[${n.title}]]`)) ||
+      state.journals.some((j) => plainTextOf(j.body).includes(`[[${n.title}]]`));
     return !hasOut && !hasIn;
   });
 }
 
-/** 跨日记聚合待办：同一句话取最近一天的状态。 */
-function aggregatedTodos() {
+function aggregatedTodosOn(journals) {
   const map = new Map();
-  for (const j of [...state.journals].sort((a, b) => a.date.localeCompare(b.date))) {
-    for (const b of parseBody(j.body)) {
-      if (b.type !== "todo") continue;
-      const key = b.text.trim();
-      const rec = map.get(key) || { text: key, days: [], done: false, latest: j.date, earliest: j.date };
+  for (const j of [...journals].sort((a, b) => a.date.localeCompare(b.date))) {
+    for (const d of describeLines(j.body)) {
+      if (d.kind !== "todo") continue;
+      const key = d.text.trim();
+      const rec = map.get(key) || { text: key, days: [], done: false, latest: j.date };
       if (!rec.days.includes(j.date)) rec.days.push(j.date);
-      rec.done = b.done;
+      rec.done = d.done;
       rec.latest = j.date;
       map.set(key, rec);
     }
@@ -247,20 +382,8 @@ function aggregatedTodos() {
   return [...map.values()].filter((r) => !r.done).sort((a, b) => b.latest.localeCompare(a.latest));
 }
 
-/** 「上一个有日记的日子」：最近那一篇，不跳天。 */
-function previousJournal(beforeDate) {
-  return [...state.journals]
-    .filter((j) => j.date < beforeDate)
-    .sort((a, b) => b.date.localeCompare(a.date))[0] || null;
-}
-
-function carryBlock(fromDate, items) {
-  return [
-    `## 承接（来自 ${fromDate.slice(5)}）`,
-    ...items.map((t) => `- [ ] ${t}`),
-    "",
-    "",
-  ].join("\n");
+function aggregatedTodos() {
+  return aggregatedTodosOn(state.journals);
 }
 
 // ---------- 渲染 ----------
@@ -343,9 +466,7 @@ function renderEditor() {
            <h1>${esc(n.title)}</h1>
            <div class="note-meta">概念笔记 · 反向链接 ${backlinksFor(n.title).length} 条</div>
          </div>
-         <div class="note-body">
-           ${n.body.split("\n").map((p) => `<p>${renderWikilinks(p)}</p>`).join("")}
-         </div>`
+         <div class="note-body">${n.body.split("\n").map((p) => `<p>${inlineHTML(p)}</p>`).join("")}</div>`
       : `<div class="empty">笔记不存在</div>`;
     bindWikilinks();
     return;
@@ -366,132 +487,365 @@ function renderEditor() {
 
     <div class="editor-bar">
       <div class="seg" id="journal-mode">
-        <button data-mode="source" class="${state.journalMode === "source" ? "on" : ""}">源码</button>
-        <button data-mode="preview" class="${state.journalMode === "preview" ? "on" : ""}">预览</button>
+        <button data-mode="wysiwyg" class="${state.mode === "wysiwyg" ? "on" : ""}">所见即所得</button>
+        <button data-mode="source" class="${state.mode === "source" ? "on" : ""}">源码</button>
       </div>
       <button id="btn-carry" class="ghost">插入承接（光标处）</button>
       <span class="caret-info" id="caret-info"></span>
     </div>
 
     ${
-      state.journalMode === "source"
-        ? `<textarea id="journal-src" spellcheck="false">${esc(j.body)}</textarea>`
-        : `<div class="preview-body" id="journal-preview">${renderMarkdown(j.body)}</div>`
+      state.mode === "wysiwyg"
+        ? `<div class="doc" id="doc">${renderDoc(j)}</div>
+           <div class="hint tiny">当前行显示源码，离开后自动渲染。点任意一行即可开始写。</div>`
+        : `<textarea id="journal-src" spellcheck="false">${esc(j.body)}</textarea>`
     }
   `;
 
   $("#journal-mode").onclick = (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
-    state.journalMode = btn.dataset.mode;
+    state.mode = btn.dataset.mode;
     render();
   };
-  $("#btn-carry").onclick = () => insertCarry(j);
+  $("#btn-carry").onclick = () => insertCarryAtCaret(j);
 
-  if (state.journalMode === "source") {
-    const ta = $("#journal-src");
-    ta.oninput = () => {
-      j.body = ta.value;
-      refreshCounts();
-      save();
-    };
-    ta.onkeyup = ta.onclick = updateCaretInfo;
-    updateCaretInfo();
-  } else {
-    bindWikilinks();
-    document.querySelectorAll("#journal-preview input[data-line]").forEach((box) => {
-      box.onchange = () => {
-        const line = Number(box.dataset.line);
-        j.body = toggleTodoLine(j.body, line);
-        render();
-        if (isCarriedLine(j, line)) {
-          toast("已勾掉。承接来源那天的正文没变 —— 历史不改，总览按最近一天算。");
-        }
-      };
-    });
+  if (state.mode === "wysiwyg") bindDoc(j);
+  else bindSource(j);
+}
+
+function renderDoc(j) {
+  const descs = describeLines(j.body);
+  const active = Math.min(Math.max(state.activeLine, 0), descs.length - 1);
+  state.activeLine = active;
+  return descs
+    .map((d, i) => {
+      if (i !== active) return renderLineHTML(d);
+      const cls =
+        d.kind === "heading" ? `h${d.level}` : d.kind === "todo" ? "todo" : d.kind === "fence" ? "code" : "";
+      return `<div class="line active ${cls}" data-i="${i}" contenteditable="true"
+                   spellcheck="false" autocapitalize="off" autocorrect="off">${esc(d.raw) || "<br>"}</div>`;
+    })
+    .join("");
+}
+
+// ---------- 编辑器：混合模式 ----------
+
+let composing = false;
+
+function currentJournal() {
+  return state.selection.type === "journal" ? journalById(state.selection.id) : null;
+}
+
+function bindDoc(j) {
+  const doc = $("#doc");
+
+  // 点击：复选框 / 链接 / 切行
+  doc.onclick = (e) => {
+    const box = e.target.closest(".todo-box");
+    if (box) {
+      e.preventDefault();
+      j.body = Model.toggleTodo(j.body, Number(box.dataset.line));
+      state.activeLine = Number(box.dataset.line);
+      renderDocInto(j);
+      afterRender();
+      if (isCarriedLine(j, Number(box.dataset.line))) {
+        toast("已勾掉。承接来源那天的正文没变 —— 历史不改，总览按最近一天算。");
+      }
+      return;
+    }
+    const link = e.target.closest(".wikilink");
+    if (link) {
+      e.preventDefault();
+      jumpToWiki(link.dataset.target);
+      return;
+    }
+    const line = e.target.closest(".line");
+    if (line && !line.classList.contains("active")) {
+      activate(Number(line.dataset.i), null);
+    }
+  };
+
+  doc.onkeydown = onDocKeydown;
+  doc.onbeforeinput = onDocBeforeInput;
+  doc.oninput = onDocInput;
+  doc.onpaste = onDocPaste;
+  doc.oncompositionstart = () => {
+    composing = true;
+    logIME("compositionstart");
+  };
+  doc.oncompositionend = () => {
+    composing = false;
+    logIME("compositionend");
+    syncActiveLine(j);
+    renderDocInto(j);
+    afterRender();
+  };
+  doc.onkeyup = updateCaretInfo;
+
+  // 首帧：把焦点放到当前行末尾
+  const activeEl = doc.querySelector(".line.active");
+  if (activeEl) placeCaret(activeEl, activeEl.textContent.length);
+}
+
+function renderDocInto(j) {
+  const doc = $("#doc");
+  if (!doc) return;
+  doc.innerHTML = renderDoc(j);
+}
+
+function afterRender() {
+  const j = currentJournal();
+  if (!j) return;
+  refreshCounts();
+  renderRight();
+  save();
+  updateCaretInfo();
+}
+
+function activate(i, offset) {
+  const j = currentJournal();
+  if (!j) return;
+  const lines = Model.lines(j.body);
+  state.activeLine = Math.max(0, Math.min(i, lines.length - 1));
+  renderDocInto(j);
+  const el = $(`#doc .line[data-i="${state.activeLine}"]`);
+  if (el) placeCaret(el, offset == null ? (lines[state.activeLine] || "").length : offset);
+  save();
+}
+
+function activeLineEl() {
+  return document.querySelector("#doc .line.active");
+}
+
+function offsetInLine(el) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return (el.textContent || "").length;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer)) return (el.textContent || "").length;
+  const probe = document.createRange();
+  probe.selectNodeContents(el);
+  probe.setEnd(range.startContainer, range.startOffset);
+  return probe.toString().length;
+}
+
+function placeCaret(el, offset) {
+  el.focus();
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, offset);
+  let node = walker.nextNode();
+  while (node) {
+    if (remaining <= node.textContent.length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    remaining -= node.textContent.length;
+    node = walker.nextNode();
+  }
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  window.getSelection().removeAllRanges();
+  window.getSelection().addRange(range);
+}
+
+function syncActiveLine(j) {
+  const el = activeLineEl();
+  if (!el) return;
+  const text = el.textContent;
+  j.body = Model.setLine(j.body, Number(el.dataset.i), text);
+}
+
+function onDocInput(e) {
+  if (composing) return; // 组合期不碰模型，等 compositionend
+  const j = currentJournal();
+  if (!j) return;
+  syncActiveLine(j);
+  refreshCounts();
+  save();
+  updateCaretInfo();
+}
+
+function onDocBeforeInput(e) {
+  if (composing) return;
+  const j = currentJournal();
+  if (!j) return;
+  const el = activeLineEl();
+  if (!el) return;
+
+  // 跨行选区：当前实现只允许单行编辑，这里显式拦掉并提示
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount > 1) return;
+
+  if (e.inputType === "deleteContentBackward") {
+    if (offsetInLine(el) === 0 && Number(el.dataset.i) > 0) {
+      e.preventDefault();
+      const i = Number(el.dataset.i);
+      syncActiveLine(j);
+      const res = Model.mergeBackward(j.body, i);
+      j.body = res.body;
+      state.activeLine = res.line;
+      renderDocInto(j);
+      const next = activeLineEl();
+      if (next) placeCaret(next, res.offset);
+      afterRender();
+    }
+    return;
+  }
+
+  if (e.inputType === "deleteContentForward") {
+    const i = Number(el.dataset.i);
+    const len = (el.textContent || "").length;
+    if (offsetInLine(el) === len && i < Model.lines(j.body).length - 1) {
+      e.preventDefault();
+      syncActiveLine(j);
+      const res = Model.mergeForward(j.body, i);
+      j.body = res.body;
+      state.activeLine = res.line;
+      renderDocInto(j);
+      const next = activeLineEl();
+      if (next) placeCaret(next, res.offset);
+      afterRender();
+    }
   }
 }
 
-/** 日记的 markdown → 可点的视图。 */
-function renderMarkdown(body) {
-  const blocks = parseBody(body);
-  let html = "";
-  let listOpen = null;
+function onDocKeydown(e) {
+  const j = currentJournal();
+  if (!j) return;
+  const el = activeLineEl();
+  if (!el) return;
 
-  const closeList = () => {
-    if (listOpen !== null) {
-      html += "</ul>";
-      listOpen = null;
-    }
-  };
-
-  for (const b of blocks) {
-    if (b.type === "heading") {
-      closeList();
-      const inner = renderWikilinks(b.text).replace(
-        /（来自 (\d{2}-\d{2})）/g,
-        '<span class="src">（来自 $1）</span>'
-      );
-      html += `<h${b.level}>${inner}</h${b.level}>`;
-      continue;
-    }
-    if (b.type === "todo") {
-      if (listOpen !== b.indent) {
-        closeList();
-        html += `<ul class="todo">`;
-        listOpen = b.indent;
-      }
-      html += `<li class="${b.done ? "done" : ""}">
-        <input type="checkbox" data-line="${b.line}" ${b.done ? "checked" : ""}>
-        <span>${renderWikilinks(b.text)}</span>
-      </li>`;
-      continue;
-    }
-    closeList();
-    html += `<p>${renderWikilinks(b.text).replace(/\n/g, "<br>")}</p>`;
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (composing) return;
+    const offset = offsetInLine(el);
+    const i = Number(el.dataset.i);
+    syncActiveLine(j);
+    const res = Model.splitLine(j.body, i, offset);
+    j.body = res.body;
+    state.activeLine = res.line;
+    renderDocInto(j);
+    // 换行后，如果上一行变成空标题（`## `），退化成普通段落
+    normalizeHeadingLines(j);
+    renderDocInto(j);
+    const next = activeLineEl();
+    if (next) placeCaret(next, res.offset);
+    afterRender();
+    return;
   }
-  closeList();
-  return html || `<div class="hint">这一天还是空的。切到「源码」开始写。</div>`;
+
+  if (e.key === "Tab") {
+    e.preventDefault();
+    document.execCommand("insertText", false, "  ");
+  }
+}
+
+function onDocPaste(e) {
+  const j = currentJournal();
+  if (!j) return;
+  const text = (e.clipboardData || window.clipboardData)?.getData("text/plain") ?? "";
+  if (!text) return;
+  e.preventDefault();
+  if (composing) return;
+
+  const el = activeLineEl();
+  const i = Number(el.dataset.i);
+  const offset = offsetInLine(el);
+  syncActiveLine(j);
+
+  const parts = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  if (parts.length === 1) {
+    const lines = Model.lines(j.body);
+    const raw = lines[i];
+    lines[i] = raw.slice(0, offset) + parts[0] + raw.slice(offset);
+    j.body = lines.join("\n");
+    renderDocInto(j);
+    const next = activeLineEl();
+    if (next) placeCaret(next, offset + parts[0].length);
+  } else {
+    const lines = Model.lines(j.body);
+    const raw = lines[i];
+    const head = raw.slice(0, offset) + parts[0];
+    const tail = parts[parts.length - 1] + raw.slice(offset);
+    const middle = parts.slice(1, -1);
+    lines.splice(i, 1, head, ...middle, tail);
+    j.body = lines.join("\n");
+    state.activeLine = i + parts.length - 1;
+    renderDocInto(j);
+    const next = activeLineEl();
+    if (next) placeCaret(next, parts[parts.length - 1].length);
+  }
+  afterRender();
+}
+
+/** `## ` 后面没内容时，退化成普通空行（避免出现空标题）。 */
+function dropEmptyHeadings(body) {
+  return Model.lines(body)
+    .map((l) => (/^#{1,3}\s*$/.test(l) ? "" : l))
+    .join("\n");
+}
+
+function normalizeHeadingLines(j) {
+  j.body = dropEmptyHeadings(j.body);
 }
 
 function isCarriedLine(j, line) {
-  // 往上找最近的 `## 承接（来自 xx-xx）`
-  const lines = j.body.split("\n");
+  const lines = Model.lines(j.body);
   for (let i = line; i >= 0; i--) {
-    if (/^##\s/.test(lines[i])) return /^##\s*承接（来自/.test(lines[i]);
+    if (/^#{1,3}\s/.test(lines[i])) return /^#{1,3}\s*承接（来自/.test(lines[i]);
   }
   return false;
 }
 
-function updateCaretInfo() {
+function jumpToWiki(target) {
+  const n = noteByTitle(target);
+  if (n) selectNote(n.id);
+  else toast(`「${target}」还没有笔记（悬空引用）`);
+}
+
+function bindSource(j) {
   const ta = $("#journal-src");
+  ta.oninput = () => {
+    j.body = ta.value;
+    refreshCounts();
+    save();
+    updateCaretInfo();
+  };
+  ta.onkeyup = ta.onclick = updateCaretInfo;
+  updateCaretInfo();
+}
+
+function updateCaretInfo() {
   const info = $("#caret-info");
-  if (!ta || !info) return;
-  const before = ta.value.slice(0, ta.selectionStart);
-  const line = before.split("\n").length;
-  info.textContent = `光标：第 ${line} 行`;
+  if (!info) return;
+  const j = currentJournal();
+  if (!j) return;
+  if (state.mode === "source") {
+    const ta = $("#journal-src");
+    if (!ta) return;
+    const line = ta.value.slice(0, ta.selectionStart).split("\n").length;
+    info.textContent = `源码模式 · 第 ${line} 行`;
+    return;
+  }
+  const el = activeLineEl();
+  if (!el) return;
+  info.textContent = `第 ${Number(el.dataset.i) + 1} 行 · 光标 ${offsetInLine(el)}`;
 }
 
 function refreshCounts() {
-  // 输入时不重绘编辑器（会丢焦点），只更新左栏计数与条目上的未完成数
-  $("#count-journal").textContent = state.journals.length;
-  const j = journalById(state.selection.id);
+  const j = currentJournal();
   if (!j) return;
   const open = openTodosIn(j.body).length;
   document.querySelectorAll(".item.journal").forEach((btn) => {
     if (btn.dataset.id !== j.id) return;
     const sub = btn.querySelector(".sub");
     if (sub) sub.textContent = `${weekday(j.date)} · 未完成 ${open} 条`;
-  });
-}
-
-function bindWikilinks() {
-  document.querySelectorAll(".wikilink").forEach((el) => {
-    el.onclick = () => {
-      const n = noteByTitle(el.dataset.target);
-      if (n) selectNote(n.id);
-      else toast(`「${el.dataset.target}」还没有笔记（悬空引用）`);
-    };
   });
 }
 
@@ -522,7 +876,8 @@ function renderRight() {
   const j = journalById(sel.id);
   if (!j) return;
 
-  const asSource = state.notes.filter((n) => j.body.includes(`[[${n.title}]]`));
+  const text = plainTextOf(j.body);
+  const asSource = state.notes.filter((n) => text.includes(`[[${n.title}]]`));
   el.innerHTML =
     asSource
       .map(
@@ -545,12 +900,20 @@ function renderRight() {
       ? `扫描到 ${found.length} 处（未加 [[ ]] 就写了概念标题）`
       : "这一天没有未链接的提及";
     mentionBox.innerHTML = found
-      .map((m) => `<div class="item">${esc(m.title)}<span class="sub">${esc(m.snippet.slice(0, 26))}…</span></div>`)
+      .map(
+        (m) => `<div class="item">${esc(m.title)}<span class="sub">${esc(m.snippet.slice(0, 26))}…</span></div>`
+      )
       .join("");
   }
 }
 
-// ---------- 选择 ----------
+function bindWikilinks() {
+  document.querySelectorAll(".wikilink").forEach((el) => {
+    el.onclick = () => jumpToWiki(el.dataset.target);
+  });
+}
+
+// ---------- 选择 / 新建 / 承接 ----------
 
 function selectNote(id) {
   state.selection = { type: "note", id };
@@ -566,6 +929,7 @@ function selectJournalByDate(date) {
   }
   state.selection = { type: "journal", id: j.id };
   state.scope = "journal";
+  state.activeLine = 0;
   render();
 }
 
@@ -576,8 +940,6 @@ function goToday() {
     openNewToday();
   }
 }
-
-// ---------- 新建 / 承接 ----------
 
 function openNewToday() {
   if (todayJournalId()) {
@@ -607,7 +969,7 @@ function renderCarryPreview() {
   }
   const open = openTodosIn(prev.body);
   box.textContent = open.length
-    ? `来自 ${prev.date}（上一个有日记的日子），将带入 ${open.length} 条未完成，插入位置＝创建后光标所在处：\n` +
+    ? `来自 ${prev.date}（上一个有日记的日子），将带入 ${open.length} 条未完成，插在光标所在行之前：\n` +
       open.map((t) => `· ${t}`).join("\n")
     : `来自 ${prev.date}，那天没有未完成项，不需要承接。`;
 }
@@ -618,80 +980,50 @@ function createToday() {
     toast("至少选一个模块");
     return;
   }
-
-  // 模板 = 一次性骨架，之后随便改
   const skeleton = state.templates
     .filter((t) => picked.includes(t.name))
     .sort((a, b) => a.order - b.order)
-    .map((t) => `## ${t.name}\n\n`)
-    .join("");
+    .map((t) => `## ${t.name}\n`)
+    .join("\n");
 
   const j = { id: `j${TODAY.replace(/-/g, "")}`, date: TODAY, body: skeleton };
   state.journals.push(j);
   state.lastModules = picked;
   state.selection = { type: "journal", id: j.id };
   state.scope = "journal";
-  state.journalMode = "source";
+  state.mode = "wysiwyg";
+  state.activeLine = 0;
   $("#modal-new").hidden = true;
   render();
 
-  // 创建后光标落在文首，承接插在光标处
-  const ta = $("#journal-src");
-  if (ta) {
-    ta.focus();
-    ta.selectionStart = ta.selectionEnd = 0;
-    const prev = previousJournal(TODAY);
-    const items = prev ? openTodosIn(prev.body) : [];
-    if (items.length) {
-      ta.selectionStart = ta.selectionEnd = 0;
-      insertCarry(j, prev.date);
-    } else {
-      toast(`已创建 ${TODAY}。模板已预填，光标在文首。`);
-    }
-  }
+  const prev = previousJournal(TODAY);
+  const items = prev ? openTodosIn(prev.body) : [];
+  if (items.length) insertCarryAtCaret(j, prev.date);
+  else toast(`已创建 ${TODAY}。模板已预填，光标在文首。`);
 }
 
-/** 把上一个有日记的日子的未完成项，插到光标处。 */
-function insertCarry(j, forcedDate) {
-  const ta = $("#journal-src");
+function previousJournal(beforeDate) {
+  return (
+    [...state.journals].filter((x) => x.date < beforeDate).sort((a, b) => b.date.localeCompare(a.date))[0] ||
+    null
+  );
+}
+
+/** 承接插在「当前行之前」。行内光标不拆分当前行，避免把一句话拦腰切断。 */
+function insertCarryAtCaret(j, forcedDate) {
   const prev = forcedDate ? journalByDate(forcedDate) : previousJournal(j.date);
-  if (!prev) {
-    toast("没有更早的日记可承接");
-    return;
-  }
-  const header = `承接（来自 ${prev.date.slice(5)}）`;
-  if (j.body.includes(header)) {
-    toast(`${prev.date} 的承接已经在正文里了，不重复插入。`);
-    return;
-  }
+  if (!prev) return toast("没有更早的日记可承接");
+  if (hasCarryFor(j.body, prev.date)) return toast(`${prev.date} 的承接已经在正文里了，不重复插入。`);
+
   const items = openTodosIn(prev.body);
-  if (!items.length) {
-    toast(`${prev.date} 没有未完成项`);
-    return;
-  }
+  if (!items.length) return toast(`${prev.date} 没有未完成项`);
 
-  const block = carryBlock(prev.date, items);
-  if (!ta) {
-    // 预览模式下没有光标，退回插到文首
-    j.body = block + j.body;
-    render();
-    toast(`预览模式没有光标，承接到插到文首（${items.length} 条）。`);
-    return;
-  }
-
-  const pos = ta.selectionStart ?? 0;
-  // 光标前不是空行时补空行，避免承接标题贴在上面那段正文后面
-  const head = j.body.slice(0, pos);
-  const lead = pos === 0 || head.endsWith("\n\n") ? "" : head.endsWith("\n") ? "\n" : "\n\n";
-  j.body = head + lead + block + j.body.slice(pos);
-  ta.value = j.body;
-  ta.focus();
-  const caret = pos + lead.length + block.length;
-  ta.selectionStart = ta.selectionEnd = caret;
-  updateCaretInfo();
-  refreshCounts();
-  save();
-  toast(`承接 ${items.length} 条，插在第 ${j.body.slice(0, caret).split("\n").length} 行。`);
+  const at = state.mode === "source" ? Model.lines(j.body).length : state.activeLine;
+  const res = insertCarry(j.body, at, prev.date, items);
+  j.body = res.body;
+  state.activeLine = res.line;
+  render();
+  toast(`承接 ${items.length} 条，插在第 ${at + 1} 行之前。`);
 }
 
 // ---------- 待办总览 ----------
@@ -707,7 +1039,6 @@ function openTodos() {
         </button>`
       )
       .join("") || `<div class="hint">没有未完成的待办</div>`;
-
   document.querySelectorAll("#todo-list .item").forEach((btn) => {
     btn.onclick = () => {
       $("#modal-todos").hidden = true;
@@ -720,10 +1051,10 @@ function openTodos() {
 
 function highlight(text) {
   setTimeout(() => {
-    document.querySelectorAll("#journal-preview li").forEach((li) => {
-      if (li.textContent.includes(text)) {
-        li.classList.add("hit");
-        li.scrollIntoView({ block: "center" });
+    document.querySelectorAll("#doc .line").forEach((line) => {
+      if (line.textContent.includes(text)) {
+        line.classList.add("hit");
+        line.scrollIntoView({ block: "center" });
       }
     });
   }, 40);
@@ -751,7 +1082,7 @@ function renderQuick(q) {
   });
 }
 
-// ---------- 提示 ----------
+// ---------- 提示 / 输入法日志 ----------
 
 let toastTimer;
 function toast(msg) {
@@ -760,6 +1091,14 @@ function toast(msg) {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), 4200);
+}
+
+const imeLog = [];
+function logIME(event) {
+  imeLog.unshift(`${new Date().toLocaleTimeString()} ${event}`);
+  imeLog.length = Math.min(imeLog.length, 8);
+  const box = $("#ime-log");
+  if (box) box.innerHTML = imeLog.map((l) => `<div>${esc(l)}</div>`).join("");
 }
 
 // ---------- 事件 ----------
@@ -773,6 +1112,7 @@ function bind() {
     state.scope = "journal";
     const first = [...state.journals].sort((a, b) => b.date.localeCompare(a.date))[0];
     if (first) state.selection = { type: "journal", id: first.id };
+    state.activeLine = 0;
     render();
   };
   $("#scope-orphan").onclick = () => {
@@ -802,6 +1142,7 @@ function bind() {
   $("#btn-new-today").onclick = openNewToday;
   $("#btn-todos").onclick = openTodos;
   $("#btn-quickopen").onclick = openQuick;
+  $("#btn-tests").onclick = () => window.runEdgeCases?.();
 
   $("#modal-new-cancel").onclick = () => ($("#modal-new").hidden = true);
   $("#modal-new-confirm").onclick = createToday;
@@ -836,6 +1177,32 @@ function bind() {
     }
   });
 }
+
+// ---------- 导出（给测试面板用）----------
+
+window.SilvicsModel = {
+  TODAY,
+  describeLines,
+  inlineHTML,
+  renderLineHTML,
+  Model,
+  openTodosIn,
+  insertCarry,
+  carryLines,
+  dropEmptyHeadings,
+  hasCarryFor,
+  plainTextOf,
+  aggregatedTodos,
+  aggregatedTodosOn,
+  backlinksFor: (title, dataset) => {
+    const saved = state;
+    if (dataset) state = dataset;
+    const out = backlinksFor(title);
+    state = saved;
+    return out;
+  },
+  getState: () => state,
+};
 
 // ---------- 启动 ----------
 

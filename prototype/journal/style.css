@@ -366,3 +366,81 @@ kbd {
 .preview-body ul.todo li.hit { border-color: var(--accent); background: #eaf1fb; }
 .preview-body ul.todo li.done span { color: var(--muted); text-decoration: line-through; }
 .preview-body ul.todo input { margin-top: 3px; }
+
+/* ---------- v3：混合模式编辑器 ---------- */
+
+.doc {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px 12px;
+  min-height: 320px;
+  background: #fcfcfc;
+}
+.doc .line {
+  min-height: 1.55em;
+  padding: 1px 2px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+.doc .line:hover { border-color: var(--line-soft); }
+.doc .line.active {
+  border-color: #b9d0ee;
+  background: #fff;
+  outline: none;
+  font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+}
+.doc .line.h1 { font-size: 19px; font-weight: 600; margin: 10px 0 4px; }
+.doc .line.h2 { font-size: 15px; font-weight: 600; margin: 12px 0 4px; }
+.doc .line.h3 { font-size: 13.5px; font-weight: 600; color: #333; margin: 8px 0 3px; }
+.doc .line.code {
+  font: 12px/1.6 ui-monospace, monospace;
+  background: #f2f2f2;
+  color: #444;
+}
+.doc .line.todo { display: flex; gap: 7px; align-items: flex-start; }
+.doc .line.todo.done .todo-text { color: var(--muted); text-decoration: line-through; }
+.doc .line.hit { border-color: var(--accent); background: #eaf1fb; }
+.doc .line strong { font-weight: 700; }
+.doc .line em { font-style: italic; }
+.doc .line code {
+  font: 11.5px ui-monospace, monospace;
+  background: #efefef;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+.todo-box {
+  display: inline-block;
+  width: 11px; height: 11px;
+  margin-top: 4px;
+  border: 1px solid #999;
+  border-radius: 2px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.todo-box.on { background: var(--ink); border-color: var(--ink); }
+.zws { display: inline-block; }
+.hint.tiny { margin-top: 6px; }
+
+/* 测试面板 */
+.tests { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tests th, .tests td {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.tests th { color: var(--muted); font-weight: 500; font-size: 11px; }
+.tests td.id { font-family: ui-monospace, monospace; color: var(--muted); white-space: nowrap; }
+.tests tr.fail td { background: #fdf0f0; }
+.tests td.verdict { white-space: nowrap; }
+.tests tr.pass td.verdict { color: var(--ok); }
+.tests tr.fail td.verdict { color: #b3261e; }
+.tests td.detail { color: #8a3b12; font-size: 11px; }
+.manual { margin-top: 14px; }
+.manual ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 11.5px; }
+.manual li { margin-bottom: 4px; }
+#test-summary.pass { color: var(--ok); }
+#test-summary.fail { color: #b3261e; }

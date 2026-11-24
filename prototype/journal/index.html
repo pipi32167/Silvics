@@ -47,6 +47,7 @@
       <button id="btn-new-today">新建今天的日记</button>
       <button id="btn-todos">待办总览 <kbd>⌘⇧T</kbd></button>
       <button id="btn-quickopen">按标题打开 <kbd>⌘P</kbd></button>
+      <button id="btn-tests">边界用例 <span class="num" id="test-badge"></span></button>
     </div>
   </aside>
 
@@ -128,8 +129,29 @@
   </div>
 </div>
 
+<!-- 边界用例 -->
+<div class="overlay" id="modal-tests" hidden>
+  <div class="dialog wide">
+    <h3>边界用例 <span class="muted" id="test-summary"></span></h3>
+    <table class="tests">
+      <thead>
+        <tr><th>编号</th><th>用例</th><th>结果</th><th>说明</th></tr>
+      </thead>
+      <tbody id="test-body"></tbody>
+    </table>
+    <div class="manual">
+      <div class="field-label">需要人工在真机上确认（原型跑不了）</div>
+      <ul id="test-manual"></ul>
+    </div>
+    <div class="dialog-actions">
+      <button id="modal-tests-close" class="ghost">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 
 <script src="app.js"></script>
+<script src="edgecases.js"></script>
 </body>
 </html>
