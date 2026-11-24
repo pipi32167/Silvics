@@ -127,7 +127,7 @@ Silvics/
 | 批量转换可撤销 | 完成 | 菜单「撤销上次批量转换」，或面板里的按钮 |
 | 别名 | 完成 | 表已有，新增 CRUD、UI、提及匹配、`[[别名]]` 解析 |
 | 改名时批量重写正文引用 | 完成 | 先给影响预览，改后旧标题自动进别名 |
-| 单测 | 完成 | 99 项全过 |
+| 单测 | 完成 | 88 项全过 |
 
 额外修掉：`completionItems` 与短查询搜索里 `LIKE` 未转义 `%` / `_` 的 bug。
 
@@ -141,7 +141,7 @@ Silvics/
 | 标签筛选 | 完成 | 侧栏标签列表按使用次数排序，点击切范围 |
 | 搜索摘要 | 完成 | 以命中处为中心取片段，前后加省略号 |
 | 搜索性能 | 完成 | 1000 条笔记，Debug 实测 **4.7 ms**（验收线 100 ms） |
-| 单测 | 完成 | 99 项全过 |
+| 单测 | 完成 | 88 项全过 |
 
 ### 图标
 
@@ -214,7 +214,7 @@ scripts/release.sh 0.1.1             # 提交版本号、打 tag、推送、建 
 ```text
 xcodegen generate                 → 生成工程
 xcodebuild ... build              → BUILD SUCCEEDED
-xcodebuild ... test               → 99 tests, 0 failures, TEST SUCCEEDED
+xcodebuild ... test               → 88 tests, 0 failures, TEST SUCCEEDED
 open -a Silvics.app --env SILVICS_SEED=1
   → 21 条笔记 / 31 条边 / 2 条提及 / 5 个标签 / 1 条孤儿，数据正确
 ```
