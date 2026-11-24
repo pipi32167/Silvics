@@ -54,7 +54,15 @@ enum MentionIndex {
     // MARK: - 写入
 
     /// 重扫一篇笔记的提及。`dismissed` 按目标保留。
-    static func reindex(note: Note, scanner: MentionScanner, in db: Database) throws {
+    ///
+    /// `journalScanMentions` 是日记的运行时开关（右栏设置）。
+    /// 其他类型仍按描述符的 `scanMentions` 决定。
+    static func reindex(
+        note: Note,
+        scanner: MentionScanner,
+        in db: Database,
+        journalScanMentions: Bool = false
+    ) throws {
         let dismissed = Set(try String.fetchAll(
             db,
             sql: "SELECT targetId FROM mention WHERE noteId = ? AND dismissed = 1",
@@ -62,7 +70,9 @@ enum MentionIndex {
         ))
         try db.execute(sql: "DELETE FROM mention WHERE noteId = ?", arguments: [note.id])
         // `scanMentions = false` 的类型（日记）不跑提及扫描，先清后跳。
-        guard note.noteType.scanMentions else { return }
+        let scans = note.noteType.scanMentions
+            || (note.type == NoteTypes.journalID && journalScanMentions)
+        guard scans else { return }
         guard !note.body.isEmpty else { return }
 
         // 排除区：代码块、行内代码、已有引用。
@@ -89,7 +99,7 @@ enum MentionIndex {
     /// 全库重扫提及。标题或别名变化后调用。
     ///
     /// `dismissed` 必须跨重建保留：它是用户的决定，正文里没有，重建一次就丢是数据损失。
-    static func rebuildAll(in db: Database) throws {
+    static func rebuildAll(in db: Database, journalScanMentions: Bool = false) throws {
         let dismissedPairs = try Row.fetchAll(
             db, sql: "SELECT noteId, targetId FROM mention WHERE dismissed = 1"
         ).map { (noteId: $0["noteId"] as String, targetId: $0["targetId"] as String) }
@@ -97,7 +107,7 @@ enum MentionIndex {
         try db.execute(sql: "DELETE FROM mention")
         let notes = try Note.fetchAll(db)
         for note in notes {
-            try reindex(note: note, scanner: scanner, in: db)
+            try reindex(note: note, scanner: scanner, in: db, journalScanMentions: journalScanMentions)
         }
         for pair in dismissedPairs {
             try db.execute(

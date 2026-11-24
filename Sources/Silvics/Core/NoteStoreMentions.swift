@@ -45,7 +45,7 @@ extension GRDBNoteRepository {
         let conversions = try db.writer.write { conn in
             let conversions = try MentionIndex.convert(occurrenceIds: occurrenceIds, in: conn)
             for conversion in conversions {
-                try Self.applyBody(conversion.note, in: conn)
+                try Self.applyBody(conversion.note, in: conn, journalScanMentions: journalScanMentions)
             }
             return conversions
         }
@@ -68,7 +68,7 @@ extension GRDBNoteRepository {
                 guard var note = try Note.fetchOne(conn, key: noteId) else { continue }
                 guard note.body != body else { continue }
                 note.body = body
-                try Self.applyBody(note, in: conn)
+                try Self.applyBody(note, in: conn, journalScanMentions: journalScanMentions)
                 ids.append(noteId)
             }
             return ids
@@ -79,23 +79,23 @@ extension GRDBNoteRepository {
     /// 全库重扫提及。标题、别名、笔记集合变化后调用。
     func rebuildAllMentions() throws {
         try db.writer.write { conn in
-            try MentionIndex.rebuildAll(in: conn)
+            try MentionIndex.rebuildAll(in: conn, journalScanMentions: journalScanMentions)
         }
     }
 
     /// 写正文并重算该笔记的全部索引。调用方负责事务。
-    static func applyBody(_ note: Note, in conn: Database) throws {
+    static func applyBody(_ note: Note, in conn: Database, journalScanMentions: Bool = false) throws {
         var updated = note
         updated.bodyHash = TextNormalizer.bodyHash(updated.body)
         updated.updatedAt = Int64(Date().timeIntervalSince1970 * 1000)
         try updated.save(conn)
-        try Self.reindexAll(note: updated, in: conn)
+        try Self.reindexAll(note: updated, in: conn, journalScanMentions: journalScanMentions)
     }
 
     /// 改写后重算涉及笔记的正文与索引。调用方负责事务。
-    static func applyBodies(_ notes: [Note], in conn: Database) throws {
+    static func applyBodies(_ notes: [Note], in conn: Database, journalScanMentions: Bool = false) throws {
         for note in notes {
-            try applyBody(note, in: conn)
+            try applyBody(note, in: conn, journalScanMentions: journalScanMentions)
         }
     }
 }

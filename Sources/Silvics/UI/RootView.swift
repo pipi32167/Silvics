@@ -39,6 +39,10 @@ struct RootView: View {
             QuickOpenSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingTodoOverview) {
+            TodoOverviewSheet()
+                .environmentObject(app)
+        }
         .overlay(alignment: .bottom) {
             StatusBanner()
         }
@@ -147,7 +151,10 @@ private struct EditorPane: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("重命名。正文里的旧引用会跟着改。")
+                .disabled(!note.noteType.titleEditable)
+                .help(note.noteType.titleEditable
+                      ? "重命名。正文里的旧引用会跟着改。"
+                      : "日记的标题就是日期，不能改。")
 
                 statusPicker
 

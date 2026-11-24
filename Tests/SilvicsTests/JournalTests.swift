@@ -6,6 +6,18 @@ import XCTest
 /// 文档编号对应 `docs/日记编辑器边界用例.md` 第 4 节 C01–C06 与第 3 节 T01–T06。
 final class JournalTests: XCTestCase {
 
+    // 日记提及开关存在真实 UserDefaults 里，测试必须用独立 suite，
+    // 否则本机的设置会改变索引行为，导致用例互相干扰（甚至数组越界崩溃）。
+    override func setUp() {
+        super.setUp()
+        JournalMentionSettings.defaults = UserDefaults(suiteName: "silvics.tests.\(UUID().uuidString)") ?? .standard
+    }
+
+    override func tearDown() {
+        JournalMentionSettings.defaults = .standard
+        super.tearDown()
+    }
+
     private let vault = TempVault("journal")
 
     // MARK: - 夹具

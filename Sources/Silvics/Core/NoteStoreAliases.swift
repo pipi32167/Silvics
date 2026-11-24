@@ -46,7 +46,7 @@ extension GRDBNoteRepository {
                 sql: "INSERT OR IGNORE INTO alias(noteId, name, nameKey) VALUES (?, ?, ?)",
                 arguments: [noteId, trimmed, key]
             )
-            try MentionIndex.rebuildAll(in: conn)
+            try MentionIndex.rebuildAll(in: conn, journalScanMentions: journalScanMentions)
             return nil
         }
         // 别名只存在库里，必须写回文件，否则删库重建就丢。
@@ -63,7 +63,7 @@ extension GRDBNoteRepository {
                 arguments: [noteId, key]
             )
             let deleted = conn.changesCount > 0
-            try MentionIndex.rebuildAll(in: conn)
+            try MentionIndex.rebuildAll(in: conn, journalScanMentions: journalScanMentions)
             return deleted
         }
         if deleted { try NoteWriter.flush(noteIds: [noteId], repo: self) }
@@ -114,7 +114,8 @@ extension GRDBNoteRepository {
             let oldKey = TextNormalizer.key(oldTitle)
             guard oldKey != newKey else { return [] }
             return try Self.performRename(
-                note: &note, oldKey: oldKey, oldTitle: oldTitle, newTitle: trimmed, in: conn
+                note: &note, oldKey: oldKey, oldTitle: oldTitle, newTitle: trimmed,
+                journalScanMentions: journalScanMentions, in: conn
             )
         }
         // 改名改了标题与正文，文件要跟着写，否则删库重建会退回旧标题。
@@ -127,6 +128,7 @@ extension GRDBNoteRepository {
         oldKey: String,
         oldTitle: String,
         newTitle: String,
+        journalScanMentions: Bool,
         in conn: Database
     ) throws -> [String] {
         // 1. 全库改写 `[[旧标题]]`、`[[旧标题|x]]`、`[[旧标题#a]]`。
@@ -160,9 +162,9 @@ extension GRDBNoteRepository {
         }
 
         // 4. 重算所有被改写正文的索引，再全库重解析引用。
-        try applyBodies(rewritten, in: conn)
+        try applyBodies(rewritten, in: conn, journalScanMentions: journalScanMentions)
         try resolveAllLinks(in: conn)
-        try MentionIndex.rebuildAll(in: conn)
+        try MentionIndex.rebuildAll(in: conn, journalScanMentions: journalScanMentions)
 
         // 被改写的正文也要回写文件。改过标题的那篇排在前面。
         return [note.id] + rewritten.map(\.id)
