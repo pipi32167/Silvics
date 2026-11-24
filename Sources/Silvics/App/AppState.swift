@@ -26,6 +26,8 @@ final class AppState: ObservableObject {
     /// 最近一次同步里没能自动合并的正文冲突。
     @Published private(set) var syncConflicts: [VaultConflict] = []
     @Published var isShowingConflicts: Bool = false
+    /// 同步状态一行字：已同步 15:02 / 同步失败：…
+    @Published private(set) var syncStatusLine: String = ""
     /// 全部标签与使用次数。
     @Published private(set) var tags: [TagCount] = []
     @Published var isShowingQuickOpen: Bool = false
@@ -48,7 +50,6 @@ final class AppState: ObservableObject {
 
     // MARK: - 备份与同步
 
-    @Published var isShowingSyncSheet: Bool = false
     @Published private(set) var syncSettings: SyncSettings = .load()
     @Published private(set) var isSyncing: Bool = false
 
@@ -63,6 +64,11 @@ final class AppState: ObservableObject {
     private var lastSavedBody: String = ""
     /// 上次批量转换前的正文。按笔记 id 存。
     private var conversionUndo: [String: String]?
+    // 定时同步
+    private var syncTimer: Timer?
+    private var syncStartedAt = Date()
+    private var lastSyncAttempt: Date?
+    private var consecutiveSyncFailures = 0
 
     // MARK: - 备份与同步
 
@@ -84,6 +90,76 @@ final class AppState: ObservableObject {
         Theme.apply(appearance)
         providerSettings = providerService.settings
         loadAll(selectFirst: true)
+        startSyncTimers()
+    }
+
+    // MARK: - 同步时机
+
+    /// 定时同步 + 启动后一次。判定在 `SyncScheduler`，这里只负责触发。
+    private func startSyncTimers() {
+        syncStartedAt = Date()
+        syncTimer?.invalidate()
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.runScheduledSyncIfDue() }
+        }
+        // 启动后 10 秒拉一次：先把别的设备写的东西拿进来。
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(SyncScheduler.startupDelay * 1_000_000_000))
+            self.runStartupSyncIfNeeded()
+        }
+    }
+
+    private func runStartupSyncIfNeeded() {
+        guard syncSettings.isReadyToSync, !isSyncing else { return }
+        performSyncWork({ sync in [try sync.sync().summary] }, done: { _ in })
+    }
+
+    private func runScheduledSyncIfDue() {
+        let settings = syncSettings
+        guard settings.isReadyToSync else { return }
+        let due = SyncScheduler.shouldRun(
+            now: Date(),
+            startedAt: syncStartedAt,
+            lastAttempt: lastSyncAttempt,
+            consecutiveFailures: consecutiveSyncFailures,
+            enabled: settings.backgroundSync,
+            intervalMinutes: settings.syncIntervalMinutes,
+            isSyncing: isSyncing,
+            hasConflicts: !syncConflicts.isEmpty
+        )
+        guard due else { return }
+        performSyncWork({ sync in [try sync.sync().summary] }, done: { _ in })
+    }
+
+    /// 立即同步一次。菜单、设置页、失焦节流都走这里。
+    func syncNow() {
+        performSyncWork({ sync in [try sync.sync().summary] }, done: { _ in })
+    }
+
+    /// 失焦后再同步一次的节流：距上次至少 5 分钟，避免每次切窗口都拉一遍。
+    func syncOnResignActiveIfDue() {
+        guard syncSettings.isReadyToSync, !isSyncing, syncConflicts.isEmpty else { return }
+        if let last = lastSyncAttempt, Date().timeIntervalSince(last) < 300 { return }
+        syncNow()
+    }
+
+    /// 设置页改完开关或间隔后调用，避免刚开就要等满一个周期。
+    func rescheduleSync() {
+        lastSyncAttempt = nil
+        syncStartedAt = Date()
+    }
+
+    private func recordSyncOutcome(failure: String?) {
+        lastSyncAttempt = Date()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        if let failure {
+            consecutiveSyncFailures += 1
+            syncStatusLine = "同步失败：" + failure
+        } else {
+            consecutiveSyncFailures = 0
+            syncStatusLine = "已同步 " + formatter.string(from: Date())
+        }
     }
 
     // MARK: - 载入
@@ -675,6 +751,7 @@ extension AppState {
                 settings.save()
                 self.isSyncing = false
                 if failure == nil { self.syncConflicts = conflicts }
+                self.recordSyncOutcome(failure: failure)
                 self.loadAll()
                 done(failure.map { ["错误：" + $0] } ?? lines)
             }

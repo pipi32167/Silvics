@@ -143,6 +143,9 @@ Silvics/
 | 本地 LLM（magpie） | 完成 | 预设 `http://127.0.0.1:3425/v1`，`requiresKey=false`；模型列表拉取支持筛选 |
 | 同步冲突 LLM 合并 | 完成 | `ConflictResolver` + `ChatClient`；drill 实测 2.7 s 合并成功 |
 | 导入导出配置 | 完成 | JSON 不含密钥；重复服务导入时跳过 |
+| 同步设置页 | 完成 | 并入设置窗口第四页；字段即时写本机，关窗不再丢配置 |
+| 同步时机 | 完成 | 启动后 10 s 拉一次、定时（默认 15 分钟）、失焦 ≥5 分钟、手动 ⌘⇧Y；失败按 5/15/60 分钟退避 |
+| 远端连通性检查 | 完成 | `git ls-remote` 10 s 超时，错误翻成中文（权限/不存在/解析/超时/指纹） |
 | 恢复全部设置 | 完成 | 清 UserDefaults + 全部 `provider-*` 钥匙串项 |
 
 `Theme` 从静态常量改为 `Theme.apply(settings)` 驱动；`AppearanceSettings` 存 UserDefaults（key `silvics.appearance.settings`），与 `SyncSettings` 一致。
@@ -150,6 +153,10 @@ Silvics/
 模型服务：`ProviderService` 负责校验、增删、绑定、导入导出；`KeychainSecretStore` 只存密钥；`ProviderProbe` 拼 OpenAI 兼容 / Anthropic / Gemini 三种请求并做错误码映射。L3（概念线索）与 L4（相关笔记）本体还没做，等 P4 接上 `effective(_:)`。
 
 本地 LLM：magpie 在 `127.0.0.1:3425` 提供 OpenAI 兼容代理，无鉴权，`auto/*` 是路由组；`ProviderConfig.requiresKey=false` 时 `effective` 不要求密钥。magpie **没有** `/v1/embeddings`，L4 用不了。
+
+同步设置从独立 `SyncSheet` 并入设置窗口的「同步」页。**旧版有关窗丢配置的 bug**：当时只有点「立即同步 / 从 vault 恢复 / 校验」才 `persist()`，直接关窗什么都不写。现在字段改动防抖 400 ms 写 UserDefaults，`onDisappear` 再兜底。
+
+同步时机（`Core/SyncScheduler`，纯函数 + 单测）：启动 10 s 后一次；定时按 `backgroundSync` 与 `syncIntervalMinutes`（默认开、15 分钟，可选 5/10/15/30/60）；切到别的 App 后若距上次 ≥5 分钟再同步一次；退出前不做网络操作（避免卡住退出）。失败退避 5 → 15 → 60 分钟，有冲突或正在同步时一律不跑。`autoSync` 这个死字段已删。
 
 同步冲突合并：`VaultSync.lastConflicts` 收集 diff3 合不了的正文，`ConflictResolver` 用对话模型合并，校验后由用户在 `ConflictSheet` 确认。演练：`scripts/conflict-drill.sh`，结论见 `docs/测试-双客户端冲突.md`。
 

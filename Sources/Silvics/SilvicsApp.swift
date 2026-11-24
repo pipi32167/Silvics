@@ -86,12 +86,12 @@ struct SilvicsApp: App {
                 Divider()
 
                 Button("备份与同步…") {
-                    app.isShowingSyncSheet = true
+                    SettingsWindowController.show(app: app, tab: .sync)
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
 
                 Button("立即同步") {
-                    app.performSyncWork({ try [$0.sync().summary] }, done: { _ in })
+                    app.syncNow()
                 }
                 .keyboardShortcut("y", modifiers: [.command, .shift])
                 .disabled(app.isSyncing)
@@ -113,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidResignActive(_ notification: Notification) {
         MainActor.assumeIsolated {
             app?.flushPendingSave()
+            app?.syncOnResignActiveIfDue()
         }
     }
 }

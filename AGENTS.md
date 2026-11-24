@@ -85,7 +85,7 @@ scripts/release.sh --check-upload    # 验证上传通道
 
 ## 测试
 
-`Tests/SilvicsTests/`，XCTest，共 178 项（P1–P3、备份与同步、设置页、冲突合并）。
+`Tests/SilvicsTests/`，XCTest，共 191 项（P1–P3、备份与同步、设置页、同步时机、冲突合并）。
 
 `EditorKit/` 与 `Core/` 不得导入 SwiftUI 或 AppKit 的 UI 部分。改这两个目录时先补失败测试再改实现。
 
@@ -117,6 +117,8 @@ scripts/release.sh --check-upload    # 验证上传通道
 - 单测不得碰真钥匙串：用 `InMemorySecretStore`。
 - 本地服务（magpie / Ollama）靠 `ProviderConfig.requiresKey=false` 免密钥；不要靠填假 key 绕过。
 - 冲突合并的模型输出必须先过 `ConflictResolver.clean` 与 `validate`：去分隔标记、拒冲突标记、拒异常长。
+- 同步设置改动必须立即写 UserDefaults。不要再出现「只有点同步才保存」的实现。
+- 同步跑不跑由 `SyncScheduler.shouldRun` 判定（启动 10 s / 定时间格 / 失败退避 5-15-60 / 有冲突不跑）。不要在别处另写一套判断。
 - **vault 导出只写不删。** 库空了不能连带清空 vault（备份会一起没）。删除笔记走 `VaultSync.removeFromVault(id:)`。
 - **绝不让 git 做合并。** `git merge` 会把冲突标记写进正文。合并走 `LineMerge`，git 只收已解决干净的提交。
 - **判断 git 成败只看退出码。** `git remote get-url` 失败时也会往 stdout 写 `error: ...`，拿输出判空会误判。
