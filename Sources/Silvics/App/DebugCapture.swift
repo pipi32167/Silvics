@@ -10,6 +10,7 @@ import SwiftUI
 /// 两个环境变量：
 /// - `SILVICS_CAPTURE=/tmp/reports/x.png`：图片路径前缀。有多个可见窗口时追加 `-1`、`-2`。
 /// - `SILVICS_SHOW=quickopen|mentions|alias|rename`：启动后直接打开对应面板，便于截取。
+/// - `SILVICS_CARET=<文本>`：把光标放到含该文本的段落（验收「光标行露源码」必须能指定光标）。
 enum DebugCapture {
 
     static var path: String? {
@@ -366,6 +367,36 @@ enum DebugCapture {
             if let found = findTextView(in: sub) { return found }
         }
         return nil
+    }
+
+    /// 所有 NSTextView（含编辑区与搜索框的 field editor）。
+    private static func textViews(in view: NSView, into out: inout [NSTextView]) {
+        if let textView = view as? NSTextView { out.append(textView) }
+        for sub in view.subviews { textViews(in: sub, into: &out) }
+    }
+
+    /// 仅用于取证：`SILVICS_CARET=<文本>` 把光标放到含该文本的段落。
+    ///
+    /// 「光标行露源码」只能靠截图验收，而截图需要能指定光标位置。
+    /// 走真实 `setSelectedRange` → `textViewDidChangeSelection` → 重刷标记可见性这条链路。
+    @MainActor
+    static func applyCaretProbe(after delay: TimeInterval = 1.4) {
+        guard let keyword = ProcessInfo.processInfo.environment["SILVICS_CARET"], !keyword.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            var candidates: [NSTextView] = []
+            for window in NSApp.windows where window.isVisible {
+                if let content = window.contentView { textViews(in: content, into: &candidates) }
+            }
+            for textView in candidates {
+                let range = (textView.string as NSString).range(of: keyword)
+                guard range.location != NSNotFound else { continue }
+                textView.window?.makeFirstResponder(textView)
+                textView.setSelectedRange(NSRange(location: range.location, length: 0))
+                print("[caret] \"\(keyword)\" -> location=\(range.location)")
+                return
+            }
+            print("[caret] 可见文本视图里找不到「\(keyword)」")
+        }
     }
 
     /// 延迟后把所有可见窗口写成 PNG。
