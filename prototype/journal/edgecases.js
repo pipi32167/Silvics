@@ -142,6 +142,50 @@
       run: () => falsy(html("`**x**`").includes("<strong>"), "不应有 strong"),
     },
 
+    {
+      id: "S23", group: "语法", title: "带语言标记的 ` ```swift ` 也是代码块起点",
+      run: () => all([
+        eq(D("```swift\nlet a = 1\n```", 0).kind, "fence", "首行"),
+        eq(D("```swift\nlet a = 1\n```", 1).kind, "fence", "内容行"),
+        eq(D("```swift\nlet a = 1\n```", 2).kind, "fence", "收尾行"),
+      ]),
+    },
+    {
+      id: "S24", group: "语法", title: "未闭合的代码块，后面所有行都算代码",
+      run: () => all([
+        eq(D("```\n一行\n二行", 1).kind, "fence"),
+        eq(D("```\n一行\n二行", 2).kind, "fence"),
+      ]),
+    },
+    {
+      id: "S25", group: "语法", title: "代码块里的 `## 标题` 与 `[[链接]]` 都不生效",
+      run: () => {
+        const body = "```\n## 不是标题\n[[不是链接]]\n```";
+        const lines = M().describeLines(body);
+        const rendered = M().renderLineHTML(lines[1]) + M().renderLineHTML(lines[2]);
+        return all([
+          eq(lines[1].kind, "fence", "## 行"),
+          eq(lines[2].kind, "fence", "[[ ]] 行"),
+          falsy(rendered.includes("wikilink"), "不应生成链接"),
+          falsy(rendered.includes('class="line h2"'), "不应生成标题"),
+        ]);
+      },
+    },
+    {
+      id: "S26", group: "语法", title: "行中间的 ``` 不开启代码块",
+      run: () => all([
+        eq(D("这段有 ``` 但不是代码块").kind, "p"),
+        eq(D("这段有 ``` 但不是代码块\n下一行").kind, "p"),
+      ]),
+    },
+    {
+      id: "S27", group: "语法", title: "四个反引号按三个反引号处理（已知取舍）",
+      run: () => all([
+        eq(D("````\n代码\n````", 0).kind, "fence"),
+        eq(D("````\n代码\n````", 1).kind, "fence"),
+      ]),
+    },
+
     // ===== E：文本编辑 =====
     {
       id: "E01", group: "编辑", title: "回车拆分：在第 2 个字符后拆分",
@@ -338,13 +382,18 @@
 
   // ---------- DOM 级用例：需要编辑器挂载，跑完恢复原选区 ----------
 
+  /// DOM 用例会改真实日记，跑完必须把正文和选区一起还原，否则会污染后续用例与界面。
   function withJournal(fn) {
     const S = M();
     const saved = S.getState().selection;
+    const journal = S.getState().journals.find((j) => j.date === "2026-11-23");
+    const originalBody = journal.body;
     S.selectJournalByDate("2026-11-23");
     try {
       return fn(S);
     } finally {
+      journal.body = originalBody;
+      S.selectJournalByDate("2026-11-23");
       if (saved.type === "note") S.selectNoteById(saved.id);
       else S.selectJournalByDate(S.getState().journals.find((j) => j.id === saved.id).date);
     }
@@ -382,6 +431,40 @@
           eq(Number(document.querySelector("#doc .line.active").dataset.i), 5, "行"),
           eq(S.offsetInActive(), prevLen, "列"),
         ]);
+      })
+    )
+  );
+
+  CASES.push(
+    dom("E18", "编辑", "行尾按 → 跳到下一行行首", () =>
+      withJournal((S) => {
+        S.activateLine(5, 99);
+        const len = S.Model.lines(S.getState().journals.find((j) => j.date === "2026-11-23").body)[5].length;
+        press("ArrowRight");
+        return all([
+          eq(Number(document.querySelector("#doc .line.active").dataset.i), 6, "行"),
+          eq(S.offsetInActive(), 0, "列"),
+        ]);
+      })
+    ),
+    dom("E19", "编辑", "Home / End 移到当前行首尾", () =>
+      withJournal((S) => {
+        S.activateLine(10, 3);
+        press("End");
+        const end = S.offsetInActive();
+        press("Home");
+        const home = S.offsetInActive();
+        return all([eq(end, 35, "End"), eq(home, 0, "Home")]);
+      })
+    ),
+    dom("E20", "编辑", "当前行被浏览器插入 <div> 时按行拆开，不粘成一行", () =>
+      withJournal((S) => {
+        S.activateLine(10, 0);
+        const el = document.querySelector("#doc .line.active");
+        el.innerHTML = "abc<div>def</div>";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        const lines = S.Model.lines(S.getState().journals.find((j) => j.date === "2026-11-23").body);
+        return all([eq(lines[10], "abc", "第 1 行"), eq(lines[11], "def", "第 2 行")]);
       })
     )
   );

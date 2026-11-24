@@ -205,8 +205,11 @@ function inlineHTMLSafe(text) {
 /** 一行渲染成 HTML（非编辑态）。 */
 function renderLineHTML(d) {
   switch (d.kind) {
-    case "fence":
-      return `<div class="line code" data-i="${d.i}">${esc(d.raw) || '<span class="zws"></span>'}</div>`;
+    case "fence": {
+      // 围栏行本身淡一点：代码块看着像一块，但标记仍可见、可点进去改
+      const isMark = /^\s*```/.test(d.raw);
+      return `<div class="line code${isMark ? " fence-mark" : ""}" data-i="${d.i}">${esc(d.raw) || '<span class="zws"></span>'}</div>`;
+    }
     case "heading":
       return `<div class="line h${d.level}" data-i="${d.i}">${inlineHTML(d.text) || '<span class="zws"></span>'}</div>`;
     case "todo":
@@ -257,6 +260,12 @@ const Model = {
     const lines = Model.lines(body);
     lines.splice(i, 0, ...newLines);
     return { body: lines.join("\n"), line: i + newLines.length };
+  },
+
+  replaceLine(body, i, parts) {
+    const lines = Model.lines(body);
+    lines.splice(i, 1, ...parts);
+    return lines.join("\n");
   },
 
   setLine(body, i, text) {
@@ -657,8 +666,25 @@ function placeCaret(el, offset) {
 function syncActiveLine(j) {
   const el = activeLineEl();
   if (!el) return;
-  const text = el.textContent;
-  j.body = Model.setLine(j.body, Number(el.dataset.i), text);
+  const i = Number(el.dataset.i);
+  // 浏览器可能把关照里的换行（<div>/<br>）写进当前行，这里必须拆成多行，
+  // 否则一格正文里带 \n，行号会整体错位，后面的编辑就会越写越乱。
+  // 用 innerText：浏览器若把 <div>/<br> 塞进来，只有它会保留行边界；
+  // textContent 会把跨块内容直接粘成一行。
+  const rawText = typeof el.innerText === "string" ? el.innerText : el.textContent || "";
+  const text = String(rawText).replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  if (text.includes("\n")) {
+    const parts = text.split("\n");
+    j.body = Model.replaceLine(j.body, i, parts);
+    state.activeLine = i + parts.length - 1;
+    renderDocInto(j);
+    const next = activeLineEl();
+    if (next) placeCaret(next, parts[parts.length - 1].length);
+    refreshCounts();
+    save();
+    return;
+  }
+  j.body = Model.setLine(j.body, i, text);
 }
 
 function onDocInput(e) {
@@ -681,6 +707,23 @@ function onDocBeforeInput(e) {
   // 跨行选区：当前实现只允许单行编辑，这里显式拦掉并提示
   const sel = window.getSelection();
   if (sel && sel.rangeCount > 1) return;
+
+  if (e.inputType === "insertParagraph" || e.inputType === "insertLineBreak") {
+    e.preventDefault();
+    const el2 = activeLineEl();
+    if (!el2) return;
+    const i = Number(el2.dataset.i);
+    const offset = offsetInLine(el2);
+    syncActiveLine(j);
+    const res = Model.splitLine(j.body, i, offset);
+    j.body = dropEmptyHeadings(res.body);
+    state.activeLine = res.line;
+    renderDocInto(j);
+    const next = activeLineEl();
+    if (next) placeCaret(next, 0);
+    afterRender();
+    return;
+  }
 
   if (e.inputType === "deleteContentBackward") {
     if (offsetInLine(el) === 0 && Number(el.dataset.i) > 0) {
@@ -772,7 +815,17 @@ function onDocKeydown(e) {
     return;
   }
 
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Home / End（以及 ⌘←/→）自己接管：只有当前行可编辑，浏览器默认行为在这套结构里不可靠
+  const isHome = e.key === "Home" || (e.metaKey && e.key === "ArrowLeft");
+  const isEnd = e.key === "End" || (e.metaKey && e.key === "ArrowRight");
+  if (isHome || isEnd) {
+    e.preventDefault();
+    placeCaret(el, isHome ? 0 : (el.textContent || "").length);
+    updateCaretInfo();
+    return;
+  }
+
+  if (e.key === "Enter") {
     e.preventDefault();
     if (composing) return;
     const offset = offsetInLine(el);

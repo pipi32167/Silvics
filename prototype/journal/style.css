@@ -444,3 +444,8 @@ kbd {
 .manual li { margin-bottom: 4px; }
 #test-summary.pass { color: var(--ok); }
 #test-summary.fail { color: #b3261e; }
+
+/* 代码块的围栏行：淡显，代码行保持可读 */
+.doc .line.code { border-radius: 0; }
+.doc .line.code:first-of-type { border-radius: 3px 3px 0 0; }
+.doc .line.fence-mark { opacity: .45; }
