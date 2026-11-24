@@ -23,6 +23,23 @@ enum DebugCapture {
     /// 启动时按环境变量打开面板。
     @MainActor
     static func applyShowFlag(_ app: AppState) {
+        // SILVICS_APPEARANCE="body=18,code=14,spacing=7,family=serif"：取证时预置外观。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_APPEARANCE"] {
+            var settings = app.appearance
+            for pair in raw.split(separator: ",") {
+                let parts = pair.split(separator: "=").map(String.init)
+                guard parts.count == 2 else { continue }
+                switch parts[0] {
+                case "body": settings.bodySize = Double(parts[1]) ?? settings.bodySize
+                case "code": settings.codeSize = Double(parts[1]) ?? settings.codeSize
+                case "spacing": settings.lineSpacing = Double(parts[1]) ?? settings.lineSpacing
+                case "family": settings.fontFamily = AppearanceSettings.FontFamily(rawValue: parts[1]) ?? settings.fontFamily
+                default: break
+                }
+            }
+            app.updateAppearance(settings)
+        }
+
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
             app.select(match.id)
@@ -32,6 +49,10 @@ enum DebugCapture {
         case "mentions", "mentions-preview":
             app.refreshMentionGroups()
             app.isShowingMentionsSheet = true
+        case "settings":
+            SettingsWindowController.show(app: app, tab: .appearance)
+        case "settings-about":
+            SettingsWindowController.show(app: app, tab: .about)
         case "alias": app.isShowingAliasSheet = true
         case "rename": app.isShowingRenameSheet = true
         case "sync": app.isShowingSyncSheet = true

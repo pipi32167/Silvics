@@ -111,6 +111,7 @@ private struct EditorPane: View {
                     text: note.body,
                     resolvedKeys: app.resolvedKeys,
                     mentions: app.mentionDecorations(),
+                    appearance: app.appearance,
                     onChange: { text in app.bodyDidChange(text) },
                     completionProvider: { query, limit in app.completionItems(query: query, limit: limit) },
                     onCreateNote: { title in app.createIfNeeded(title: title) },

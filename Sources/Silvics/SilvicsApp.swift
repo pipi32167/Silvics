@@ -14,6 +14,12 @@ struct SilvicsApp: App {
         }
         .windowToolbarStyle(.unifiedCompact)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("设置…") {
+                    SettingsWindowController.show(app: app)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("新建笔记") {
                     app.isShowingNewNote = true

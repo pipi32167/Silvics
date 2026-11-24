@@ -1,18 +1,52 @@
 import AppKit
 
-/// 编辑区与侧栏的视觉常量。只用语义色，自动跟随系统深浅色。
+/// 编辑区与侧栏的视觉常量。
+///
+/// 语义色固定，自动跟随系统深浅色。字体与段落来自 `AppearanceSettings`：
+/// 先 `Theme.apply(settings)`，再取 `bodyFont` / `codeFont` / `headingFont(level:)`。
+/// 样式只在渲染期生效，不写进正文。
 enum Theme {
+
+    private(set) static var appearance = AppearanceSettings()
+
+    /// 应用外观设置。只在主线程调用。
+    static func apply(_ settings: AppearanceSettings) {
+        appearance = settings.clamped
+    }
 
     // MARK: - 字体
 
-    static let bodySize: CGFloat = 15
-    static let bodyFont = NSFont.systemFont(ofSize: bodySize)
-    static let codeFont = NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular)
+    static var bodySize: CGFloat { CGFloat(appearance.bodySize) }
+    static var bodyFont: NSFont { font(ofSize: bodySize, weight: .regular) }
+    static var codeFont: NSFont { monoFont(size: CGFloat(appearance.codeSize)) }
+
+    /// 正文字体族。`mono` 用于代码，正文与标题只取 system / serif。
+    static func font(ofSize size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: weight)
+        switch appearance.fontFamily {
+        case .system:
+            return base
+        case .mono:
+            return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+        case .serif:
+            guard let descriptor = base.fontDescriptor.withDesign(.serif),
+                  let serif = NSFont(descriptor: descriptor, size: size) else { return base }
+            return serif
+        }
+    }
+
+    static func monoFont(size: CGFloat) -> NSFont {
+        NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    static func headingSize(level: Int) -> CGFloat {
+        CGFloat(appearance.headingSize(level: level))
+    }
 
     static func headingFont(level: Int) -> NSFont {
-        let sizes: [CGFloat] = [26, 21, 18, 16.5, 15.5, 15]
-        let size = sizes[min(max(level, 1), 6) - 1]
-        return NSFont.systemFont(ofSize: size, weight: level <= 2 ? .bold : .semibold)
+        let size = headingSize(level: level)
+        let weight: NSFont.Weight = level <= 2 ? .bold : .semibold
+        return font(ofSize: size, weight: weight)
     }
 
     // MARK: - 颜色
@@ -60,7 +94,7 @@ enum Theme {
 
     static func bodyParagraph() -> NSParagraphStyle {
         let p = NSMutableParagraphStyle()
-        p.lineSpacing = 5
+        p.lineSpacing = CGFloat(appearance.lineSpacing)
         p.paragraphSpacing = 9
         p.lineBreakMode = .byWordWrapping
         return p

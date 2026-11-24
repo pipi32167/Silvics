@@ -131,6 +131,18 @@ Silvics/
 
 额外修掉：`completionItems` 与短查询搜索里 `LIKE` 未转义 `%` / `_` 的 bug。
 
+### 设置页（外观）
+
+| 验收项 | 状态 | 证据 |
+| --- | --- | --- |
+| 设置窗口（`⌘,`） | 完成 | `NSWindowController` + `NavigationSplitView`，外观 / 关于两页 |
+| 正文字号 / 代码字号 / 行距 | 完成 | 滑块即时生效，落 UserDefaults |
+| 字体族（无衬线 / 衬线 / 等宽） | 完成 | 编辑区与预览同步 |
+| 样式不进正文 | 完成 | `testBaseAttributesCarryCurrentFont` 等 13 + 5 项测试 |
+| 模型服务（BYOK） | 未做 | 见 issue #2 与 `docs/需求-设置页.md` |
+
+`Theme` 从静态常量改为 `Theme.apply(settings)` 驱动；`AppearanceSettings` 存 UserDefaults（key `silvics.appearance.settings`），与 `SyncSettings` 一致。
+
 ### P3
 
 | 验收项 | 状态 | 证据 |

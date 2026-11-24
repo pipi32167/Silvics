@@ -17,6 +17,8 @@ final class AppState: ObservableObject {
     @Published var searchQuery: String = ""
     /// 侧栏当前范围：全部 / 孤儿 / 某个标签。
     @Published var sidebarScope: SidebarScope = .all
+    /// 外观设置。改动即时生效并落 UserDefaults。
+    @Published private(set) var appearance: AppearanceSettings = .init()
     /// 全部标签与使用次数。
     @Published private(set) var tags: [TagCount] = []
     @Published var isShowingQuickOpen: Bool = false
@@ -69,6 +71,8 @@ final class AppState: ObservableObject {
             self.repo = GRDBNoteRepository(db: db)
             self.statusMessage = "磁盘数据库打开失败，已改用临时内存库：\(error.localizedDescription)"
         }
+        appearance = AppearanceSettings.load()
+        Theme.apply(appearance)
         loadAll(selectFirst: true)
     }
 
@@ -297,6 +301,20 @@ final class AppState: ObservableObject {
         if let created = summaries.first(where: { TextNormalizer.key($0.title) == key }) {
             select(created.id)
         }
+    }
+
+    // MARK: - 外观
+
+    /// 应用新的外观设置：先夹取，再套用，最后落 UserDefaults。
+    func updateAppearance(_ settings: AppearanceSettings) {
+        let clamped = settings.clamped
+        appearance = clamped
+        Theme.apply(clamped)
+        clamped.save()
+    }
+
+    func resetAppearance() {
+        updateAppearance(AppearanceSettings())
     }
 
     func rebuildIndexes() {
