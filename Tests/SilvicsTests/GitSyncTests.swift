@@ -224,4 +224,172 @@ final class GitSyncTests: XCTestCase {
         XCTAssertEqual(try a.repo.summaries().count, 3)
         XCTAssertEqual(try b.repo.summaries().count, 3)
     }
+
+    // MARK: - P0-2 远端 frontmatter 改动必须拉进来
+
+    func testRemoteJournalMetaChangeArrivesWithoutBodyChange() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote)
+        var note = try a.repo.create(title: "2026-11-24")
+        note.type = NoteTypes.journalID
+        note.setMetaFields(["date": "2026-11-24", "carryFrom": "2026-11-23"])
+        note.body = "今天的日记。"
+        _ = try a.repo.save(note)
+        _ = try a.sync.sync()
+
+        let b = try makeDevice("device-b", remote: remote)
+        _ = try b.sync.sync()
+        XCTAssertEqual(try b.repo.note(id: note.id)?.metaFields["carryFrom"], "2026-11-23")
+
+        // A 只改 `journal.carryFrom`，正文一个字节没动
+        var changed = try a.repo.note(id: note.id)!
+        changed.setMetaFields(["date": "2026-11-24", "carryFrom": "2026-11-20"])
+        _ = try a.repo.save(changed)
+        _ = try a.sync.sync()
+
+        let reportB = try b.sync.sync()
+        XCTAssertEqual(
+            try b.repo.note(id: note.id)?.metaFields["carryFrom"],
+            "2026-11-20",
+            "远端只改 frontmatter 也要拉进来；\(reportB.summary)"
+        )
+        XCTAssertTrue(reportB.conflicts.isEmpty, reportB.conflicts.joined(separator: " / "))
+        XCTAssertEqual(try b.repo.note(id: note.id)?.body, "今天的日记。")
+    }
+
+    func testUnknownExtraKeyFromOneSideIsMerged() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote)
+        let note = try a.repo.create(title: "未知键要能合过来")
+        var seeded = note
+        seeded.body = "正文不动。"
+        _ = try a.repo.save(seeded)
+        _ = try a.sync.sync()
+
+        let b = try makeDevice("device-b", remote: remote)
+        _ = try b.sync.sync()
+
+        // A 只新增未知键
+        var fromA = try a.repo.note(id: note.id)!
+        var extraA = fromA.frontmatterExtra
+        extraA.scalars["futureScalar"] = "远端写的"
+        extraA.lists["futureList"] = ["一", "二"]
+        extraA.sections["futureSection"] = ["alpha": "1"]
+        fromA.setFrontmatterExtra(extraA)
+        _ = try a.repo.save(fromA)
+        _ = try a.sync.sync()
+
+        _ = try b.sync.sync()
+        let mergedB = try b.repo.note(id: note.id)!.frontmatterExtra
+        XCTAssertEqual(mergedB.scalars["futureScalar"], "远端写的")
+        XCTAssertEqual(mergedB.lists["futureList"], ["一", "二"])
+        XCTAssertEqual(mergedB.sections["futureSection"], ["alpha": "1"])
+
+        // B 再加一个不同的键，也要能回到 A
+        var fromB = try b.repo.note(id: note.id)!
+        var extraB = fromB.frontmatterExtra
+        extraB.scalars["bOnly"] = "本机写的"
+        fromB.setFrontmatterExtra(extraB)
+        _ = try b.repo.save(fromB)
+        _ = try b.sync.sync()
+        _ = try a.sync.sync()
+
+        let mergedA = try a.repo.note(id: note.id)!.frontmatterExtra
+        XCTAssertEqual(mergedA.scalars["bOnly"], "本机写的")
+        XCTAssertEqual(mergedA.scalars["futureScalar"], "远端写的")
+    }
+
+    func testConflictingMetaValuesAreArchived() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote)
+        var note = try a.repo.create(title: "2026-11-25")
+        note.type = NoteTypes.journalID
+        note.setMetaFields(["date": "2026-11-25", "carryFrom": "2026-11-24"])
+        _ = try a.repo.save(note)
+        _ = try a.sync.sync()
+
+        let b = try makeDevice("device-b", remote: remote)
+        _ = try b.sync.sync()
+
+        var fromA = try a.repo.note(id: note.id)!
+        fromA.setMetaFields(["date": "2026-11-25", "carryFrom": "2026-11-20"])
+        _ = try a.repo.save(fromA)
+        _ = try a.sync.sync()
+
+        var fromB = try b.repo.note(id: note.id)!
+        fromB.setMetaFields(["date": "2026-11-25", "carryFrom": "2026-11-22"])
+        _ = try b.repo.save(fromB)
+        let reportB = try b.sync.sync()
+
+        XCTAssertTrue(
+            reportB.conflicts.contains { $0.contains("carryFrom") },
+            reportB.conflicts.joined(separator: " / ")
+        )
+        XCTAssertEqual(
+            try b.repo.note(id: note.id)?.metaFields["carryFrom"],
+            "2026-11-22",
+            "两边都改同一个键时保留本机值"
+        )
+
+        let archived = (try? FileManager.default.contentsOfDirectory(atPath: b.sync.conflictsURL.path)) ?? []
+        XCTAssertEqual(archived.count, 2, "远端与本机两份原文都要留档")
+        let texts = try archived.map {
+            try String(contentsOf: b.sync.conflictsURL.appendingPathComponent($0), encoding: .utf8)
+        }
+        XCTAssertTrue(texts.contains { $0.contains("carryFrom: 2026-11-20") }, "远端值必须留档")
+        XCTAssertTrue(texts.contains { $0.contains("carryFrom: 2026-11-22") })
+    }
+
+    func testConflictingTypeIsNotAutoSelected() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote)
+        let note = try a.repo.create(title: "类型冲突不自动选")
+        var seeded = note
+        seeded.body = "同一段正文。"
+        _ = try a.repo.save(seeded)
+        _ = try a.sync.sync()
+
+        let b = try makeDevice("device-b", remote: remote)
+        _ = try b.sync.sync()
+
+        var fromA = try a.repo.note(id: note.id)!
+        fromA.type = NoteTypes.journalID
+        fromA.setMetaFields(["date": "2026-11-26"])
+        _ = try a.repo.save(fromA)
+        _ = try a.sync.sync()
+
+        let reportB = try b.sync.sync()
+        XCTAssertTrue(
+            reportB.conflicts.contains { $0.contains("type") },
+            reportB.conflicts.joined(separator: " / ")
+        )
+        XCTAssertEqual(
+            try b.repo.note(id: note.id)?.type,
+            NoteTypes.noteID,
+            "type 两边不同不能自动选"
+        )
+        let archived = (try? FileManager.default.contentsOfDirectory(atPath: b.sync.conflictsURL.path)) ?? []
+        XCTAssertEqual(archived.count, 2, "两份原文都要留档")
+    }
+
+    func testRemoteTitleChangeArrivesWhenLocalUnchanged() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote)
+        let note = try a.repo.create(title: "标题会改也要同步")
+        var seeded = note
+        seeded.body = "正文不动。"
+        _ = try a.repo.save(seeded)
+        _ = try a.sync.sync()
+
+        let b = try makeDevice("device-b", remote: remote)
+        _ = try b.sync.sync()
+
+        var fromA = try a.repo.note(id: note.id)!
+        fromA.title = "标题在远端改过了"
+        _ = try a.repo.save(fromA)
+        _ = try a.sync.sync()
+
+        _ = try b.sync.sync()
+        XCTAssertEqual(try b.repo.note(id: note.id)?.title, "标题在远端改过了")
+    }
 }

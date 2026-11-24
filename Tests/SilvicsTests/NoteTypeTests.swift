@@ -251,4 +251,178 @@ final class NoteTypeTests: XCTestCase {
         let exported = try String(contentsOf: dir.appendingPathComponent("notes/n9.md"), encoding: .utf8)
         XCTAssertTrue(exported.contains("futureScalar: 别丢我"), exported)
     }
+
+    // MARK: - P0-1 不是当前类型的段不能被吞掉
+
+    private func fileWithJournalSection(typeLine: String) -> String {
+        """
+        ---
+        schema: 1
+        id: n1
+        \(typeLine)title: 旧版本写的日记
+        status: seedling
+        created: 2026-11-20T00:00:00.000Z
+        updated: 2026-11-20T00:00:00.000Z
+        journal:
+          date: 2026-11-24
+          carryFrom: 2026-11-23
+        ---
+        正文
+        """
+    }
+
+    func testUnregisteredTypeKeepsJournalSection() throws {
+        let text = fileWithJournalSection(typeLine: "type: reading-note\n")
+        let decoded = try VaultFormat.decode(text)
+        XCTAssertEqual(decoded.type, "reading-note")
+        XCTAssertTrue(decoded.meta.isEmpty, "未注册类型不该把 journal 段当 meta：\(decoded.meta)")
+        XCTAssertEqual(decoded.extra.sections["journal"]?["date"], "2026-11-24", "\(decoded.extra)")
+        XCTAssertEqual(decoded.extra.sections["journal"]?["carryFrom"], "2026-11-23")
+
+        let reencoded = VaultFormat.encode(decoded)
+        XCTAssertTrue(reencoded.contains("journal:\n  carryFrom: 2026-11-23\n  date: 2026-11-24"), reencoded)
+
+        let again = try VaultFormat.decode(reencoded)
+        XCTAssertEqual(again.type, "reading-note")
+        XCTAssertEqual(again.extra, decoded.extra, "段必须原样回来")
+    }
+
+    func testMissingTypeKeepsJournalSection() throws {
+        let text = fileWithJournalSection(typeLine: "")
+        let decoded = try VaultFormat.decode(text)
+        XCTAssertEqual(decoded.type, NoteTypes.noteID)
+        XCTAssertTrue(decoded.meta.isEmpty, "\(decoded.meta)")
+        XCTAssertEqual(decoded.extra.sections["journal"]?["date"], "2026-11-24", "\(decoded.extra)")
+
+        let again = try VaultFormat.decode(VaultFormat.encode(decoded))
+        XCTAssertEqual(again.extra.sections["journal"]?["carryFrom"], "2026-11-23", "\(again.extra)")
+    }
+
+    func testMetaWithoutNamespaceIsWrittenAsSection() throws {
+        // 未注册类型 + 库里已有 meta：没有 `journal:` 之类的命名空间可用，也不能丢。
+        var note = sample(type: "reading-note")
+        note.meta = ["date": "2026-11-24"]
+        let text = VaultFormat.encode(note)
+        XCTAssertTrue(text.contains("\nreading-note:\n  date: 2026-11-24"), text)
+
+        let decoded = try VaultFormat.decode(text)
+        XCTAssertEqual(decoded.type, "reading-note")
+        XCTAssertEqual(decoded.extra.sections["reading-note"]?["date"], "2026-11-24", "\(decoded.extra)")
+    }
+
+    // MARK: - P1-3 空段与空值字段
+    func testUnregisteredTypeSectionSurvivesVaultRoundTrip() throws {
+        let repo = GRDBNoteRepository(db: try AppDatabase.makeInMemory())
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("silvics-type-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("notes"), withIntermediateDirectories: true
+        )
+
+        var settings = SyncSettings()
+        settings.vaultPath = dir.path
+        let sync = VaultSync(repo: repo, settings: settings)
+        try fileWithJournalSection(typeLine: "type: reading-note\n")
+            .write(to: dir.appendingPathComponent("notes/n1.md"), atomically: true, encoding: .utf8)
+
+        _ = try sync.importAll()
+        XCTAssertEqual(try repo.note(id: "n1")?.type, "reading-note")
+        XCTAssertEqual(
+            try repo.note(id: "n1")?.frontmatterExtra.sections["journal"]?["date"],
+            "2026-11-24",
+            "未注册类型的 journal 段要进未知层，不能丢"
+        )
+
+        try sync.exportAll()
+        let exported = try String(contentsOf: dir.appendingPathComponent("notes/n1.md"), encoding: .utf8)
+        XCTAssertTrue(exported.contains("journal:\n  carryFrom: 2026-11-23\n  date: 2026-11-24"), exported)
+    }
+
+
+    /// 未知层里出现过的键（scalars / lists / sections 三部分）。
+    private func frontmatterKeys(_ extra: VaultFormat.FrontmatterExtra) -> Set<String> {
+        Set(extra.scalars.keys).union(extra.lists.keys).union(extra.sections.keys)
+    }
+
+    func testEmptySectionAndEmptyScalarSurviveRoundTrip() throws {
+        let text = """
+        ---
+        schema: 1
+        id: n1
+        title: 空值测试
+        status: seedling
+        created: 2026-11-20T00:00:00.000Z
+        updated: 2026-11-20T00:00:00.000Z
+        emptySection:
+        futureScalar:
+        ---
+        正文
+        """
+        let decoded = try VaultFormat.decode(text)
+        let keys = frontmatterKeys(decoded.extra)
+        XCTAssertTrue(keys.contains("emptySection"), "\(decoded.extra)")
+        XCTAssertTrue(keys.contains("futureScalar"), "\(decoded.extra)")
+
+        let reencoded = VaultFormat.encode(decoded)
+        XCTAssertTrue(reencoded.contains("\nemptySection:\n"), reencoded)
+        XCTAssertTrue(reencoded.contains("\nfutureScalar:\n"), reencoded)
+
+        let again = try VaultFormat.decode(reencoded)
+        XCTAssertEqual(frontmatterKeys(again.extra), keys, "键集合必须相等")
+        XCTAssertEqual(again.extra, decoded.extra)
+    }
+
+    // MARK: - P1-4 缩进宽度
+
+    func testFourSpaceIndentKeepsInnerKeyClean() throws {
+        let text = """
+        ---
+        schema: 1
+        id: n1
+        type: journal
+        title: 2026-11-24
+        status: seedling
+        created: 2026-11-24T00:00:00.000Z
+        updated: 2026-11-24T00:00:00.000Z
+        journal:
+            date: 2026-11-24
+        ---
+        正文
+        """
+        let decoded = try VaultFormat.decode(text)
+        XCTAssertEqual(decoded.meta["date"], "2026-11-24", "\(decoded.meta)")
+        XCTAssertNil(decoded.meta["  date"], "键名不能被缩进污染：\(decoded.meta)")
+    }
+
+    // MARK: - P1-5 深层嵌套整块保留
+
+    func testNestedSectionKeepsEveryRawLine() throws {
+        let text = """
+        ---
+        schema: 1
+        id: n1
+        title: 嵌套段
+        status: seedling
+        created: 2026-11-20T00:00:00.000Z
+        updated: 2026-11-20T00:00:00.000Z
+        clip:
+          url: x
+          tags:
+            - 一
+            - 二
+        ---
+        正文
+        """
+        let decoded = try VaultFormat.decode(text)
+        XCTAssertNil(decoded.extra.sections["clip"], "解析不了的段不能压成半截字典：\(decoded.extra)")
+        XCTAssertEqual(decoded.extra.rawSections["clip"]?.count, 4, "\(decoded.extra)")
+
+        let reencoded = VaultFormat.encode(decoded)
+        XCTAssertTrue(reencoded.contains("    - 一"), reencoded)
+        XCTAssertTrue(reencoded.contains("    - 二"), reencoded)
+
+        let again = try VaultFormat.decode(reencoded)
+        XCTAssertEqual(again.extra.rawSections["clip"], decoded.extra.rawSections["clip"])
+    }
 }

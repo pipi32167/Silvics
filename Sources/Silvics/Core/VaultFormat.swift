@@ -54,9 +54,26 @@ enum VaultFormat {
     struct FrontmatterExtra: Equatable, Codable {
         var scalars: [String: String] = [:]
         var lists: [String: [String]] = [:]
+        /// 能解析的段：`key:` 下面全是 `子键: 值` 或 `- 列表项`（空段存空字典）。
         var sections: [String: [String: String]] = [:]
+        /// 解析不了的段（深层嵌套、混排）。整段按原始行保留，写回时原样输出。
+        /// 宁可原样留着，也不能把它压成半截字典再把列表项丢掉。
+        var rawSections: [String: [String]] = [:]
 
-        var isEmpty: Bool { scalars.isEmpty && lists.isEmpty && sections.isEmpty }
+        init() {}
+
+        /// 手写解码：旧版本存进库的 JSON 没有 `rawSections` 键，缺字段要当空，不能解码失败。
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            scalars = try c.decodeIfPresent([String: String].self, forKey: .scalars) ?? [:]
+            lists = try c.decodeIfPresent([String: [String]].self, forKey: .lists) ?? [:]
+            sections = try c.decodeIfPresent([String: [String: String]].self, forKey: .sections) ?? [:]
+            rawSections = try c.decodeIfPresent([String: [String]].self, forKey: .rawSections) ?? [:]
+        }
+
+        var isEmpty: Bool {
+            scalars.isEmpty && lists.isEmpty && sections.isEmpty && rawSections.isEmpty
+        }
     }
 
     enum ParseError: Error, LocalizedError {
@@ -101,13 +118,21 @@ enum VaultFormat {
         appendList(&lines, key: "aliases", values: note.aliases.sorted())
         appendList(&lines, key: "dismissed", values: note.dismissed.sorted())
 
-        // 类型层
-        let descriptor = NoteTypes.descriptor(for: note.type)
-        if let namespace = descriptor.metaNamespace, !note.meta.isEmpty {
-            lines.append("\(namespace):")
-            for key in note.meta.keys.sorted() {
-                lines.append("  \(key): \(scalar(note.meta[key] ?? ""))")
-            }
+        // 类型层。当前类型没有命名空间（未注册类型、或就是 note）时，
+        // 类型段字段并进未知段写出 —— 宁可写成普通段，也不能凭空丢掉。
+        var sectionOut = note.extra.sections
+        if !note.meta.isEmpty {
+            let namespace = NoteTypes.descriptor(for: note.type).metaNamespace
+                ?? (note.type.isEmpty ? NoteTypes.noteID : note.type)
+            var merged = sectionOut[namespace] ?? [:]
+            for (key, value) in note.meta { merged[key] = value }
+            sectionOut[namespace] = merged
+        }
+
+        // 解析不了的段：整段原文写回（同名的可解析段优先，避免重复键）
+        var rawSectionOut: [String: [String]] = [:]
+        for key in note.extra.rawSections.keys.sorted() where sectionOut[key] == nil {
+            rawSectionOut[key] = note.extra.rawSections[key] ?? []
         }
 
         // 未知层：原样保留
@@ -117,11 +142,15 @@ enum VaultFormat {
         for key in note.extra.lists.keys.sorted() {
             appendList(&lines, key: key, values: note.extra.lists[key] ?? [])
         }
-        for key in note.extra.sections.keys.sorted() {
+        for key in sectionOut.keys.sorted() {
             lines.append("\(key):")
-            for inner in (note.extra.sections[key] ?? [:]).keys.sorted() {
-                lines.append("  \(inner): \(scalar(note.extra.sections[key]?[inner] ?? ""))")
+            for inner in (sectionOut[key] ?? [:]).keys.sorted() {
+                lines.append("  \(inner): \(scalar(sectionOut[key]?[inner] ?? ""))")
             }
+        }
+        for key in rawSectionOut.keys.sorted() {
+            lines.append("\(key):")
+            lines.append(contentsOf: rawSectionOut[key] ?? [])
         }
 
         lines.append("---")
@@ -180,41 +209,65 @@ enum VaultFormat {
         var scalars: [String: String] = [:]
         var lists: [String: [String]] = [:]
         var sections: [String: [String: String]] = [:]
+        var rawSections: [String: [String]] = [:]
 
         var i = 1
         while i < end {
             let line = lines[i]
-            defer { i += 1 }
-            guard !line.hasPrefix(" "), !line.isEmpty else { continue }
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            let key = String(line[line.startIndex..<colon])
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else {
+                i += 1
+                continue
+            }
+            // 顶层键必须顶格。缩进行只可能出现在上一轮已经吃掉的块里。
+            guard line.first?.isWhitespace != true else {
+                i += 1
+                continue
+            }
+            guard let colon = line.firstIndex(of: ":") else {
+                i += 1
+                continue
+            }
+            let key = String(line[line.startIndex..<colon]).trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else {
+                i += 1
+                continue
+            }
             let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
             if !value.isEmpty {
                 scalars[key] = unscalar(value)
+                i += 1
                 continue
             }
-            // 空值：后面缩进的行是列表项或子键
-            var items: [String] = []
-            var pairs: [String: String] = [:]
+
+            // 空值：后面缩进的行是这个键的块。缩进宽度不要求恰好 2 空格。
+            var block: [String] = []
             var j = i + 1
-            while j < end, lines[j].hasPrefix("  ") {
-                let child = String(lines[j].dropFirst(2))
-                if child.hasPrefix("- ") {
-                    items.append(unscalar(String(child.dropFirst(2))))
-                } else if let innerColon = child.firstIndex(of: ":") {
-                    let innerKey = String(child[child.startIndex..<innerColon])
-                    let innerValue = String(child[child.index(after: innerColon)...])
-                        .trimmingCharacters(in: .whitespaces)
-                    pairs[innerKey] = unscalar(innerValue)
+            while j < end {
+                let next = lines[j]
+                if next.trimmingCharacters(in: .whitespaces).isEmpty || next.first?.isWhitespace == true {
+                    block.append(next)
+                    j += 1
+                } else {
+                    break
                 }
-                j += 1
             }
-            if !items.isEmpty || pairs.isEmpty {
+            // 块尾的空行只是分隔，丢掉；块中间的空行留着（原样进 raw）。
+            while let last = block.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+                block.removeLast()
+            }
+            i = j
+
+            let parsed = parseBlock(block)
+            switch parsed {
+            case .empty:
+                sections[key] = [:]
+            case .list(let items):
                 lists[key] = items
-            } else {
+            case .pairs(let pairs):
                 sections[key] = pairs
+            case .raw:
+                rawSections[key] = block
             }
-            i = j - 1
         }
 
         guard let id = scalars["id"] else { throw ParseError.missingField("id") }
@@ -236,8 +289,14 @@ enum VaultFormat {
         for key in lists.keys where !knownListKeys.contains(key) {
             extra.lists[key] = lists[key]
         }
-        for key in sections.keys where !knownSectionKeys.contains(key) {
+        // 除当前类型的命名空间之外，**所有**段都按未知保留。
+        // 不再维护「已注册 namespace」白名单：版本不同的两台机器会互相删数据。
+        let consumed = knownScalarKeys.union(knownListKeys)
+        for key in sections.keys where !consumed.contains(key) {
             extra.sections[key] = sections[key]
+        }
+        for key in rawSections.keys where !consumed.contains(key) {
+            extra.rawSections[key] = rawSections[key]
         }
 
         let body = lines[(end + 1)...].joined(separator: "\n")
@@ -259,9 +318,66 @@ enum VaultFormat {
     /// 本版本认识的键。不在表里的键一律按未知原样保留。
     private static let knownScalarKeys: Set<String> = ["schema", "id", "type", "title", "status", "created", "updated"]
     private static let knownListKeys: Set<String> = ["aliases", "dismissed"]
-    /// 所有已注册类型的命名空间都算已知，避免把类型段当成未知段再写一遍
-    private static var knownSectionKeys: Set<String> {
-        Set(NoteTypes.all.values.compactMap(\.metaNamespace))
+
+    /// 一个空值键下面的块解析结果。
+    private enum Block {
+        case empty
+        case list([String])
+        case pairs([String: String])
+        /// 解析不了（深层嵌套、列表与键值混排）。整块原文保留。
+        case raw
+    }
+
+    /// 解析 `key:` 下面的块。缩进宽度取块内最小缩进，不假设恰好 2 空格。
+    private static func parseBlock(_ block: [String]) -> Block {
+        guard !block.isEmpty else { return .empty }
+        let base = block
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map(indentWidth)
+            .min() ?? 0
+
+        var items: [String] = []
+        var pairs: [String: String] = [:]
+        var unparseable = false
+
+        for raw in block {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            // 块中间的空行：不认识它的含义，按原文留着。
+            guard !trimmed.isEmpty else {
+                unparseable = true
+                continue
+            }
+            guard indentWidth(raw) <= base else {
+                unparseable = true
+                continue
+            }
+            if trimmed.hasPrefix("- ") {
+                items.append(unscalar(String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)))
+                continue
+            }
+            guard let innerColon = trimmed.firstIndex(of: ":") else {
+                unparseable = true
+                continue
+            }
+            let innerKey = String(trimmed[trimmed.startIndex..<innerColon])
+                .trimmingCharacters(in: .whitespaces)
+            guard !innerKey.isEmpty else {
+                unparseable = true
+                continue
+            }
+            let innerValue = String(trimmed[trimmed.index(after: innerColon)...])
+                .trimmingCharacters(in: .whitespaces)
+            pairs[innerKey] = unscalar(innerValue)
+        }
+
+        if unparseable { return .raw }
+        if !items.isEmpty && !pairs.isEmpty { return .raw }
+        if !items.isEmpty { return .list(items) }
+        return .pairs(pairs)
+    }
+
+    private static func indentWidth(_ line: String) -> Int {
+        line.prefix { $0 == " " || $0 == "\t" }.count
     }
 
     private static func unscalar(_ raw: String) -> String {
