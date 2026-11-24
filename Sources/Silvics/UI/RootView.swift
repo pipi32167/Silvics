@@ -35,6 +35,10 @@ struct RootView: View {
             SyncSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingConflicts) {
+            ConflictSheet()
+                .environmentObject(app)
+        }
         .sheet(isPresented: $app.isShowingQuickOpen) {
             QuickOpenSheet()
                 .environmentObject(app)
@@ -50,6 +54,8 @@ struct RootView: View {
             }
             DebugCapture.applyShowFlag(app)
             DebugCapture.runSelfTest(app)
+            DebugCapture.runConflictDrill(app)
+            DebugCapture.seedConflictDemo(app)
             DebugCapture.schedule()
             #endif
         }

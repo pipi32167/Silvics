@@ -209,6 +209,147 @@ enum DebugCapture {
         }
     }
 
+    /// 仅用于取证：`SILVICS_CONFLICT_DEMO=1` 塞一组冲突并打开冲突面板，
+    /// 值为 `merge` 时再自动跑一次 LLM 合并，便于截图「合并结果 + diff」。
+    @MainActor
+    static func seedConflictDemo(_ app: AppState) {
+        guard let mode = ProcessInfo.processInfo.environment["SILVICS_CONFLICT_DEMO"] else { return }
+        let base = """
+        第一段：写作工具的核心指标是每次开口的摩擦。
+        第二段：间隔重复优于集中突击。
+        第三段：结论先写下来，再补理由。
+        """
+        let ours = base.replacingOccurrences(of: "第二段：间隔重复优于集中突击。",
+                                             with: "第二段：间隔重复优于集中突击，但每天只能练 20 分钟。")
+        let theirs = base.replacingOccurrences(of: "第二段：间隔重复优于集中突击。",
+                                               with: "第二段：间隔重复优于集中突击，前提是总时长相同。")
+        app.refreshProviders()
+        if app.providerSettings.providers.isEmpty, let preset = ProviderPresets.named("magpie（本地）") {
+            let config = preset.config()
+            _ = app.saveProvider(config, secret: nil)
+            app.bindProvider(.chat, to: config.id)
+        }
+        app.debugSetConflicts([
+            VaultConflict(noteId: "demo-1", title: "间隔重复优于集中突击", base: base, ours: ours, theirs: theirs)
+        ])
+        app.isShowingConflicts = true
+
+        guard mode == "merge" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            let conflict = VaultConflict(noteId: "demo-1", title: "间隔重复优于集中突击",
+                                         base: base, ours: ours, theirs: theirs)
+            Task {
+                if case .success = await app.resolveConflictWithLLM(conflict) {
+                    print("[Silvics] conflict demo merged")
+                }
+            }
+        }
+    }
+
+    /// 仅用于取证：模拟两台设备改同一个笔记文件造成冲突，再用 magpie 的对话模型合并。
+    ///
+    /// `SILVICS_CONFLICT_DRILL=1`。流程：建裸仓 → 两个 clone → 同样两行改成不同内容 →
+    /// 一个 push、另一个 fetch → 用 `LineMerge` 复现冲突 → 交给 `ConflictResolver`。
+    @MainActor
+    static func runConflictDrill(_ app: AppState) {
+        guard ProcessInfo.processInfo.environment["SILVICS_CONFLICT_DRILL"] == "1" else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("silvics-drill")
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            var logText = ""
+            func log(_ line: String) {
+                logText += line + "\n"
+                print(line)
+            }
+            func flushLog() {
+                try? logText.write(to: root.appendingPathComponent("drill.log"), atomically: true, encoding: .utf8)
+            }
+
+            func git(_ cwd: URL, _ args: [String]) -> String {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                p.arguments = args
+                p.currentDirectoryURL = cwd
+                let pipe = Pipe()
+                p.standardOutput = pipe
+                p.standardError = pipe
+                try? p.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return String(decoding: data, as: UTF8.self)
+            }
+
+            let bare = root.appendingPathComponent("remote.git")
+            _ = git(root, ["init", "--bare", "-q", bare.path])
+
+            let base = """
+            第一段：这是共同基线。
+            第二段：间隔重复优于集中突击。
+            第三段：结尾。
+            """
+
+            let deviceA = root.appendingPathComponent("deviceA")
+            _ = git(root, ["clone", "-q", bare.path, deviceA.path])
+            _ = git(deviceA, ["config", "user.email", "a@local"])
+            _ = git(deviceA, ["config", "user.name", "A"])
+            _ = git(deviceA, ["checkout", "-q", "-b", "main"])
+            let noteFile = deviceA.appendingPathComponent("notes/n1.md")
+            try? FileManager.default.createDirectory(at: noteFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? base.write(to: noteFile, atomically: true, encoding: .utf8)
+            _ = git(deviceA, ["add", "-A"])
+            _ = git(deviceA, ["commit", "-q", "-m", "base"])
+            _ = git(deviceA, ["push", "-q", "origin", "main"])
+
+            let deviceB = root.appendingPathComponent("deviceB")
+            _ = git(root, ["clone", "-q", "-b", "main", bare.path, deviceB.path])
+            _ = git(deviceB, ["config", "user.email", "b@local"])
+            _ = git(deviceB, ["config", "user.name", "B"])
+
+            // A 改第二段
+            let oursA = base.replacingOccurrences(of: "第二段：间隔重复优于集中突击。",
+                                                  with: "第二段：间隔重复优于集中突击，但每天只能练 20 分钟。")
+            try? oursA.write(to: noteFile, atomically: true, encoding: .utf8)
+            _ = git(deviceA, ["commit", "-q", "-am", "A 改"])
+            _ = git(deviceA, ["push", "-q"])
+
+            // B 改同一段，内容不同
+            let theirsB = base.replacingOccurrences(of: "第二段：间隔重复优于集中突击。",
+                                                    with: "第二段：间隔重复优于集中突击，前提是总时长相同。")
+            let noteFileB = deviceB.appendingPathComponent("notes/n1.md")
+            try? theirsB.write(to: noteFileB, atomically: true, encoding: .utf8)
+            _ = git(deviceB, ["commit", "-q", "-am", "B 改"])
+            _ = git(deviceB, ["fetch", "-q"])
+
+            let conflictOurs = theirsB
+            let conflictTheirs = oursA
+            let merge = LineMerge.merge(base: base, ours: conflictOurs, theirs: conflictTheirs)
+            log("[drill] 两台设备改了同一段")
+            log("[drill] LineMerge 干净合并: \(merge?.isClean ?? false) 冲突数: \(merge?.conflictCount ?? -1)")
+
+            let conflict = VaultConflict(noteId: "n1", title: "设备 A / B 同改一段",
+                                         base: base, ours: conflictOurs, theirs: conflictTheirs)
+            let provider = ProviderPresets.named("magpie（本地）")!.config()
+
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                let started = CFAbsoluteTimeGetCurrent()
+                let result = await ConflictResolver.resolve(conflict, provider: provider, key: "")
+                let ms = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
+                switch result {
+                case .success(let text):
+                    log("[drill] LLM 合并成功 (\(ms) ms)：")
+                    log(text)
+                case .failure(let error):
+                    log("[drill] LLM 合并失败 (\(ms) ms)：\(error.message)")
+                }
+                semaphore.signal()
+            }
+            semaphore.wait()
+            flushLog()
+        }
+    }
+
     /// 仅用于取证：加一个假的 OpenAI 配置，验证 Keychain 写入与「已配置密钥」状态。
     @MainActor
     static func seedDemoProvider(_ app: AppState) {

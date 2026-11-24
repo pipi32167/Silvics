@@ -14,6 +14,10 @@ struct ProvidersSettingsPane: View {
     @State private var isTesting = false
     @State private var testRole: ProviderRole = .chat
     @State private var isConfirmingReset = false
+    @State private var models: [ProviderModel] = []
+    @State private var modelFilter = ""
+    @State private var isLoadingModels = false
+    @State private var modelsError: String?
 
     private var providers: [ProviderConfig] { app.providerSettings.providers }
 
@@ -217,16 +221,54 @@ struct ProvidersSettingsPane: View {
                         .multilineTextAlignment(.trailing)
                 }
 
+                HStack(spacing: 8) {
+                    Button("拉取模型列表") { loadModels(for: draftBinding.wrappedValue) }
+                        .controlSize(.small)
+                        .disabled(isLoadingModels)
+                    if isLoadingModels { ProgressView().controlSize(.small) }
+                    if !models.isEmpty {
+                        Text("\(models.count) 个模型")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                if let modelsError {
+                    Label(modelsError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                if !models.isEmpty {
+                    TextField("筛选模型", text: $modelFilter)
+                        .font(.system(size: 12))
+
+                    Picker("从列表选择对话模型", selection: draftBinding.chatModel) {
+                        ForEach(filteredModels) { model in
+                            Text(model.label == model.id ? model.id : "\(model.label) — \(model.id)")
+                                .tag(model.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
                 TextField("对话模型名", text: draftBinding.chatModel)
                 TextField("向量模型名（可留空）", text: draftBinding.embeddingModel)
                     .disabled(draftBinding.wrappedValue.kind == .anthropic)
 
-                SecureField(
-                    app.hasKey(for: draftBinding.wrappedValue.id)
-                        ? "密钥已保存（重新输入可覆盖）"
-                        : "API Key",
-                    text: $secretInput
-                )
+                if draftBinding.wrappedValue.requiresKey {
+                    SecureField(
+                        app.hasKey(for: draftBinding.wrappedValue.id)
+                            ? "密钥已保存（重新输入可覆盖）"
+                            : "API Key",
+                        text: $secretInput
+                    )
+                } else {
+                    Label("本地服务，不需要密钥", systemImage: "lock.open")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Toggle("启用", isOn: draftBinding.enabled)
 
@@ -317,6 +359,39 @@ struct ProvidersSettingsPane: View {
         }
     }
 
+    private var filteredModels: [ProviderModel] {
+        let key = modelFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return models }
+        return models.filter {
+            $0.id.lowercased().contains(key) || $0.label.lowercased().contains(key)
+        }
+    }
+
+    private func loadModels(for config: ProviderConfig) {
+        guard let base = config.normalizedBaseURL else {
+            modelsError = "先把服务地址填对"
+            return
+        }
+        isLoadingModels = true
+        modelsError = nil
+        let key = app.providerService.secret(for: config.id) ?? ""
+        Task {
+            let result = await ProviderModels.fetch(baseURL: base, key: key)
+            await MainActor.run {
+                isLoadingModels = false
+                switch result {
+                case .success(let list):
+                    models = list
+                    modelFilter = ""
+                    if list.count == 1 { draft?.chatModel = list[0].id }
+                case .failure(let failure):
+                    models = []
+                    modelsError = failure.text
+                }
+            }
+        }
+    }
+
     // MARK: - 动作
 
     private func select(_ provider: ProviderConfig) {
@@ -326,6 +401,9 @@ struct ProvidersSettingsPane: View {
         errors = []
         testResult = nil
         notice = nil
+        models = []
+        modelFilter = ""
+        modelsError = nil
     }
 
     private func add(_ preset: ProviderPreset) {

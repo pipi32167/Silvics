@@ -85,7 +85,7 @@ scripts/release.sh --check-upload    # 验证上传通道
 
 ## 测试
 
-`Tests/SilvicsTests/`，XCTest，共 156 项（P1–P3、备份与同步、设置页）。
+`Tests/SilvicsTests/`，XCTest，共 178 项（P1–P3、备份与同步、设置页、冲突合并）。
 
 `EditorKit/` 与 `Core/` 不得导入 SwiftUI 或 AppKit 的 UI 部分。改这两个目录时先补失败测试再改实现。
 
@@ -115,6 +115,8 @@ scripts/release.sh --check-upload    # 验证上传通道
 - L3（概念抽取）与 L4（语义近邻）的建议永不改写用户正文。
 - 模型服务的密钥只进 Keychain（`service=com.silvics.app.provider`，`account=provider-<uuid>`）。UserDefaults 与导出 JSON 里只有 `keyAccount` 引用，任何日志不得写明文。
 - 单测不得碰真钥匙串：用 `InMemorySecretStore`。
+- 本地服务（magpie / Ollama）靠 `ProviderConfig.requiresKey=false` 免密钥；不要靠填假 key 绕过。
+- 冲突合并的模型输出必须先过 `ConflictResolver.clean` 与 `validate`：去分隔标记、拒冲突标记、拒异常长。
 - **vault 导出只写不删。** 库空了不能连带清空 vault（备份会一起没）。删除笔记走 `VaultSync.removeFromVault(id:)`。
 - **绝不让 git 做合并。** `git merge` 会把冲突标记写进正文。合并走 `LineMerge`，git 只收已解决干净的提交。
 - **判断 git 成败只看退出码。** `git remote get-url` 失败时也会往 stdout 写 `error: ...`，拿输出判空会误判。
@@ -146,6 +148,8 @@ open .build/Build/Products/Debug/Silvics.app \
 
 - 多个可见窗口时输出 `out-0.png`、`out-1.png`。
 - `SILVICS_SELFTEST=convert` 合成一次 `⌘⇧K`，走真实 `keyDown` → `shouldChangeText` 链路。
+
+冲突演练：`scripts/conflict-drill.sh`（两台设备改同一段 → diff3 冲突 → magpie 合并，打印耗时与结果）。
 
 真截屏：`screencapture -x -o -l<windowID> out.png`（窗口 ID 用 `CGWindowListCopyWindowInfo`；`-l` 抓 sheet 会连父窗口一起捕获）。**注意 TCC 在进程启动时判定**：给宿主 App 授权后，除界面进程外还要重启常驻的 supervisor / daemon 侧进程。
 

@@ -48,10 +48,9 @@ enum ProviderProbe {
             return .success(ProbeRequest(
                 url: url,
                 method: "POST",
-                headers: [
-                    "Authorization": "Bearer \(key)",
-                    "Content-Type": "application/json",
-                ],
+                headers: key.isEmpty
+                    ? ["Content-Type": "application/json"]
+                    : ["Authorization": "Bearer \(key)", "Content-Type": "application/json"],
                 body: data
             ))
 
@@ -70,11 +69,13 @@ enum ProviderProbe {
             return .success(ProbeRequest(
                 url: url,
                 method: "POST",
-                headers: [
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                ],
+                headers: key.isEmpty
+                    ? ["anthropic-version": "2023-06-01", "Content-Type": "application/json"]
+                    : [
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    ],
                 body: data
             ))
 

@@ -135,8 +135,11 @@ final class ProviderService {
         case .embedding:
             guard config.providesEmbedding else { return nil }
         }
-        guard let key = secret(for: config.id), !key.isEmpty else { return nil }
-        return (config, key)
+        if config.requiresKey {
+            guard let key = secret(for: config.id), !key.isEmpty else { return nil }
+            return (config, key)
+        }
+        return (config, secret(for: config.id) ?? "")
     }
 
     /// 用途不可用的原因，直接显示在界面上。
@@ -149,7 +152,9 @@ final class ProviderService {
             return "《\(config.name)》没有可用的向量模型"
         default: break
         }
-        if !hasSecret(for: config.id) { return "《\(config.name)》还没填密钥" }
+        if config.requiresKey && !hasSecret(for: config.id) {
+            return "《\(config.name)》还没填密钥"
+        }
         return nil
     }
 

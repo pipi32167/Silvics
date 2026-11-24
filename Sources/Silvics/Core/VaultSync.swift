@@ -8,6 +8,8 @@ final class VaultSync {
 
     let repo: NoteRepository
     var settings: SyncSettings
+    /// 最近一次同步里无法自动合并的正文冲突。由 `sync()` 重置。
+    private(set) var lastConflicts: [VaultConflict] = []
 
     init(repo: NoteRepository, settings: SyncSettings) {
         self.repo = repo
@@ -198,6 +200,7 @@ final class VaultSync {
 
     /// 双向同步。失败抛错，调用方负责提示。
     func sync() throws -> Report {
+        lastConflicts = []
         var report = Report()
 
         // 先补齐「vault 里有、库里没有」的笔记。
@@ -384,6 +387,13 @@ final class VaultSync {
                 // 两边都改了正文
                 if local.title != remote.title {
                     result.conflicts.append("《\(local.title)》两边都改了标题，未合并")
+                    lastConflicts.append(VaultConflict(
+                        noteId: id,
+                        title: local.title,
+                        base: base?.body ?? "",
+                        ours: local.body,
+                        theirs: remote.body
+                    ))
                     archiveConflict(local, remote: remote, id: id)
                     continue
                 }
@@ -391,6 +401,13 @@ final class VaultSync {
                     base: base.body, ours: local.body, theirs: remote.body
                 ), outcome.isClean else {
                     result.conflicts.append("《\(local.title)》正文两边都改了，未合并，已留档")
+                    lastConflicts.append(VaultConflict(
+                        noteId: id,
+                        title: local.title,
+                        base: base?.body ?? "",
+                        ours: local.body,
+                        theirs: remote.body
+                    ))
                     archiveConflict(local, remote: remote, id: id)
                     continue
                 }

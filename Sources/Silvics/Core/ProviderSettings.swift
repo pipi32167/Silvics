@@ -32,6 +32,8 @@ struct ProviderConfig: Identifiable, Codable, Equatable, Sendable {
     var embeddingModel: String = ""
     var enabled: Bool = true
     var keyAccount: String = ""
+    /// 本地服务（Ollama、magpie）不需要密钥。false 时 `effective` 不要求 key。
+    var requiresKey: Bool = true
 
     init(
         id: UUID = UUID(),
@@ -40,7 +42,8 @@ struct ProviderConfig: Identifiable, Codable, Equatable, Sendable {
         baseURL: String,
         chatModel: String = "",
         embeddingModel: String = "",
-        enabled: Bool = true
+        enabled: Bool = true,
+        requiresKey: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -49,11 +52,12 @@ struct ProviderConfig: Identifiable, Codable, Equatable, Sendable {
         self.chatModel = chatModel
         self.embeddingModel = embeddingModel
         self.enabled = enabled
+        self.requiresKey = requiresKey
         self.keyAccount = "provider-\(id.uuidString)"
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, baseURL, chatModel, embeddingModel, enabled, keyAccount
+        case id, name, kind, baseURL, chatModel, embeddingModel, enabled, keyAccount, requiresKey
     }
 
     init(from decoder: Decoder) throws {
@@ -65,6 +69,7 @@ struct ProviderConfig: Identifiable, Codable, Equatable, Sendable {
         chatModel = try c.decodeIfPresent(String.self, forKey: .chatModel) ?? ""
         embeddingModel = try c.decodeIfPresent(String.self, forKey: .embeddingModel) ?? ""
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        requiresKey = try c.decodeIfPresent(Bool.self, forKey: .requiresKey) ?? true
         // 旧数据可能没存 account，按 id 补
         let stored = try c.decodeIfPresent(String.self, forKey: .keyAccount) ?? ""
         keyAccount = stored.isEmpty ? "provider-\(id.uuidString)" : stored
@@ -103,6 +108,8 @@ struct ProviderPreset: Identifiable, Equatable, Sendable {
     var embeddingModel: String
     /// 需要用户自己填 baseURL（自定义）。
     var isCustom: Bool = false
+    /// 本地服务不需要密钥。
+    var requiresKey: Bool = true
 
     func config() -> ProviderConfig {
         ProviderConfig(
@@ -110,7 +117,8 @@ struct ProviderPreset: Identifiable, Equatable, Sendable {
             kind: kind,
             baseURL: baseURL,
             chatModel: chatModel,
-            embeddingModel: embeddingModel
+            embeddingModel: embeddingModel,
+            requiresKey: requiresKey
         )
     }
 }
@@ -147,9 +155,14 @@ enum ProviderPresets {
         .init(name: "Voyage", kind: .openAICompatible,
               baseURL: "https://api.voyageai.com/v1",
               chatModel: "", embeddingModel: "voyage-3"),
+        .init(name: "magpie（本地）", kind: .openAICompatible,
+              baseURL: "http://127.0.0.1:3425/v1",
+              chatModel: "auto/deepseek-v4.1-flash", embeddingModel: "",
+              requiresKey: false),
         .init(name: "Ollama（本地）", kind: .openAICompatible,
               baseURL: "http://127.0.0.1:11434/v1",
-              chatModel: "qwen2.5:7b", embeddingModel: "bge-m3"),
+              chatModel: "qwen2.5:7b", embeddingModel: "bge-m3",
+              requiresKey: false),
         .init(name: "自定义", kind: .openAICompatible,
               baseURL: "", chatModel: "", embeddingModel: "", isCustom: true),
     ]

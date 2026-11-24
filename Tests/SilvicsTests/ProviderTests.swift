@@ -4,8 +4,8 @@ import XCTest
 final class ProviderConfigTests: XCTestCase {
 
     func testPresetsAreComplete() {
-        XCTAssertEqual(ProviderPresets.all.count, 12)
-        XCTAssertEqual(Set(ProviderPresets.all.map(\.name)).count, 12, "预设名不能重复")
+        XCTAssertEqual(ProviderPresets.all.count, 13)
+        XCTAssertEqual(Set(ProviderPresets.all.map(\.name)).count, 13, "预设名不能重复")
         let custom = ProviderPresets.named("自定义")
         XCTAssertNotNil(custom)
         XCTAssertTrue(custom?.isCustom ?? false)

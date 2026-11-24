@@ -23,6 +23,9 @@ final class AppState: ObservableObject {
     @Published private(set) var providerSettings = ProviderSettings()
     /// 哪些 provider 已经存了密钥。列表里显示「已配置」用。
     @Published private(set) var providersWithKey: Set<UUID> = []
+    /// 最近一次同步里没能自动合并的正文冲突。
+    @Published private(set) var syncConflicts: [VaultConflict] = []
+    @Published var isShowingConflicts: Bool = false
     /// 全部标签与使用次数。
     @Published private(set) var tags: [TagCount] = []
     @Published var isShowingQuickOpen: Bool = false
@@ -365,7 +368,8 @@ final class AppState: ObservableObject {
         guard let config = providerSettings.provider(id: id) else {
             return ProbeResult(ok: false, message: "找不到这个服务", latencyMs: 0, detail: "")
         }
-        guard let key = providerService.secret(for: id), !key.isEmpty else {
+        let key = providerService.secret(for: id) ?? ""
+        if config.requiresKey && key.isEmpty {
             return ProbeResult(ok: false, message: "先填密钥再测试", latencyMs: 0, detail: "")
         }
         return await ProviderProbe.run(config: config, key: key, role: role)
@@ -586,6 +590,50 @@ final class AppState: ObservableObject {
 
 extension AppState {
 
+    #if DEBUG
+    /// 仅 DEBUG：取证用，直接塞一组冲突。
+    func debugSetConflicts(_ conflicts: [VaultConflict]) {
+        syncConflicts = conflicts
+    }
+    #endif
+
+    /// 用 LLM 合并一处冲突。返回合并后的正文，失败给中文原因。
+    func resolveConflictWithLLM(_ conflict: VaultConflict) async -> Result<String, LLMError> {
+        guard let effective = providerService.effective(.chat) else {
+            let reason = providerService.unavailableReason(.chat) ?? "没有可用的对话模型"
+            return .failure(LLMError(message: "需要先在「设置 → 模型服务」里配置对话模型：\(reason)"))
+        }
+        return await ConflictResolver.resolve(conflict, provider: effective.config, key: effective.key)
+    }
+
+    /// 采用合并结果：写回笔记、重算索引、导出到 vault。
+    func applyConflictResolution(_ conflict: VaultConflict, body: String) -> String? {
+        guard var note = try? repo.note(id: conflict.noteId) else { return "笔记不存在" }
+        note.body = body
+        do {
+            _ = try repo.save(note)
+            syncConflicts.removeAll { $0.noteId == conflict.noteId }
+            if syncSettings.isConfigured || !syncSettings.vaultPath.isEmpty {
+                let sync = VaultSync(repo: repo, settings: syncSettings)
+                DispatchQueue.global(qos: .utility).async {
+                    try? sync.exportAll()
+                    let git = sync.git
+                    if git.isRepository(), git.hasLocalChanges() {
+                        try? git.stageAll()
+                        if git.stagedChangesExist() {
+                            try? git.commit("resolve: \(conflict.title)")
+                        }
+                    }
+                }
+            }
+            loadAll()
+            reloadCurrent()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     func saveSyncSettings(_ settings: SyncSettings) {
         syncSettings = settings
         settings.save()
@@ -613,6 +661,7 @@ extension AppState {
             } catch let err {
                 failure = err.localizedDescription
             }
+            let conflicts = sync.lastConflicts
 
             DispatchQueue.main.async {
                 var settings = settings
@@ -625,6 +674,7 @@ extension AppState {
                 self.syncSettings = settings
                 settings.save()
                 self.isSyncing = false
+                if failure == nil { self.syncConflicts = conflicts }
                 self.loadAll()
                 done(failure.map { ["错误：" + $0] } ?? lines)
             }
