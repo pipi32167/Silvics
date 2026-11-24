@@ -220,7 +220,11 @@ scripts/release.sh 0.1.1             # 提交版本号、打 tag、推送、建 
 
 版本号只由脚本写进 `project.yml`。细节见 `docs/RELEASE.md`。
 
-- 当前线上版本：**v0.1.0**（2026-11-24）。DMG 3.0 MB，ad-hoc 签名，arm64。
+- 当前线上版本：**v0.1.1**（2026-11-24）。DMG 3.1 MB，ad-hoc 签名，arm64。
+  sha256 `1818e531390d8ab0c79c7fc48d1d21dea4a3b6085c09975a93e19cbefa00fbaa`。
+  0.1.1 内容：笔记真相层从 sqlite 挪到 vault 目录，新增导出/恢复/校验、git 双向同步、diff3 合并。
+- 发布脚本会问一次 `继续？[y/N]`。非交互跑要 `<<< "y"`，否则只构建不发布。
+- 坑：`release.sh` 中途中断会留下改过的 `project.yml`，重跑前先 `git checkout -- project.yml`，否则预检「工作区不干净」。
 - 上传通道已验证：`scripts/release.sh --check-upload`（建 draft → 传资产 → 删除）。
 - 下载回来的 dmg 与本地产物 sha256 一致。
 - 坑：无开发者证书时 `codesign --sign -` 只能 ad-hoc。下载者首次打开要右键「打开」，或 `xattr -d com.apple.quarantine`。
