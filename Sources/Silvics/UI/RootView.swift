@@ -56,6 +56,7 @@ struct RootView: View {
             DebugCapture.runSelfTest(app)
             DebugCapture.runConflictDrill(app)
             DebugCapture.seedConflictDemo(app)
+            DebugCapture.applyCaretProbe()
             DebugCapture.schedule()
             #endif
         }

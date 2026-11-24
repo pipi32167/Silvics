@@ -196,6 +196,10 @@ struct NoteEditorView: NSViewRepresentable {
         private var isApplyingStyles = false
         private var completionRange: NSRange?
         private var currentQuery: String = ""
+        /// 上一次算出来的语法标记（与光标无关的部分），光标移动时只需重新分桶。
+        private var lastSyntaxMarkers: [NSRange] = []
+        /// 上一次的分桶依据，避免同段落内的每次光标移动都重设属性。
+        private var lastCaretParagraph: NSRange?
 
         /// 上一次回报给外部的正文，用于避免回环。
         fileprivate var lastPublishedText: String = ""
@@ -260,9 +264,15 @@ struct NoteEditorView: NSViewRepresentable {
 
         // MARK: 样式
 
+        /// 重排全篇属性。
+        ///
+        /// 语法标记按光标段落分两组：光标所在段落用可读色，其余段落 `.clear`
+        /// （字符宽度不变，文本一个不动）。光标移动不走这里，走 `refreshSyntaxMarksForCaret`。
         func restyle(force: Bool) {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles else { return }
+            // 中文输入法组合期间不改属性、不重设 typingAttributes（I01–I04）。
+            guard !textView.hasMarkedText() else { return }
             isApplyingStyles = true
             defer { isApplyingStyles = false }
 
@@ -275,6 +285,13 @@ struct NoteEditorView: NSViewRepresentable {
             let spans = MarkdownStyler.analyze(text)
             let wikis = WikiScanner.scan(text)
             let fullRange = NSRange(location: 0, length: storage.length)
+            let caretParagraph = paragraphRange(at: textView.selectedRange().location)
+            let marks = MarkdownStyler.syntaxMarkerRanges(
+                in: text,
+                caretParagraph: caretParagraph,
+                spans: spans,
+                links: wikis
+            )
 
             let selection = textView.selectedRanges
             let undoManager = textView.undoManager
@@ -288,9 +305,13 @@ struct NoteEditorView: NSViewRepresentable {
             applyBlocks(spans, storage, fullRange)
             applyWikiLinks(wikis, in: text, storage, fullRange)
             applyMentions(storage)
+            applySyntaxMarks(marks, storage)
 
             storage.endEditing()
             undoManager?.enableUndoRegistration()
+
+            lastSyntaxMarkers = marks.all
+            lastCaretParagraph = caretParagraph
 
             textView.typingAttributes = Theme.typingAttributes()
             textView.selectedRanges = selection
@@ -313,6 +334,45 @@ struct NoteEditorView: NSViewRepresentable {
             }
         }
 
+        /// 语法标记可见性：光标段落露出来，其余藏起来。只改字色，不改字符。
+        private func applySyntaxMarks(_ marks: SyntaxMarkVisibility, _ storage: NSTextStorage) {
+            for range in marks.hide {
+                guard let r = clamp(range, storage.length) else { continue }
+                storage.addAttribute(.foregroundColor, value: Theme.syntaxMarkHidden, range: r)
+            }
+            for range in marks.show {
+                guard let r = clamp(range, storage.length) else { continue }
+                storage.addAttribute(.foregroundColor, value: Theme.syntaxMarkActive, range: r)
+            }
+        }
+
+        /// 光标换了段落才重刷标记可见性。不重解析 Markdown，不碰选区，不碰 typingAttributes。
+        private func refreshSyntaxMarksForCaret() {
+            guard let textView, let storage = textView.textStorage else { return }
+            guard !isApplyingStyles, !textView.hasMarkedText() else { return }
+            guard !lastSyntaxMarkers.isEmpty else { return }
+            let caretParagraph = paragraphRange(at: textView.selectedRange().location)
+            guard caretParagraph != lastCaretParagraph else { return }
+
+            let marks = MarkdownStyler.split(lastSyntaxMarkers, caretParagraph: caretParagraph)
+            let undoManager = textView.undoManager
+            undoManager?.disableUndoRegistration()
+            storage.beginEditing()
+            applySyntaxMarks(marks, storage)
+            storage.endEditing()
+            undoManager?.enableUndoRegistration()
+            lastCaretParagraph = caretParagraph
+        }
+
+        /// 光标位置所在段落的区间（含行尾换行，与 `NSString.paragraphRange(for:)` 一致）。
+        private func paragraphRange(at location: Int) -> NSRange? {
+            guard let textView else { return nil }
+            let ns = textView.string as NSString
+            guard ns.length > 0 else { return NSRange(location: 0, length: 0) }
+            let clamped = min(max(0, location), ns.length)
+            return ns.paragraphRange(for: NSRange(location: clamped, length: 0))
+        }
+
         private func applyHeadings(_ spans: EditorSpans, _ storage: NSTextStorage, _ full: NSRange) {
             for (level, range) in spans.headings {
                 guard let r = clamp(range, storage.length) else { continue }
@@ -321,10 +381,7 @@ struct NoteEditorView: NSViewRepresentable {
                     .paragraphStyle: Theme.headingParagraph(level: level),
                 ], range: r)
             }
-            for range in spans.headingMarkers {
-                guard let r = clamp(range, storage.length) else { continue }
-                storage.addAttribute(.foregroundColor, value: Theme.syntaxMark, range: r)
-            }
+            // `#` 前缀的颜色统一在 `applySyntaxMarks` 里按光标段落处理。
         }
 
         private func applyInline(_ spans: EditorSpans, _ storage: NSTextStorage, _ full: NSRange) {
@@ -409,12 +466,11 @@ struct NoteEditorView: NSViewRepresentable {
                     value: color,
                     range: inner
                 )
+                // 方括号的颜色交给 `applySyntaxMarks` 统一处理（按光标段落显示或隐藏）
                 storage.addAttributes([
-                    .foregroundColor: Theme.syntaxMark,
                     .underlineStyle: 0,
                 ], range: NSRange(location: r.location, length: 2))
                 storage.addAttributes([
-                    .foregroundColor: Theme.syntaxMark,
                     .underlineStyle: 0,
                 ], range: NSRange(location: r.location + r.length - 2, length: 2))
 
@@ -443,6 +499,8 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            // 光标移动要重算「哪一段露源码」，但不能重排全篇（否则滚动会跳）。
+            refreshSyntaxMarksForCaret()
             // 光标移动时刷新补全的候选（在同一条引用内左右移动）
             if completion.isVisible {
                 refreshCompletionIfNeeded()

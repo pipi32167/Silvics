@@ -54,8 +54,14 @@ enum Theme {
     static let text = NSColor.labelColor
     static let secondaryText = NSColor.secondaryLabelColor
     static let tertiaryText = NSColor.tertiaryLabelColor
-    /// 语法符号（`#`、`**`、`[[`）的颜色：淡到几乎不干扰阅读。
+    /// 语法符号（`#`、`**`、`[[`）的淡色。现在只剩「光标行露源码」之外的地方用。
     static let syntaxMark = NSColor.quaternaryLabelColor
+
+    /// 光标所在段落的语法符号：比正文（`labelColor`）淡一档，仍可读、可改。
+    static let syntaxMarkActive = NSColor.secondaryLabelColor
+
+    /// 非光标段落的语法符号：完全不可见。字符还在，宽度不变。
+    static let syntaxMarkHidden = NSColor.clear
 
     /// 有效引用。
     static let linkText = NSColor(name: "linkText") { appearance in
