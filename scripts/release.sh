@@ -101,7 +101,7 @@ check_upload_channel() {
   gh release delete "$tag" --repo "$REPO" --yes >/dev/null
   rm -rf "$tmp"
 
-  [ "$uploaded" = "1" ] || die "上传后资产数为 $uploaded，通道不可用"
+  [ "$uploaded" = "1" ] || die "上传后资产数为 ${uploaded}，通道不可用"
   ok "上传通道可用，draft 已清理"
 }
 
@@ -130,8 +130,8 @@ verify_app() {
   local version build
   version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
   build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
-  [ "$version" = "$TARGET_VERSION" ] || die "Info.plist 版本是 $version，期望 $TARGET_VERSION"
-  ok "版本 $version（$build）"
+  [ "$version" = "$TARGET_VERSION" ] || die "Info.plist 版本是 ${version}，期望 $TARGET_VERSION"
+  ok "版本 ${version}（${build}）"
 
   say "ad-hoc 签名"
   codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1
@@ -279,7 +279,7 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
 fi
 
 BUILD_NUMBER="$(next_build_number)"
-say "目标版本 $TARGET_VERSION（构建号 $BUILD_NUMBER）"
+say "目标版本 ${TARGET_VERSION}（构建号 ${BUILD_NUMBER}）"
 write_version "$TARGET_VERSION" "$BUILD_NUMBER"
 ok "已写入 project.yml（当前 $(project_version) / $(project_build)）"
 
