@@ -1,5 +1,7 @@
 # Silvics
 
+<img src="docs/images/app-icon-128.png" width="88" align="right" alt="图标">
+
 单人用的 macOS 原生笔记应用。笔记正文是 Markdown 纯文本，写概念名时自动找出已有笔记并提示建立连接。
 
 名字取自 **silvics**（林业术语，研究林木如何生长），对应「笔记需要培育，不需要归档」。
@@ -47,6 +49,19 @@ L3 与 L4 永不改写用户正文。自动改一次错，整个连接层的信�
 | Markdown 解析 | `swift-markdown` | 只用于非引用语法与导出 |
 | 引用解析 | 自写 `WikiScanner` | 编辑器要字符区间，不要 AST |
 | 工程 | xcodegen | `project.yml` 是唯一真相 |
+
+## 图标
+
+图标是一根向上生长的枝、一片叶、三个渐小的琥珀点，最外面一个点与枝断开。绿是「已连接的引用」，琥珀是「未链接的提及」，断开的那个点就是还没建立的那条边。
+
+两个色值直接取自 `Theme.swift`。图标不用设计软件画，由 `tools/icon/draw.swift` 生成：
+
+```bash
+swiftc -O -o /tmp/icongen tools/icon/draw.swift
+/tmp/icongen Sources/Silvics/Resources/Assets.xcassets /tmp/icon-preview
+```
+
+小尺寸（≤ 32px）走另一套参数：主干、叶、断点都加粗，否则 16px 只剩一条 1px 的淡线。
 
 ## 构建
 

@@ -45,6 +45,7 @@ struct RootView: View {
                 if n > 0 { print("[Silvics] seeded \(n) notes") }
             }
             DebugCapture.applyShowFlag(app)
+            DebugCapture.runSelfTest(app)
             DebugCapture.schedule()
             #endif
         }

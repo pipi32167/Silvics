@@ -71,7 +71,7 @@ Silvics/
 │   │   ├── MarkdownStyler.swift swift-markdown AST → NSRange（UTF-8 字节映射）
 │   │   ├── LineDiff.swift      行级 diff，批量转换预览用
 │   │   └── Theme.swift         字体、颜色、段落样式
-│   └── UI/
+│   ├── UI/
 │       ├── RootView.swift      三栏 NavigationSplitView + 状态条
 │       ├── SidebarView.swift   搜索、笔记列表
 │       ├── EditorView.swift    NSTextView 桥、样式、补全、提及下划线、⌘⇧K
@@ -81,6 +81,9 @@ Silvics/
 │       ├── MentionSheet.swift  未链接提及批量整理（选择 → diff → 转换）
 │       ├── AliasSheet.swift    别名增删
 │       └── RenameSheet.swift   改名 + 影响预览
+│   └── Resources/
+│       └── Assets.xcassets/    AppIcon（生成物）+ MenuBarIcon（未接入）
+├── tools/icon/draw.swift       ← 图标生成器。图标只改这里，不要手改 PNG
 ├── Tests/SilvicsTests/
 │   ├── EditorKitTests.swift    27 个 P1 单测
 │   ├── MentionTests.swift      扫描器 / 归一化 / 门槛 / 性能
@@ -139,6 +142,18 @@ Silvics/
 | 搜索摘要 | 完成 | 以命中处为中心取片段，前后加省略号 |
 | 搜索性能 | 完成 | 1000 条笔记，Debug 实测 **4.7 ms**（验收线 100 ms） |
 | 单测 | 完成 | 99 项全过 |
+
+### 图标
+
+| 验收项 | 状态 | 证据 |
+| --- | --- | --- |
+| App 图标 | 完成 | 生长枝 + 叶 + 递减琥珀点 + 断开的点；绿/琥珀取自 `Theme.swift` |
+| 尺寸 | 完成 | 10 个尺寸进 `Assets.car`；`assetutil --info` 核对完整 |
+| 小尺寸适配 | 完成 | ≤ 32px 走加粗参数，16px 仍是「Y + 一点」 |
+| 深色变体 | 未接入 | 只在 deployment target ≥ 26 时 actool 才收，本项目 14.0 |
+| Dock 实测 | 完成 | `NSWorkspace.icon(forFile:)` 取 512 / 128 / 32 / 16 全部为本图 |
+
+取证图在 `/tmp/reports/silvics-icon/`，入库的只有 `docs/images/app-icon.png`（1024）与 `app-icon-128.png`（README 用）。
 
 ## 5. 怎么跑
 
@@ -209,16 +224,35 @@ open -a .build/Build/Products/Debug/Silvics.app \
 
 坑：`NSVisualEffectView`（侧栏选中行的材质）离屏栅格化会画成黑块。`DebugCapture` 捕获前把它们临时改成 `.contentBackground`，事后恢复。改动这块代码时别删那段。
 
-### 备选：`screencapture`
+### 真截屏：`screencapture`（已可用）
 
-- 单窗口：`screencapture -x -o -l<windowID> out.png`
-- 取窗口 ID：编译 `/tmp/wininfo.swift`（`CGWindowListCopyWindowInfo`）。
-- 本机 `screencapture` 无屏幕录制权限，报 `could not create image from display`。要真截屏得给 `Paseo.app` 授予「屏幕与系统音频录制」并完全重启它。
-- 自动化按键（System Events）同样受限，`osascript` 会超时等授权。没有人工点一遍之前，不要声称界面已验收。
+2026-11-24 起本机已给 `Paseo.app` 授予「屏幕与系统音频录制」，`screencapture` 正常。
+
+```bash
+screencapture -x -o -l<windowID> out.png      # 单窗口（sheet 会连父窗口一起捕获）
+screencapture -x /tmp/full.png                # 整屏，再裁
+```
+
+- 取窗口 ID：编译 `/tmp/wininfo.swift`（`CGWindowListCopyWindowInfo`）。sheet 是独立窗口，`-l` 抓 sheet 会把父窗口一起带进来。
+- **权限坑**：TCC 在进程启动时判定。给 Paseo 授权后，界面进程重启不够——真正 fork 出命令的 `Paseo Supervisor` / `Paseo Daemon` 也要重启，否则一直报 `could not create image from display`。验证用 `CGPreflightScreenCaptureAccess()`。
+- **自动化按键仍不可用**：`osascript` 报 `not allowed to send keystrokes / 不允许辅助访问`，因为「辅助功能」没有授权。要驱动鼠标键盘，得再给 Paseo 授「辅助功能」并重启常驻进程。
+
+### 替代：合成事件自测
+
+不给辅助功能也能验证编辑器快捷键：`SILVICS_SELFTEST=convert` 会在启动后 2.5 秒把光标放进第一条提及，并合成一个 `⌘⇧K` 事件丢给 `NSTextView.keyDown`。走的是真实链路（`keyDown` → `shouldChangeText` → 改写 → 防抖保存），只是绕开系统键盘。
+
+```bash
+open -a .build/Build/Products/Debug/Silvics.app \
+  --env SILVICS_SEED=1 --env SILVICS_SELECT=笔记标题应当写成断言句 --env SILVICS_SELFTEST=convert
+# 之后查库：正文应出现 [[标题]]，mention 少一条，link 多一条
+```
 
 ### 已有证据
 
-`/tmp/reports/silvics-p3/`：主界面、带提及的笔记、Quick Open、提及面板、diff 预览、改名影响、别名面板（不入库）。
+- `/tmp/reports/silvics-p3-real/`：真截屏（带窗口阴影与系统控件），P3 全部界面。
+- `/tmp/reports/silvics-p3/`：`DebugCapture` 自绘图，同一个界面，作对照。
+
+均不入库。
 
 ## 7. 必须知道的坑（已经踩过，别再踩）
 
@@ -236,14 +270,17 @@ open -a .build/Build/Products/Debug/Silvics.app \
 12. **GRDB 的 `conn.changesCount` 是「最后一条语句」的变更数。** 在 `execute` 之后又跑了别的语句（例如重建索引），再读 `changesCount` 就是错的。已踩：`removeAlias` 曾因此永远返回 false。
 13. **提及的归一化必须逐字符做。** 一个字符小写后可能变成多个标量（`İ` → `i̇`）。`MentionText.normalize` 记录每个标量对应的原文 UTF-16 起点与长度，区间才不会偏。
 14. **自动机构建是 10 ms 量级（1000 条标题、12005 节点）。** 不能在每次按键时重建。`MentionIndex.scanner` 按标题集合指纹缓存，标题或别名变更才重建。
-15. **提及与引用的写入顺序**：`reindex` → `resolveAllLinks` → `updateFTS` → `MentionIndex.reindex`，统一收在 `GRDBNoteRepository.reindexAll`。别在别处拆开写。
+15. **深色图标别写进 `AppIcon.appiconset`。** `appearances: luminosity/dark` 在 deployment target 14.0 下不被 actool 接收，每次构建报 10 条 `unassigned children`。等切 Icon Composer（macOS 26 起）再加。生成器会把深色母版落到预览目录。
+16. **`AppIcon.icns` 只有 16/32/128/256 四个尺寸，是正常的。** actool 瘦身所致，10 个尺寸在 `Assets.car` 里。Dock 走 `CFBundleIconFile` → `Assets.car`，别照 icns 的尺寸数下结论。
+17. **图标不要手改 `Assets.xcassets` 里的 PNG。** 母版是 `tools/icon/draw.swift`，重跑一行命令就全覆盖。
+18. **提及与引用的写入顺序**：`reindex` → `resolveAllLinks` → `updateFTS` → `MentionIndex.reindex`，统一收在 `GRDBNoteRepository.reindexAll`。别在别处拆开写。
 
 ## 8. 已知缺陷与未做
 
 | 项 | 说明 |
 | --- | --- |
 | 中文输入法未实测 | P1 遗留。需要人工在系统拼音输入法下敲一段中文。优先级最高 |
-| P2 界面未人工验收 | 本机无屏幕录制权限，无法截图。逻辑有单测与数据库证据，视觉效果需人工确认 |
+| P2/P3 界面未人工点击验收 | 截图已可采，但「辅助功能」未授权，鼠标点击与键盘输入无法自动化。`⌘⇧K` 用合成事件验过，其余按钮只有单测与数据库证据 |
 | 补全面板位置 | TextKit 2 下用 `layoutManager` 算光标矩形，多行折行处可能偏 |
 | 补全不响应鼠标滚轮 | 列表超过 6 项时靠 ↑↓ |
 | 提及下划线刷新延迟 | 保存是 500 ms 防抖，转换后下划线消失要等保存完成 |
@@ -254,6 +291,9 @@ open -a .build/Build/Products/Debug/Silvics.app \
 | 标签无改名 / 无删除入口 | 只能改正文里的 `#标签` 来增删 |
 | Quick Open 不搜正文 | 只按标题。全文走侧栏搜索框 |
 | 搜索没有高亮 | 摘要已居中到命中处，但正文里不高亮 |
+| 深色 / 着色图标未接入 | 母版已在生成器里，需 deployment target ≥ 26 或转 Icon Composer |
+| MenuBarIcon 未接入 | 资源已进 catalog，界面还没用；将来加托盘才接线 |
+| 图标无 3D / 材质 | 纯扁平双色。macOS 26 的 Liquid Glass 图标要另做，当前是保守的 Big Sur 风格 |
 
 ## 9. 下一步：P4
 

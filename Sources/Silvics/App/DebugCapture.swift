@@ -84,6 +84,51 @@ enum DebugCapture {
         return rep.representation(using: .png, properties: [:])
     }
 
+    /// `SILVICS_SELFTEST=convert`：把光标放进第一条提及，合成一次 `⌘⇧K`。
+    ///
+    /// 走的是真实的 `keyDown` → `shouldChangeText` → 正文改写 → 防抖保存链路，
+    /// 只是绕开系统键盘事件（自动化按键要「辅助功能」授权）。
+    @MainActor
+    static func runSelfTest(_ app: AppState) {
+        guard ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] == "convert" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findTextView(in: window.contentView!) else {
+                print("[selftest] 找不到编辑区")
+                return
+            }
+            guard let mention = app.mentions.first else {
+                print("[selftest] 当前笔记没有提及")
+                return
+            }
+            let caret = mention.location + 1
+            window.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: caret, length: 0))
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.command, .shift],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "K",
+                charactersIgnoringModifiers: "k",
+                isARepeat: false,
+                keyCode: 40
+            ) else { return }
+            textView.keyDown(with: event)
+            print("[selftest] 已在 caret=\(caret) 发送 ⌘⇧K，目标《\(mention.targetTitle)》")
+        }
+    }
+
+    private static func findTextView(in view: NSView) -> NSTextView? {
+        if let textView = view as? NSTextView { return textView }
+        for sub in view.subviews {
+            if let found = findTextView(in: sub) { return found }
+        }
+        return nil
+    }
+
     /// 延迟后把所有可见窗口写成 PNG。
     @MainActor
     static func schedule(after delay: TimeInterval = 2.2) {

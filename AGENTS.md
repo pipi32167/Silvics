@@ -31,7 +31,19 @@ ls .build/Build/Products/Debug/Silvics.app
 # 带演示数据启动。仅 DEBUG 构建，且库为空时生效，灌 20 条互相引用的笔记。
 rm -rf "$HOME/Library/Application Support/Silvics"
 open -a .build/Build/Products/Debug/Silvics.app --env SILVICS_SEED=1
+
+# 重新生成 App 图标。.xcassets 在 sources 下自动收，不用重跑 xcodegen。
+swiftc -O -o /tmp/icongen tools/icon/draw.swift
+/tmp/icongen Sources/Silvics/Resources/Assets.xcassets /tmp/reports/silvics-icon
 ```
+
+### 图标不要加深色变体
+
+`AppIcon.appiconset` 里只放浅色图。加 `appearances: luminosity/dark` 会在每次构建报 10 条 `unassigned children`：macOS 深色图标只在 deployment target ≥ 26 时才会被 actool 收进 `Assets.car`，本项目是 14.0。
+
+深色母版由生成器落到预览目录（`/tmp/reports/silvics-icon/dark/`），切 Icon Composer 时再取。
+
+`AppIcon.icns` 里只有 16/32/128/256 四个尺寸，是 actool 的瘦身行为。完整 10 个尺寸在 `Assets.car` 里（用 `assetutil --info` 可以核）。Dock 走 `CFBundleIconFile` → `Assets.car`，不缺图。
 
 ### SPM 拉依赖卡住
 
@@ -100,5 +112,8 @@ P2 新增的回归测试，同样不许删：
   ```
 
   多个可见窗口（主窗 + sheet）时输出 `out-0.png`、`out-1.png`。
-- 本机 `screencapture` 没有屏幕录制权限，直接跑报 `could not create image from display`。要真截屏得先给 Paseo 授权并重启它。
-- 需要 `screencapture` 时用 `CGWindowListCopyWindowInfo` 取窗口 ID。`-l` 不包含 `NSPanel` 浮层，抓浮层要全屏再裁。
+  `SILVICS_SELFTEST=convert`：合成一次 `⌘⇧K`，验证提及转引用链路。
+- 真截屏：`screencapture -x -o -l<windowID> out.png`。窗口 ID 用 `CGWindowListCopyWindowInfo`（`/tmp/wininfo.swift`）。`-l` 抓 sheet 会连父窗口一起捕获。
+- 授权坑：TCC 在进程启动时判定。给 Paseo 授权「屏幕与系统音频录制」后，除了重启 Paseo，还要重启常驻的 `Paseo Supervisor` / `Paseo Daemon`，否则一直报 `could not create image from display`。
+- 自动化按键不可用（「辅助功能」未授权，`osascript` 报 `不允许辅助访问`）。要验证编辑器快捷键就用 `SILVICS_SELFTEST=convert`，它合成 `⌘⇧K` 走真实链路。
+- 图标母版是 `tools/icon/draw.swift`，不是设计软件文件。改图标只改这个脚本，不要手改 `Assets.xcassets` 里的 PNG。
