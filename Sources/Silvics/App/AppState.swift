@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -14,8 +15,19 @@ final class AppState: ObservableObject {
     @Published private(set) var outgoing: [NoteLink] = []
     @Published private(set) var danglingTargets: [String] = []
     @Published private(set) var orphanCount: Int = 0
+    /// 普通笔记数。「全部」的条数，不含日记。
+    @Published private(set) var noteCount: Int = 0
+    /// 侧栏「日记」列表，按日期倒序。
+    @Published private(set) var journalEntries: [JournalEntry] = []
+    /// 待办总览，跨全部日记聚合。
+    @Published private(set) var todoOverview: [JournalTodo] = []
+    @Published var isShowingTodoOverview: Bool = false
     @Published var searchQuery: String = ""
-    /// 侧栏当前范围：全部 / 孤儿 / 某个标签。
+    /// 搜索范围：只搜笔记 / 含日记。
+    @Published var searchScope: SearchScope = .notes
+    /// 日记是否参与未链接提及扫描。设置入口在右侧面板，值落 UserDefaults。
+    @Published private(set) var journalScanMentions: Bool = JournalMentionSettings.scanMentions
+    /// 侧栏当前范围：全部 / 孤儿 / 日记 / 某个标签。
     @Published var sidebarScope: SidebarScope = .all
     /// 外观设置。改动即时生效并落 UserDefaults。
     @Published private(set) var appearance: AppearanceSettings = .init()
@@ -86,10 +98,15 @@ final class AppState: ObservableObject {
             self.repo = GRDBNoteRepository(db: db)
             self.statusMessage = "磁盘数据库打开失败，已改用临时内存库：\(error.localizedDescription)"
         }
+        // 设置里的日记提及开关要进仓库：保存链路靠它决定扫不扫日记。
+        repo.journalScanMentions = JournalMentionSettings.scanMentions
+        journalScanMentions = repo.journalScanMentions
         appearance = AppearanceSettings.load()
         Theme.apply(appearance)
         providerSettings = providerService.settings
         healFromVault()
+        // 开关开着时，启动先补齐日记的提及：否则上次关着的历史日记一直没扫过。
+        if journalScanMentions { try? repo.reindexJournalMentions() }
         loadAll(selectFirst: true)
         startSyncTimers()
     }
@@ -184,6 +201,8 @@ final class AppState: ObservableObject {
         do {
             summaries = try repo.summaries()
             orphanCount = try repo.orphanCount()
+            noteCount = try repo.noteCount()
+            journalEntries = try repo.journalEntries()
             tags = try repo.allTags()
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
             if case .tag(let name) = sidebarScope, !tags.contains(where: { $0.name == name }) {
@@ -242,18 +261,37 @@ final class AppState: ObservableObject {
     }
 
     /// 侧栏列表。搜索优先，其次是当前范围。
+    ///
+    /// 「全部」= 普通笔记，日记单独一层；孤儿也排除日记。
+    /// 搜索命中在「含日记」时会带上日记。
     func visibleSummaries() -> [NoteSummary] {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.isEmpty else { return search(query: q) }
+        guard q.isEmpty else {
+            return (try? repo.search(q, includeJournal: searchScope == .includingJournal)) ?? []
+        }
         switch sidebarScope {
         case .all, .search:
-            return summaries
+            return noteSummaries
         case .orphans:
-            return summaries.filter { $0.backlinkCount == 0 && $0.outgoingCount == 0 }
+            return noteSummaries.filter { $0.backlinkCount == 0 && $0.outgoingCount == 0 }
+        case .journal:
+            return []
         case .tag(let name):
             let ids = Set(occurrenceSummaryIds(tagged: name))
-            return summaries.filter { ids.contains($0.id) }
+            return noteSummaries.filter { ids.contains($0.id) }
         }
+    }
+
+    /// 普通笔记（不含日记）。所有「全部 / 孤儿 / 标签」列表都从这里过滤。
+    var noteSummaries: [NoteSummary] {
+        summaries.filter { $0.type != NoteTypes.journalID }
+    }
+
+    /// 搜索结果里的日记命中。侧栏把日记单独渲染成日期行。
+    ///
+    /// 目前侧栏直接从 `visibleSummaries()` 里按 `isJournal` 分组，不重复查库。
+    func journalSearchHits() -> [NoteSummary] {
+        visibleSummaries().filter(\.isJournal)
     }
 
     /// 当前范围里笔记的数量。侧栏标题用。
@@ -277,10 +315,95 @@ final class AppState: ObservableObject {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return summaries }
         do {
-            return try repo.search(q)
+            return try repo.search(q, includeJournal: searchScope == .includingJournal)
         } catch {
             return summaries
         }
+    }
+
+    // MARK: - 日记
+
+    /// 打开某天的日记；不存在就按模板与承接新建。`⌘⇧J` 与演示数据都走这里。
+    @discardableResult
+    func openJournal(on date: String, using templates: [String]? = nil) -> Note? {
+        flushPendingSave()
+        do {
+            let names = templates ?? JournalTemplates.defaultNames(in: repo.vaultURL, limit: 2)
+            let note = try repo.journalNote(on: date, using: names)
+            loadAll()
+            sidebarScope = .journal
+            searchQuery = ""
+            selection = note.id
+            loadNote(id: note.id)
+            return note
+        } catch {
+            statusMessage = "打开日记失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// `⌘⇧J`：打开今天。没有就建。
+    func goToToday() {
+        _ = openJournal(on: JournalDate.today())
+    }
+
+    /// `⌘⇧T`：刷新待办总览并打开面板。只聚合已经存在的日记，不代为新建。
+    func openTodoOverview() {
+        flushPendingSave()
+        todoOverview = (try? repo.todoOverview()) ?? []
+        isShowingTodoOverview = true
+    }
+
+    /// 从待办总览跳到「最近出现」那天，并把那一行滚到可见。
+    func jumpToTodo(_ todo: JournalTodo) {
+        isShowingTodoOverview = false
+        guard let note = try? repo.journal(on: todo.lastDate) else {
+            statusMessage = "找不到 \(todo.lastDate) 的日记"
+            return
+        }
+        flushPendingSave()
+        sidebarScope = .journal
+        searchQuery = ""
+        selection = note.id
+        loadNote(id: note.id)
+        revealInEditor(todo.text)
+    }
+
+    /// 日记的提及开关。改完立即重扫全部日记，右栏当场能看到变化。
+    func setJournalScanMentions(_ enabled: Bool) {
+        JournalMentionSettings.scanMentions = enabled
+        journalScanMentions = enabled
+        repo.journalScanMentions = enabled
+        do {
+            try repo.reindexJournalMentions()
+            reloadCurrent()
+            statusMessage = enabled ? "日记已参与提及扫描。" : "日记不再参与提及扫描。"
+        } catch {
+            statusMessage = "重扫日记提及失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 在编辑区里选中并滚到某段文字。找不到就什么都不做。
+    func revealInEditor(_ text: String) {
+        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = Self.findTextView(in: window.contentView!) else { return }
+            let full = textView.string as NSString
+            let range = full.range(of: needle)
+            guard range.location != NSNotFound else { return }
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+        }
+    }
+
+    private static func findTextView(in view: NSView) -> NSTextView? {
+        if let textView = view as? NSTextView { return textView }
+        for sub in view.subviews {
+            if let found = findTextView(in: sub) { return found }
+        }
+        return nil
     }
 
     // MARK: - 新建
@@ -632,7 +755,7 @@ final class AppState: ObservableObject {
     }
 
     func search(query: String) -> [NoteSummary] {
-        (try? repo.search(query)) ?? []
+        (try? repo.search(query, includeJournal: searchScope == .includingJournal)) ?? []
     }
 
     func duplicateTitleExists(_ title: String) -> Bool {

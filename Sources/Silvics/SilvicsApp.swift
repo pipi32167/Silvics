@@ -48,6 +48,16 @@ struct SilvicsApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
+                Button("今天的日记") {
+                    app.goToToday()
+                }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+
+                Button("待办总览…") {
+                    app.openTodoOverview()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+
                 Divider()
 
                 Button("立即保存") {

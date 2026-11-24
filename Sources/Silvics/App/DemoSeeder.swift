@@ -240,7 +240,57 @@ enum DemoSeeder {
             }
         }
         app.loadAll(selectFirst: true)
+        seedJournals(app)
+        app.loadAll(selectFirst: true)
         return count
+    }
+
+    /// 演示日记：前两天 + 今天，含承接段、未完成 / 已完成待办、以及一处可触发提及的概念标题。
+    /// 只给截图取证用，不写模板文件（正文里的 `##` 模块标题直接生成）。
+    @MainActor
+    private static func seedJournals(_ app: AppState) {
+        let today = JournalDate.today()
+        let day1 = JournalDate.offset(today, by: -2)
+        let day2 = JournalDate.offset(today, by: -1)
+        let entries: [(date: String, body: String)] = [
+            (day1, """
+            ## 工作
+            - [ ] 把日记接到界面上
+            - [x] 补类型注册表
+            ## 生活
+            - [ ] 跑步 20 分钟
+            """),
+            (day2, """
+            ## 承接（来自 \(JournalTodo.short(day1))）
+            - [ ] 把日记接到界面上
+            - [ ] 跑步 20 分钟
+
+            ## 工作
+            - [ ] 写批次 6 的测试
+            - [ ] 把日记接到界面上
+            ## 生活
+            - [ ] 买咖啡豆
+            """),
+            (today, """
+            ## 承接（来自 \(JournalTodo.short(day2))）
+            - [ ] 写批次 6 的测试
+            - [ ] 买咖啡豆
+
+            ## 工作
+            - [ ] 截图：日记列表、待办总览
+            - [ ] 把日记接到界面上
+            ## 生活
+            - [ ] 跑步 20 分钟
+            - [x] 早睡
+
+            今天重读 稀疏重复优于集中突击 的论证，集中突击只能短期见效。
+            """),
+        ]
+        for entry in entries {
+            guard app.openJournal(on: entry.date, using: []) != nil else { continue }
+            app.bodyDidChange(entry.body)
+            app.flushPendingSave()
+        }
     }
 }
 #endif

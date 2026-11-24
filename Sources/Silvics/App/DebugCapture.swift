@@ -40,6 +40,10 @@ enum DebugCapture {
             app.updateAppearance(settings)
         }
 
+        // `SILVICS_JOURNAL_MENTIONS=1|0`：取证时切换日记提及开关（对比图用）。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_JOURNAL_MENTIONS"] {
+            app.setJournalScanMentions(raw == "1")
+        }
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
             app.select(match.id)
@@ -49,6 +53,9 @@ enum DebugCapture {
         case "mentions", "mentions-preview":
             app.refreshMentionGroups()
             app.isShowingMentionsSheet = true
+        case "todos", "todo-overview": app.openTodoOverview()
+        case "journal": app.selectScope(.journal)
+        case "journal-today": app.goToToday()
         case "settings":
             SettingsWindowController.show(app: app, tab: .appearance)
         case "settings-providers-demo":
@@ -63,7 +70,22 @@ enum DebugCapture {
         case "sync": SettingsWindowController.show(app: app, tab: .sync)
         default: break
         }
+
+        // `SILVICS_SEARCH=<词>` + `SILVICS_SEARCH_SCOPE=all`：取证时预置搜索。
+        // 必须放在范围切换之后：`selectScope` 会清空搜索词。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_SEARCH_SCOPE"], raw == "all" {
+            app.searchScope = .includingJournal
+        }
+        if let q = ProcessInfo.processInfo.environment["SILVICS_SEARCH"], !q.isEmpty {
+            app.searchQuery = q
+        }
+
         applySyncFlags(app)
+
+        // 取证时先把状态条清掉，截图里不出现「已从 vault 重建…」这类启动提示。
+        if path != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { app.clearStatus() }
+        }
     }
 
     /// `SILVICS_VAULT` / `SILVICS_REMOTE` 预置同步配置，`SILVICS_SYNC=1` 启动即同步一次。

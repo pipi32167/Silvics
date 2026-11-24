@@ -122,8 +122,28 @@ struct ContextPanelView: View {
                 }
             }
 
+            // 日记默认不跑提及扫描，开关放在这里，和「未链接提及」同一语义位置。
+            if app.current?.type == NoteTypes.journalID {
+                HStack(spacing: 6) {
+                    Toggle("日记参与提及扫描", isOn: Binding(
+                        get: { app.journalScanMentions },
+                        set: { app.setJournalScanMentions($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    Text(app.journalScanMentions ? "已开启" : "已关闭")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(size: 11))
+            }
+
             if app.mentions.isEmpty {
-                hint("正文里写到已有标题时，这里会出现。点中带点状下划线的文字按 ⌘⇧K 可转成引用。")
+                if app.current?.type == NoteTypes.journalID, !app.journalScanMentions {
+                    hint("已关闭：日记不参与提及扫描。打开上面的开关后，正文里写到已有概念标题会出现在这里。")
+                } else {
+                    hint("正文里写到已有标题时，这里会出现。点中带点状下划线的文字按 ⌘⇧K 可转成引用。")
+                }
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(app.mentions) { mention in

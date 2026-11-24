@@ -66,6 +66,9 @@ enum NoteTypes {
     ]
 
     /// 未注册的类型按普通笔记处理，不报错 —— 旧版本读到新类型时不能崩。
+    ///
+    /// 日记的提及开关是运行时设置，不在这里读：`GRDBNoteRepository.journalScanMentions`
+    /// 带着它进入保存链路，避免静态描述符随全局状态变化。
     static func descriptor(for id: String) -> NoteType {
         all[id] ?? note
     }

@@ -49,6 +49,9 @@ struct GRDBNoteRepository: NoteRepository {
     let db: AppDatabase
     /// vault 目录。保存先写它，库只是索引。
     var vaultURL: URL
+    /// 日记是否参与未链接提及扫描。AppState 从设置灌入；保存链路把它带给 `MentionIndex`。
+    /// 默认关，与 `NoteTypes.journal.scanMentions` 一致。
+    var journalScanMentions: Bool = false
 
     /// `vaultURL` 不传时取同步设置里的目录（默认 `~/Documents/Silvics Vault`）。
     /// **测试必须传临时目录**，否则会往用户文档目录写东西。
@@ -85,7 +88,8 @@ struct GRDBNoteRepository: NoteRepository {
                     backlinkCount: incoming[note.id] ?? 0,
                     outgoingCount: outgoing[note.id] ?? 0,
                     snippet: Self.snippet(of: note.body),
-                    updatedAt: note.updatedAt
+                    updatedAt: note.updatedAt,
+                    type: note.type
                 )
             }
         }
@@ -99,9 +103,11 @@ struct GRDBNoteRepository: NoteRepository {
 
     func orphanCount() throws -> Int {
         try db.reader.read { conn in
+            // 日记不算孤儿：它不能被 `[[ ]]` 指向，也不会有人链它。
             try Int.fetchOne(conn, sql: """
                 SELECT COUNT(*) FROM note n
-                WHERE NOT EXISTS (SELECT 1 FROM link l WHERE l.toId = n.id)
+                WHERE n.type <> '\(NoteTypes.journalID)'
+                  AND NOT EXISTS (SELECT 1 FROM link l WHERE l.toId = n.id)
                   AND NOT EXISTS (SELECT 1 FROM link l WHERE l.fromId = n.id)
                 """) ?? 0
         }
@@ -253,7 +259,7 @@ struct GRDBNoteRepository: NoteRepository {
     func writeNoteRow(_ note: Note) throws {
         try db.writer.write { conn in
             try note.save(conn)
-            try Self.reindexAll(note: note, in: conn)
+            try Self.reindexAll(note: note, in: conn, journalScanMentions: journalScanMentions)
         }
     }
 
@@ -277,12 +283,12 @@ struct GRDBNoteRepository: NoteRepository {
     }
 
     /// 正文索引全量重算：引用、引用解析、全文索引、提及。
-    static func reindexAll(note: Note, in conn: Database) throws {
+    static func reindexAll(note: Note, in conn: Database, journalScanMentions: Bool = false) throws {
         try Self.reindex(note: note, in: conn)
         try Self.resolveAllLinks(in: conn)
         try Self.updateFTS(note: note, in: conn)
         let scanner = try MentionIndex.scanner(in: conn)
-        try MentionIndex.reindex(note: note, scanner: scanner, in: conn)
+        try MentionIndex.reindex(note: note, scanner: scanner, in: conn, journalScanMentions: journalScanMentions)
         try TagIndex.reindex(note: note, in: conn)
     }
 
@@ -374,7 +380,7 @@ struct GRDBNoteRepository: NoteRepository {
                 try Self.reindex(note: note, in: conn)
             }
             try Self.resolveAllLinks(in: conn)
-            try MentionIndex.rebuildAll(in: conn)
+            try MentionIndex.rebuildAll(in: conn, journalScanMentions: journalScanMentions)
             try TagIndex.rebuildAll(in: conn)
         }
     }
@@ -391,24 +397,27 @@ struct GRDBNoteRepository: NoteRepository {
 
     // MARK: - 搜索
 
-    func search(_ query: String, limit: Int = 50) throws -> [NoteSummary] {
+    func search(_ query: String, limit: Int = 50, includeJournal: Bool = false) throws -> [NoteSummary] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return try summaries() }
+        // 默认只搜普通笔记。日记正文要先在侧栏切到「含日记」才返回。
+        // 类型串是代码里的常量，不是用户输入。
+        let typeFilter = includeJournal ? "" : "AND n.type <> '\(NoteTypes.journalID)'"
         return try db.reader.read { conn in
             // trigram 分词器要求查询串至少 3 个字符；短查询退回 LIKE。
             let rows: [Row]
             if q.count >= 3 {
                 rows = try Row.fetchAll(conn, sql: """
                     SELECT n.id AS id, n.title AS title, n.status AS status, n.body AS body,
-                           n.updatedAt AS updatedAt
+                           n.updatedAt AS updatedAt, n.type AS type
                     FROM note_fts f JOIN note n ON n.rowid = f.rowid
-                    WHERE note_fts MATCH ?
+                    WHERE note_fts MATCH ? \(typeFilter)
                     ORDER BY n.updatedAt DESC LIMIT ?
                     """, arguments: [Self.ftsQuery(q), limit])
             } else {
                 rows = try Row.fetchAll(conn, sql: """
-                    SELECT id, title, status, body, updatedAt FROM note
-                    WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'
+                    SELECT id, title, status, body, updatedAt, type FROM note n
+                    WHERE (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\') \(typeFilter)
                     ORDER BY updatedAt DESC LIMIT ?
                     """, arguments: ["%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%", limit])
             }
@@ -423,7 +432,8 @@ struct GRDBNoteRepository: NoteRepository {
                     backlinkCount: counts[id] ?? 0,
                     outgoingCount: 0,
                     snippet: q.isEmpty ? Self.snippet(of: body) : Self.snippet(around: q, in: body),
-                    updatedAt: row["updatedAt"]
+                    updatedAt: row["updatedAt"],
+                    type: row["type"] ?? NoteTypes.noteID
                 )
             }
         }

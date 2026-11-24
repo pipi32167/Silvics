@@ -72,6 +72,25 @@ extension GRDBNoteRepository {
         }
         return journals.first { $0.metaFields["date"] == date }
     }
+
+    /// 日记提及开关变化后重扫全部日记。
+    ///
+    /// `MentionIndex.reindex` 先清本篇再按 `descriptor.scanMentions` 决定要不要扫，
+    /// 所以关掉开关时这个调用也会把旧提及清掉。
+    func reindexJournalMentions() throws {
+        try db.writer.write { conn in
+            let scanner = try MentionIndex.scanner(in: conn)
+            let journals = try Note.filter(Column("type") == NoteTypes.journalID).fetchAll(conn)
+            for journal in journals {
+                try MentionIndex.reindex(
+                    note: journal,
+                    scanner: scanner,
+                    in: conn,
+                    journalScanMentions: journalScanMentions
+                )
+            }
+        }
+    }
 }
 
 /// 日记日期（`YYYY-MM-DD`）的规范化与校验。日期即身份，格式不能松。
@@ -116,5 +135,50 @@ enum JournalDate {
               let range = calendar.range(of: .day, in: .month, for: first)
         else { return 31 }
         return range.count
+    }
+
+    /// 本机时区的今天，`YYYY-MM-DD`。`⌘⇧J` 与新建日记都从这里取日期。
+    static func today(_ now: Date = Date()) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let parts = calendar.dateComponents([.year, .month, .day], from: now)
+        guard let year = parts.year, let month = parts.month, let day = parts.day else { return "" }
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    /// 日期 → UTC 零点。格式不合法返回 nil。
+    static func date(from value: String) -> Date? {
+        guard let normalized = try? normalized(value) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        var components = DateComponents()
+        let parts = normalized.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+        return calendar.date(from: components)
+    }
+
+    /// 星期几，`周一` 这种形式。对齐原型 `weekday()`。
+    static func weekday(_ value: String) -> String {
+        guard let day = date(from: value) else { return "" }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let names = ["日", "一", "二", "三", "四", "五", "六"]
+        let index = calendar.component(.weekday, from: day) - 1
+        guard names.indices.contains(index) else { return "" }
+        return "周" + names[index]
+    }
+
+    /// 日期加减天数。演示数据与「昨天」类判断用；跨月跨年交给 Calendar。
+    static func offset(_ value: String, by days: Int) -> String {
+        guard let day = date(from: value) else { return value }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        guard let shifted = calendar.date(byAdding: .day, value: days, to: day) else { return value }
+        let parts = calendar.dateComponents([.year, .month, .day], from: shifted)
+        guard let year = parts.year, let month = parts.month, let day = parts.day else { return value }
+        return String(format: "%04d-%02d-%02d", year, month, day)
     }
 }

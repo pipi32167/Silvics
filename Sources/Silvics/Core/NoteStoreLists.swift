@@ -20,17 +20,69 @@ extension GRDBNoteRepository {
     }
 
     /// 孤儿笔记：既没有出链，也没有入链。
+    ///
+    /// `countsAsOrphan = false` 的类型（日记）不算孤儿：它本来就不该被 `[[ ]]` 指向。
     func orphans() throws -> [NoteSummary] {
-        try summaries().filter { $0.backlinkCount == 0 && $0.outgoingCount == 0 }
+        try summaries().filter {
+            NoteTypes.descriptor(for: $0.type).countsAsOrphan
+                && $0.backlinkCount == 0 && $0.outgoingCount == 0
+        }
     }
 
-    /// `⌘P` Quick Open。
+    /// 侧栏「全部」的条数：普通笔记数，不含日记。
+    func noteCount() throws -> Int {
+        try db.reader.read { conn in
+            try Int.fetchOne(
+                conn,
+                sql: "SELECT COUNT(*) FROM note WHERE type <> ?",
+                arguments: [NoteTypes.journalID]
+            ) ?? 0
+        }
+    }
+
+    /// 侧栏「日记」列表：按日期倒序，带星期与未完成待办条数。
+    func journalEntries() throws -> [JournalEntry] {
+        let journals: [Note] = try db.reader.read { conn in
+            try Note.filter(Column("type") == NoteTypes.journalID).fetchAll(conn)
+        }
+        return journals
+            .compactMap { note -> JournalEntry? in
+                guard let date = Self.journalDay(of: note) else { return nil }
+                return JournalEntry(
+                    id: note.id,
+                    date: date,
+                    weekday: JournalDate.weekday(date),
+                    openTodoCount: JournalTodos.openCount(in: note.body)
+                )
+            }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// 待办总览：跨全部日记聚合未完成项，同一条目取最近一天的状态。
+    func todoOverview() throws -> [JournalTodo] {
+        let journals: [Note] = try db.reader.read { conn in
+            try Note.filter(Column("type") == NoteTypes.journalID).fetchAll(conn)
+        }
+        let pairs = journals.compactMap { note -> (date: String, body: String)? in
+            guard let date = Self.journalDay(of: note) else { return nil }
+            return (date, note.body)
+        }
+        return JournalTodos.aggregate(pairs)
+    }
+
+    /// 日记日期：优先读类型段，缺了按 id 推。两处都没有就当不是日记，跳过。
+    static func journalDay(of note: Note) -> String? {
+        if let raw = note.metaFields["date"], (try? JournalDate.normalized(raw)) != nil { return raw }
+        return VaultFormat.journalDate(fromID: note.id)
+    }
+
+    /// `⌘P` Quick Open。只列 `inQuickOpen == true` 的类型（日记不进）。
     ///
     /// 排序：前缀命中 → 包含命中 → 标题二元组相似度。
     /// 查询为空时返回最近更新的笔记，当作「最近打开」。
     func quickOpen(query: String, limit: Int = 12) throws -> [QuickOpenItem] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let all = try summaries()
+        let all = try summaries().filter { NoteTypes.descriptor(for: $0.type).inQuickOpen }
         guard !trimmed.isEmpty else {
             let recent = all.sorted { $0.updatedAt > $1.updatedAt }.prefix(limit)
             return try decorate(Array(recent))

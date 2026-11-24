@@ -48,6 +48,15 @@ enum JournalTemplates {
         return templates
     }
 
+    /// 新建日记默认用的模板：order 最小的前 `limit` 个（同 order 按名字）。
+    /// 目录里没有模板时返回空数组，调用方拿到的骨架就是空字符串。
+    static func defaultNames(in vaultURL: URL, limit: Int = 2) -> [String] {
+        load(in: vaultURL)
+            .sorted { a, b in a.order != b.order ? a.order < b.order : a.name < b.name }
+            .prefix(limit)
+            .map(\.name)
+    }
+
     /// 按 order 升序拼骨架：每段 `## <名字>`，段间一个空行。
     ///
     /// 点名但文件缺失的模板直接跳过（不报错，也不在正文里留空标题）。

@@ -321,6 +321,10 @@ struct NoteSummary: Identifiable, Equatable, Hashable {
     var outgoingCount: Int
     var snippet: String
     var updatedAt: Int64
+    /// 笔记类型。列表按它区分日记与普通笔记，不另建一套模型。
+    var type: String = NoteTypes.noteID
+
+    var isJournal: Bool { type == NoteTypes.journalID }
 }
 
 /// 侧栏标签列表的一项。
@@ -344,6 +348,7 @@ struct QuickOpenItem: Identifiable, Equatable, Hashable {
 enum SidebarScope: Equatable, Hashable {
     case all
     case orphans
+    case journal
     case tag(String)
     case search
 
@@ -351,8 +356,22 @@ enum SidebarScope: Equatable, Hashable {
         switch self {
         case .all: return "全部"
         case .orphans: return "孤儿笔记"
+        case .journal: return "日记"
         case .tag(let name): return "#\(name)"
         case .search: return "搜索结果"
+        }
+    }
+}
+
+/// 侧栏搜索范围。默认只搜普通笔记，日记正文要手动含进来。
+enum SearchScope: Equatable, Hashable, CaseIterable {
+    case notes
+    case includingJournal
+
+    var title: String {
+        switch self {
+        case .notes: return "只搜笔记"
+        case .includingJournal: return "含日记"
         }
     }
 }

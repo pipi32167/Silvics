@@ -3,27 +3,50 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject private var app: AppState
 
+    private var query: String {
+        app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 搜索命中或当前范围的笔记。日记与普通笔记混在一起，下面按类型分开渲染。
     private var rows: [NoteSummary] {
         app.visibleSummaries()
     }
 
+    private var noteRows: [NoteSummary] {
+        rows.filter { !$0.isJournal }
+    }
+
+    private var journalRows: [NoteSummary] {
+        rows.filter(\.isJournal)
+    }
+
+    private var isJournalScope: Bool {
+        app.sidebarScope == .journal
+    }
+
     private var scopeTitle: String {
-        app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? app.sidebarScope.title
-            : "搜索结果"
+        query.isEmpty ? app.sidebarScope.title : "搜索结果"
+    }
+
+    /// 分组标题右边的数量。
+    private var headCount: Int {
+        if !query.isEmpty { return rows.count }
+        return isJournalScope ? app.journalEntries.count : rows.count
     }
 
     var body: some View {
         VStack(spacing: 0) {
             searchField
+            searchScopePicker
 
             List(selection: Binding(
                 get: { app.selection },
                 set: { app.select($0) }
             )) {
                 Section {
-                    scopeRow(.all, symbol: "tray.full", count: app.summaries.count)
+                    scopeRow(.all, symbol: "tray.full", count: app.noteCount)
                     scopeRow(.orphans, symbol: "circle.dashed", count: app.orphanCount)
+                    scopeRow(.journal, symbol: "calendar", count: app.journalEntries.count)
                     ForEach(app.tags) { tag in
                         scopeRow(.tag(tag.name), symbol: "number", count: tag.count)
                     }
@@ -37,24 +60,12 @@ struct SidebarView: View {
                 }
 
                 Section {
-                    if rows.isEmpty {
-                        emptyRow
-                    } else {
-                        ForEach(rows) { note in
-                            NoteRow(summary: note, isSelected: note.id == app.selection)
-                                .tag(note.id)
-                                .contextMenu {
-                                    Button("删除笔记", role: .destructive) {
-                                        app.deleteNote(id: note.id)
-                                    }
-                                }
-                        }
-                    }
+                    listRows
                 } header: {
                     HStack {
                         Text(scopeTitle)
                         Spacer()
-                        Text("\(rows.count)")
+                        Text("\(headCount)")
                             .monospacedDigit()
                     }
                     .font(.system(size: 10, weight: .medium))
@@ -76,6 +87,102 @@ struct SidebarView: View {
                     Image(systemName: "square.and.pencil")
                 }
                 .help("新建笔记 ⌘N")
+            }
+        }
+    }
+
+    // MARK: - 列表内容
+
+    @ViewBuilder
+    private var listRows: some View {
+        if !query.isEmpty {
+            if rows.isEmpty {
+                emptyRow
+            } else {
+                ForEach(noteRows) { note in
+                    noteListRow(note)
+                }
+                ForEach(journalRows) { hit in
+                    journalHitRow(hit)
+                }
+            }
+        } else if isJournalScope {
+            if app.journalEntries.isEmpty {
+                emptyRow
+            } else {
+                ForEach(app.journalEntries) { entry in
+                    journalRow(entry)
+                }
+            }
+        } else if rows.isEmpty {
+            emptyRow
+        } else {
+            ForEach(rows) { note in
+                noteListRow(note)
+            }
+        }
+    }
+
+    private func noteListRow(_ note: NoteSummary) -> some View {
+        NoteRow(summary: note, isSelected: note.id == app.selection)
+            .tag(note.id)
+            .contextMenu {
+                Button("删除笔记", role: .destructive) {
+                    app.deleteNote(id: note.id)
+                }
+            }
+    }
+
+    /// 日记范围：日期 + 星期 + 未完成待办条数。
+    private func journalRow(_ entry: JournalEntry) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "calendar")
+                .font(.system(size: 9))
+                .foregroundStyle(app.selection == entry.id ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.date)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                Text("\(entry.weekday) · 未完成 \(entry.openTodoCount) 条")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(entry.openTodoCount == 0 ? .tertiary : .secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .tag(entry.id)
+        .contextMenu {
+            Button("删除日记", role: .destructive) {
+                app.deleteNote(id: entry.id)
+            }
+        }
+    }
+
+    /// 搜索命中里的日记：日期 + 正文片段。
+    private func journalHitRow(_ hit: NoteSummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.secondary)
+                Text(hit.title)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+            }
+            Text(hit.snippet.isEmpty ? "日记 · 命中正文" : "日记 · \(hit.snippet)")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .tag(hit.id)
+        .contextMenu {
+            Button("删除日记", role: .destructive) {
+                app.deleteNote(id: hit.id)
             }
         }
     }
@@ -133,6 +240,31 @@ struct SidebarView: View {
         )
         .padding(.horizontal, 10)
         .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    /// 搜索范围：只搜笔记 / 含日记。默认只搜笔记，和 `⌘P` 一致。
+    private var searchScopePicker: some View {
+        HStack(spacing: 4) {
+            ForEach(SearchScope.allCases, id: \.self) { scope in
+                Button {
+                    app.searchScope = scope
+                } label: {
+                    Text(scope.title)
+                        .font(.system(size: 10, weight: app.searchScope == scope ? .medium : .regular))
+                        .foregroundStyle(app.searchScope == scope ? Color.accentColor : Color.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(app.searchScope == scope ? Color.accentColor.opacity(0.12) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10)
         .padding(.bottom, 6)
     }
 
@@ -143,7 +275,8 @@ struct SidebarView: View {
             Label("\(app.tags.count)", systemImage: "number")
                 .help("标签数量")
             Spacer()
-            Label("\(app.summaries.count)", systemImage: "square.stack")
+            Label("\(app.noteCount)", systemImage: "square.stack")
+                .help("普通笔记数（不含日记）")
         }
         .font(.system(size: 10).monospacedDigit())
         .foregroundStyle(.tertiary)
@@ -154,12 +287,22 @@ struct SidebarView: View {
 
     private var emptyRow: some View {
         HStack {
-            Text(app.summaries.isEmpty ? "还没有笔记。按 ⌘N 开始。" : "这个范围里没有笔记")
+            Text(emptyText)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Spacer()
         }
         .padding(.vertical, 6)
+    }
+
+    private var emptyText: String {
+        if !query.isEmpty { return "没有命中" }
+        if isJournalScope {
+            return app.noteCount == 0 && app.journalEntries.isEmpty
+                ? "还没有笔记。按 ⌘N 开始，⌘⇧J 打开今天的日记。"
+                : "还没有日记。按 ⌘⇧J 打开今天。"
+        }
+        return app.noteCount == 0 ? "还没有笔记。按 ⌘N 开始。" : "这个范围里没有笔记"
     }
 }
 
