@@ -14,6 +14,12 @@ struct SilvicsApp: App {
         }
         .windowToolbarStyle(.unifiedCompact)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("设置…") {
+                    SettingsWindowController.show(app: app)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("新建笔记") {
                     app.isShowingNewNote = true
@@ -59,6 +65,12 @@ struct SilvicsApp: App {
                     app.isShowingMentionsSheet = true
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
+
+                Button("处理同步冲突…") {
+                    app.isShowingConflicts = true
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(app.syncConflicts.isEmpty)
 
                 Button("撤销上次批量转换") {
                     app.undoLastConversion()

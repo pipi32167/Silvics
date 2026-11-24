@@ -131,6 +131,28 @@ Silvics/
 
 额外修掉：`completionItems` 与短查询搜索里 `LIKE` 未转义 `%` / `_` 的 bug。
 
+### 设置页（外观）
+
+| 验收项 | 状态 | 证据 |
+| --- | --- | --- |
+| 设置窗口（`⌘,`） | 完成 | `NSWindowController` + `NavigationSplitView`，外观 / 关于两页 |
+| 正文字号 / 代码字号 / 行距 | 完成 | 滑块即时生效，落 UserDefaults |
+| 字体族（无衬线 / 衬线 / 等宽） | 完成 | 编辑区与预览同步 |
+| 样式不进正文 | 完成 | `testBaseAttributesCarryCurrentFont` 等 13 + 5 项测试 |
+| 模型服务（BYOK） | 完成 | 12 家预设 + 自定义、Keychain 存 key、测试连接（401 实测映射为中文）、L3/L4 各自绑定、未配置时提示原因 |
+| 本地 LLM（magpie） | 完成 | 预设 `http://127.0.0.1:3425/v1`，`requiresKey=false`；模型列表拉取支持筛选 |
+| 同步冲突 LLM 合并 | 完成 | `ConflictResolver` + `ChatClient`；drill 实测 2.7 s 合并成功 |
+| 导入导出配置 | 完成 | JSON 不含密钥；重复服务导入时跳过 |
+| 恢复全部设置 | 完成 | 清 UserDefaults + 全部 `provider-*` 钥匙串项 |
+
+`Theme` 从静态常量改为 `Theme.apply(settings)` 驱动；`AppearanceSettings` 存 UserDefaults（key `silvics.appearance.settings`），与 `SyncSettings` 一致。
+
+模型服务：`ProviderService` 负责校验、增删、绑定、导入导出；`KeychainSecretStore` 只存密钥；`ProviderProbe` 拼 OpenAI 兼容 / Anthropic / Gemini 三种请求并做错误码映射。L3（概念线索）与 L4（相关笔记）本体还没做，等 P4 接上 `effective(_:)`。
+
+本地 LLM：magpie 在 `127.0.0.1:3425` 提供 OpenAI 兼容代理，无鉴权，`auto/*` 是路由组；`ProviderConfig.requiresKey=false` 时 `effective` 不要求密钥。magpie **没有** `/v1/embeddings`，L4 用不了。
+
+同步冲突合并：`VaultSync.lastConflicts` 收集 diff3 合不了的正文，`ConflictResolver` 用对话模型合并，校验后由用户在 `ConflictSheet` 确认。演练：`scripts/conflict-drill.sh`，结论见 `docs/测试-双客户端冲突.md`。
+
 ### P3
 
 | 验收项 | 状态 | 证据 |

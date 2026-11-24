@@ -17,6 +17,15 @@ final class AppState: ObservableObject {
     @Published var searchQuery: String = ""
     /// 侧栏当前范围：全部 / 孤儿 / 某个标签。
     @Published var sidebarScope: SidebarScope = .all
+    /// 外观设置。改动即时生效并落 UserDefaults。
+    @Published private(set) var appearance: AppearanceSettings = .init()
+    /// 模型服务设置。密钥在 Keychain，这里只有非敏感部分。
+    @Published private(set) var providerSettings = ProviderSettings()
+    /// 哪些 provider 已经存了密钥。列表里显示「已配置」用。
+    @Published private(set) var providersWithKey: Set<UUID> = []
+    /// 最近一次同步里没能自动合并的正文冲突。
+    @Published private(set) var syncConflicts: [VaultConflict] = []
+    @Published var isShowingConflicts: Bool = false
     /// 全部标签与使用次数。
     @Published private(set) var tags: [TagCount] = []
     @Published var isShowingQuickOpen: Bool = false
@@ -47,6 +56,8 @@ final class AppState: ObservableObject {
 
     private let repo: GRDBNoteRepository
     private let database: AppDatabase
+    /// 模型服务的读写与校验。密钥走 Keychain。
+    let providerService = ProviderService()
     private var saveTask: Task<Void, Never>?
     /// 最近一次落库的正文，用于跳过无变化的保存。
     private var lastSavedBody: String = ""
@@ -69,6 +80,9 @@ final class AppState: ObservableObject {
             self.repo = GRDBNoteRepository(db: db)
             self.statusMessage = "磁盘数据库打开失败，已改用临时内存库：\(error.localizedDescription)"
         }
+        appearance = AppearanceSettings.load()
+        Theme.apply(appearance)
+        providerSettings = providerService.settings
         loadAll(selectFirst: true)
     }
 
@@ -299,6 +313,85 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - 外观
+
+    /// 应用新的外观设置：先夹取，再套用，最后落 UserDefaults。
+    func updateAppearance(_ settings: AppearanceSettings) {
+        let clamped = settings.clamped
+        appearance = clamped
+        Theme.apply(clamped)
+        clamped.save()
+    }
+
+    func resetAppearance() {
+        updateAppearance(AppearanceSettings())
+    }
+
+    // MARK: - 模型服务
+
+    /// 重新读一遍 provider 列表与密钥状态。设置页出现时调用。
+    func refreshProviders() {
+        providerSettings = providerService.settings
+        var ready = Set<UUID>()
+        for provider in providerSettings.providers where providerService.hasSecret(for: provider.id) {
+            ready.insert(provider.id)
+        }
+        providersWithKey = ready
+    }
+
+    @discardableResult
+    func saveProvider(_ config: ProviderConfig, secret: String?) -> [String] {
+        let errors = providerService.upsert(config, secret: secret)
+        refreshProviders()
+        return errors
+    }
+
+    func deleteProvider(_ id: UUID) {
+        providerService.delete(id)
+        refreshProviders()
+    }
+
+    func bindProvider(_ role: ProviderRole, to id: UUID?) {
+        providerService.bind(role, to: id)
+        refreshProviders()
+    }
+
+    func maskedKey(for id: UUID) -> String? {
+        providerService.maskedSecret(for: id)
+    }
+
+    func hasKey(for id: UUID) -> Bool {
+        providersWithKey.contains(id)
+    }
+
+    func testProvider(_ id: UUID, role: ProviderRole) async -> ProbeResult {
+        guard let config = providerSettings.provider(id: id) else {
+            return ProbeResult(ok: false, message: "找不到这个服务", latencyMs: 0, detail: "")
+        }
+        let key = providerService.secret(for: id) ?? ""
+        if config.requiresKey && key.isEmpty {
+            return ProbeResult(ok: false, message: "先填密钥再测试", latencyMs: 0, detail: "")
+        }
+        return await ProviderProbe.run(config: config, key: key, role: role)
+    }
+
+    func exportProviderConfig() -> Data? { providerService.exportJSON() }
+
+    @discardableResult
+    func importProviderConfig(_ data: Data) -> [String] {
+        let messages = providerService.importJSON(data)
+        refreshProviders()
+        return messages
+    }
+
+    /// 恢复全部设置：外观回默认、清空服务商与密钥。
+    func resetAllSettings() {
+        providerService.resetAll(alsoAppearance: true)
+        appearance = AppearanceSettings()
+        Theme.apply(appearance)
+        refreshProviders()
+    }
+
     func rebuildIndexes() {
         do {
             try repo.rebuildAllIndexes()
@@ -497,6 +590,50 @@ final class AppState: ObservableObject {
 
 extension AppState {
 
+    #if DEBUG
+    /// 仅 DEBUG：取证用，直接塞一组冲突。
+    func debugSetConflicts(_ conflicts: [VaultConflict]) {
+        syncConflicts = conflicts
+    }
+    #endif
+
+    /// 用 LLM 合并一处冲突。返回合并后的正文，失败给中文原因。
+    func resolveConflictWithLLM(_ conflict: VaultConflict) async -> Result<String, LLMError> {
+        guard let effective = providerService.effective(.chat) else {
+            let reason = providerService.unavailableReason(.chat) ?? "没有可用的对话模型"
+            return .failure(LLMError(message: "需要先在「设置 → 模型服务」里配置对话模型：\(reason)"))
+        }
+        return await ConflictResolver.resolve(conflict, provider: effective.config, key: effective.key)
+    }
+
+    /// 采用合并结果：写回笔记、重算索引、导出到 vault。
+    func applyConflictResolution(_ conflict: VaultConflict, body: String) -> String? {
+        guard var note = try? repo.note(id: conflict.noteId) else { return "笔记不存在" }
+        note.body = body
+        do {
+            _ = try repo.save(note)
+            syncConflicts.removeAll { $0.noteId == conflict.noteId }
+            if syncSettings.isConfigured || !syncSettings.vaultPath.isEmpty {
+                let sync = VaultSync(repo: repo, settings: syncSettings)
+                DispatchQueue.global(qos: .utility).async {
+                    try? sync.exportAll()
+                    let git = sync.git
+                    if git.isRepository(), git.hasLocalChanges() {
+                        try? git.stageAll()
+                        if git.stagedChangesExist() {
+                            try? git.commit("resolve: \(conflict.title)")
+                        }
+                    }
+                }
+            }
+            loadAll()
+            reloadCurrent()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     func saveSyncSettings(_ settings: SyncSettings) {
         syncSettings = settings
         settings.save()
@@ -524,6 +661,7 @@ extension AppState {
             } catch let err {
                 failure = err.localizedDescription
             }
+            let conflicts = sync.lastConflicts
 
             DispatchQueue.main.async {
                 var settings = settings
@@ -536,6 +674,7 @@ extension AppState {
                 self.syncSettings = settings
                 settings.save()
                 self.isSyncing = false
+                if failure == nil { self.syncConflicts = conflicts }
                 self.loadAll()
                 done(failure.map { ["错误：" + $0] } ?? lines)
             }

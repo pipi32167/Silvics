@@ -35,6 +35,10 @@ struct RootView: View {
             SyncSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingConflicts) {
+            ConflictSheet()
+                .environmentObject(app)
+        }
         .sheet(isPresented: $app.isShowingQuickOpen) {
             QuickOpenSheet()
                 .environmentObject(app)
@@ -50,6 +54,8 @@ struct RootView: View {
             }
             DebugCapture.applyShowFlag(app)
             DebugCapture.runSelfTest(app)
+            DebugCapture.runConflictDrill(app)
+            DebugCapture.seedConflictDemo(app)
             DebugCapture.schedule()
             #endif
         }
@@ -111,6 +117,7 @@ private struct EditorPane: View {
                     text: note.body,
                     resolvedKeys: app.resolvedKeys,
                     mentions: app.mentionDecorations(),
+                    appearance: app.appearance,
                     onChange: { text in app.bodyDidChange(text) },
                     completionProvider: { query, limit in app.completionItems(query: query, limit: limit) },
                     onCreateNote: { title in app.createIfNeeded(title: title) },

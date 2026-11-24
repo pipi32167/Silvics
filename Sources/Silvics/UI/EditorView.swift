@@ -76,6 +76,8 @@ struct NoteEditorView: NSViewRepresentable {
     let resolvedKeys: Set<String>
     /// 当前笔记的未链接提及。画点状下划线，`⌘⇧K` 转换。
     let mentions: [MentionDecoration]
+    /// 外观设置。变化时重排样式（字号、行距、字体族）。
+    let appearance: AppearanceSettings
     /// 用户每改一个字就回报一次。
     var onChange: (String) -> Void
     /// 补全查询。
@@ -173,7 +175,8 @@ struct NoteEditorView: NSViewRepresentable {
             context.coordinator.didReceiveExternalText(text)
             context.coordinator.restyle(force: true)
         } else if context.coordinator.lastResolvedKeys != resolvedKeys
-                    || context.coordinator.lastMentions != mentions {
+                    || context.coordinator.lastMentions != mentions
+                    || context.coordinator.lastAppearance != appearance {
             context.coordinator.restyle(force: true)
         }
     }
@@ -198,12 +201,14 @@ struct NoteEditorView: NSViewRepresentable {
         fileprivate var lastPublishedText: String = ""
         fileprivate var lastResolvedKeys: Set<String> = []
         fileprivate var lastMentions: [MentionDecoration] = []
+        fileprivate var lastAppearance = AppearanceSettings()
 
         init(_ parent: NoteEditorView) {
             self.parent = parent
             self.lastPublishedText = parent.initialText
             self.lastResolvedKeys = parent.resolvedKeys
             self.lastMentions = parent.mentions
+            self.lastAppearance = parent.appearance
         }
 
         /// 外部改了正文（DB 侧改写），同步记录避免被当成用户输入再存一次。
@@ -265,6 +270,7 @@ struct NoteEditorView: NSViewRepresentable {
             lastPublishedText = text
             lastResolvedKeys = parent.resolvedKeys
             lastMentions = parent.mentions
+            lastAppearance = parent.appearance
 
             let spans = MarkdownStyler.analyze(text)
             let wikis = WikiScanner.scan(text)

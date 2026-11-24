@@ -148,12 +148,12 @@ private struct CompletionList: View {
     private func row(_ item: CompletionItem, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
             Image(systemName: item.isCreate ? "plus.circle" : item.status.symbolName)
-                .font(.system(size: 12))
+                .font(.system(size: CompletionMetrics.iconSize))
                 .foregroundStyle(item.isCreate ? Color.accentColor : Color.secondary)
                 .frame(width: 16)
 
             Text(item.isCreate ? "新建《\(item.title)》" : item.title)
-                .font(.system(size: 13))
+                .font(.system(size: CompletionMetrics.titleSize))
                 .lineLimit(1)
                 .truncationMode(.middle)
 
@@ -162,19 +162,30 @@ private struct CompletionList: View {
             if !item.isCreate {
                 if item.backlinkCount > 0 {
                     Text("\(item.backlinkCount)")
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.system(size: CompletionMetrics.metaSize).monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
                 Text(item.status.label)
-                    .font(.system(size: 10))
+                    .font(.system(size: CompletionMetrics.captionSize))
                     .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: 34)
+        .frame(height: CompletionMetrics.rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
         )
     }
+}
+
+/// 补全浮层的字号与行高跟随正文字号，避免字号调大后浮层还是小字。
+enum CompletionMetrics {
+    private static var scale: CGFloat { Theme.bodySize / 15 }
+
+    static var titleSize: CGFloat { max(11, 13 * scale) }
+    static var iconSize: CGFloat { max(10, 12 * scale) }
+    static var metaSize: CGFloat { max(9, 11 * scale) }
+    static var captionSize: CGFloat { max(9, 10 * scale) }
+    static var rowHeight: CGFloat { max(30, 34 * scale) }
 }
