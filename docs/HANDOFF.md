@@ -237,6 +237,31 @@ screencapture -x /tmp/full.png                # 整屏，再裁
 - **权限坑**：TCC 在进程启动时判定。给 Paseo 授权后，界面进程重启不够——真正 fork 出命令的 `Paseo Supervisor` / `Paseo Daemon` 也要重启，否则一直报 `could not create image from display`。验证用 `CGPreflightScreenCaptureAccess()`。
 - **自动化按键仍不可用**：`osascript` 报 `not allowed to send keystrokes / 不允许辅助访问`，因为「辅助功能」没有授权。要驱动鼠标键盘，得再给 Paseo 授「辅助功能」并重启常驻进程。
 
+### 真点击 / 真按键（辅助功能已授权）
+
+`osascript ... click at` 只发 `AXPress`，不移动光标，**不能**用来测编辑器。要真点击用 CGEvent：
+
+```bash
+# /tmp/ui.swift：ui click <x> <y> | ui key <keycode> cmd|cmdshift
+/tmp/ui click 900 367      # 真实鼠标点击（会落光标）
+/tmp/ui key 40 cmdshift    # ⌘⇧K
+```
+
+坐标换算是 **屏幕点 = 窗口原点 + 截图内坐标**。窗口截图是 1x 点尺寸，整屏截图是 2x。
+
+已用这条路验过（2026-11-24）：
+
+| 动作 | 结果 |
+| --- | --- |
+| 点进提及 → `⌘⇧K` | 正文变成 `[[标题]]`，mention 2→1，link 31→32 |
+| `⌘⇧M` → 全选 → 看 diff → 确认转换 | mention 2→0，link 31→33，两篇正文改写 |
+| 转换完成 → 撤销这次转换 | mention 回到 2，link 回到 31，正文复原 |
+| `⌘P` → 粘贴查询 → `↩` | 打开正确笔记 |
+| `⌘⇧R` → 改标题 → 重命名 | 标题改掉，旧标题进别名，正文引用改写，悬空 0 |
+| `⌘⇧A` → 加别名 / 加冲突别名 | 正常新增；冲突时提示「已有同名笔记，别名会与它冲突」 |
+
+`↩` 要发 `key code 36`，CGEvent 直接发虚拟键 36 在这台机器上没反应，用 `osascript -e 'tell application "System Events" to key code 36'` 可靠。
+
 ### 替代：合成事件自测
 
 不给辅助功能也能验证编辑器快捷键：`SILVICS_SELFTEST=convert` 会在启动后 2.5 秒把光标放进第一条提及，并合成一个 `⌘⇧K` 事件丢给 `NSTextView.keyDown`。走的是真实链路（`keyDown` → `shouldChangeText` → 改写 → 防抖保存），只是绕开系统键盘。
@@ -280,7 +305,7 @@ open -a .build/Build/Products/Debug/Silvics.app \
 | 项 | 说明 |
 | --- | --- |
 | 中文输入法未实测 | P1 遗留。需要人工在系统拼音输入法下敲一段中文。优先级最高 |
-| P2/P3 界面未人工点击验收 | 截图已可采，但「辅助功能」未授权，鼠标点击与键盘输入无法自动化。`⌘⇧K` 用合成事件验过，其余按钮只有单测与数据库证据 |
+| 界面验收方式 | 2026-11-24 起「辅助功能」已授权，用 CGEvent 真点击 + 真按键跑通了全部链路，见第 6 节 |
 | 补全面板位置 | TextKit 2 下用 `layoutManager` 算光标矩形，多行折行处可能偏 |
 | 补全不响应鼠标滚轮 | 列表超过 6 项时靠 ↑↓ |
 | 提及下划线刷新延迟 | 保存是 500 ms 防抖，转换后下划线消失要等保存完成 |

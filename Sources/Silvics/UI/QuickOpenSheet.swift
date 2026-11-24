@@ -48,17 +48,22 @@ struct QuickOpenSheet: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 2) {
-                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                                row(item, isSelected: index == selected)
-                                    .id(index)
-                                    .onTapGesture { activate(index) }
+                            ForEach(items) { item in
+                                row(item, isSelected: item.id == items[safe: selected]?.id)
+                                    .id(item.id)
+                                    .onTapGesture {
+                                        if let index = items.firstIndex(where: { $0.id == item.id }) {
+                                            activate(index)
+                                        }
+                                    }
                             }
                         }
                         .padding(6)
                     }
                     .onChange(of: selected) { _, newValue in
+                        guard let item = items[safe: newValue] else { return }
                         withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(newValue, anchor: .center)
+                            proxy.scrollTo(item.id, anchor: .center)
                         }
                     }
                 }
@@ -150,5 +155,11 @@ struct QuickOpenSheet: View {
         guard items.indices.contains(index) else { return }
         app.select(items[index].id)
         dismiss()
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
