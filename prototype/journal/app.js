@@ -1148,6 +1148,7 @@ function bind() {
   $("#modal-new-confirm").onclick = createToday;
   $("#modal-todos-close").onclick = () => ($("#modal-todos").hidden = true);
   $("#modal-quick-close").onclick = () => ($("#modal-quick").hidden = true);
+  $("#modal-tests-close").onclick = () => ($("#modal-tests").hidden = true);
   $("#quick-input").oninput = (e) => renderQuick(e.target.value);
 
   $("#toggle-journal-mentions").onchange = (e) => {
