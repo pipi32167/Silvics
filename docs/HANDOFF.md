@@ -4,7 +4,7 @@
 
 - 交接时间：2026-11-22
 - 项目路径：`~/work/dev/Silvics`
-- 当前阶段：P1、P2、P3 完成，P4 未开始
+- 当前阶段：P1、P2、P3 完成；备份与同步（git）完成，未合并主分支；P4 未开始
 - 设计文档：[设计文档.md](设计文档.md)（先读它，共 13 章）
 
 ---
@@ -154,6 +154,24 @@ Silvics/
 | Dock 实测 | 完成 | `NSWorkspace.icon(forFile:)` 取 512 / 128 / 32 / 16 全部为本图 |
 
 取证图在 `/tmp/reports/silvics-icon/`，入库的只有 `docs/images/app-icon.png`（1024）与 `app-icon-128.png`（README 用）。
+
+### 备份与同步（分支 `feat/vault-sync`）
+
+| 验收项 | 状态 | 证据 |
+| --- | --- | --- |
+| vault 导出（md + frontmatter + manifest） | 完成 | 幂等：连续导出两次，第二次写 0 个文件 |
+| 别名与已忽略提及进 vault | 完成 | 单测 `testAliasesAndDismissedSurviveRoundTrip` |
+| 从 vault 恢复 | 完成 | 清空数据库后启动，imported=21，库回到 21 笔记 / 31 边 / 5 标签 |
+| git 双向同步 | 完成 | 本机 bare 仓库当远端，两台「设备」互推互拉，6 个集成测试 |
+| 三方合并 | 完成 | `LineMerge`（diff3），不同位置改动自动合，同行冲突留档 |
+| 冲突留档 | 完成 | `.conflicts/` 存两份原文，正文不留 `<<<<<<<` |
+| 校验 | 完成 | manifest 哈希、条数、与远端差集四项 |
+| 面板 | 完成 | `⌘⇧B`；观感证据是 `ImageRenderer` 离屏渲染，不是窗口截图 |
+| 单测 | 完成 | 134 项全过（原 99 + 35 新增） |
+
+设计说明见 [备份与同步.md](备份与同步.md)。
+
+顺手修了两个存量 bug：`TextNormalizer.bodyHash` 用 `Hasher` 跨进程不稳定；`MentionIndex.rebuildAll` 会清掉 `dismissed`。
 
 ## 5. 怎么跑
 

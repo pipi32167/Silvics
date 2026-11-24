@@ -7,6 +7,7 @@ Silvics：单人用的 macOS 原生笔记应用。笔记正文是 Markdown 纯�
 - `docs/设计文档.md` —— 设计取舍与本机实测数据（13 章）
 - `docs/HANDOFF.md` —— 进度、已知坑、下一步
 - `docs/RELEASE.md` —— 版本策略与发布脚本
+- `docs/备份与同步.md` —— vault 格式、git 同步流程、合并与冲突规则
 
 ## 环境
 
@@ -57,6 +58,14 @@ open .build/Build/Products/Debug/Silvics.app
 # 带演示数据启动。仅 DEBUG，且仅在库为空时生效，灌 21 条互相引用的笔记。
 rm -rf "$HOME/Library/Application Support/Silvics"
 open .build/Build/Products/Debug/Silvics.app --env SILVICS_SEED=1
+
+# 备份/同步：把库导成 vault 并推一次（面板里同样能点）
+open .build/Build/Products/Debug/Silvics.app \
+  --env SILVICS_VAULT=/tmp/vault --env SILVICS_REMOTE=/tmp/remote.git --env SILVICS_SYNC=1
+
+# 重新生成 App 图标。.xcassets 在 sources 下自动收，不用重跑 xcodegen。
+swiftc -O -o /tmp/icongen tools/icon/draw.swift
+/tmp/icongen Sources/Silvics/Resources/Assets.xcassets /tmp/reports/silvics-icon
 ```
 
 **不要跑 `-configuration Release` 的测试。** 测试目标用 `@testable import`，Release 下报 `Unable to resolve Swift module dependency`。需要 Release 性能数字就单独 `swiftc -O` 编相关文件。
@@ -76,7 +85,7 @@ scripts/release.sh --check-upload    # 验证上传通道
 
 ## 测试
 
-`Tests/SilvicsTests/`，XCTest，共 88 项。
+`Tests/SilvicsTests/`，XCTest，共 134 项（P1–P3 99 项 + 备份与同步 35 项）。
 
 `EditorKit/` 与 `Core/` 不得导入 SwiftUI 或 AppKit 的 UI 部分。改这两个目录时先补失败测试再改实现。
 
@@ -104,6 +113,11 @@ scripts/release.sh --check-upload    # 验证上传通道
 - 提及扫描不得在按键时重建自动机，用 `MentionIndex.scanner(in:)`（按标题集合指纹缓存）。
 - 索引重算只能走 `reindexAll(note:in:)`，顺序：引用 → 引用解析 → FTS → 提及 → 标签。
 - L3（概念抽取）与 L4（语义近邻）的建议永不改写用户正文。
+- **vault 导出只写不删。** 库空了不能连带清空 vault（备份会一起没）。删除笔记走 `VaultSync.removeFromVault(id:)`。
+- **绝不让 git 做合并。** `git merge` 会把冲突标记写进正文。合并走 `LineMerge`，git 只收已解决干净的提交。
+- **判断 git 成败只看退出码。** `git remote get-url` 失败时也会往 stdout 写 `error: ...`，拿输出判空会误判。
+- **`TextNormalizer.bodyHash` 必须跨进程稳定。** 用 SHA256，不要用 Swift `Hasher`（每进程随机加盐）。
+- `MentionIndex.rebuildAll` 必须保留 `dismissed`（用户的决定不在正文里）。
 
 ## 分层与目录
 

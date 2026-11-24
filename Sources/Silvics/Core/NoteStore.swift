@@ -12,6 +12,12 @@ protocol NoteRepository {
     func outgoing(from noteId: String) throws -> [NoteLink]
     func completionItems(query: String, limit: Int) throws -> [CompletionItem]
     func noteExists(titleKey: String) throws -> Bool
+
+    // vault 导出与恢复。备份、同步共用。
+    func deviceId() throws -> String
+    func vaultNotes() throws -> [VaultFormat.Note]
+    @discardableResult
+    func importVaultNotes(_ incoming: [VaultFormat.Note]) throws -> VaultImportReport
     func orphanCount() throws -> Int
     func recentTitles(limit: Int) throws -> [String]
 

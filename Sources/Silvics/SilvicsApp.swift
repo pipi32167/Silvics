@@ -70,6 +70,19 @@ struct SilvicsApp: App {
                 Button("重建全部索引") {
                     app.rebuildIndexes()
                 }
+
+                Divider()
+
+                Button("备份与同步…") {
+                    app.isShowingSyncSheet = true
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+
+                Button("立即同步") {
+                    app.performSyncWork({ try [$0.sync().summary] }, done: { _ in })
+                }
+                .keyboardShortcut("y", modifiers: [.command, .shift])
+                .disabled(app.isSyncing)
             }
         }
     }

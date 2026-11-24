@@ -81,12 +81,23 @@ enum MentionIndex {
     }
 
     /// 全库重扫提及。标题或别名变化后调用。
+    ///
+    /// `dismissed` 必须跨重建保留：它是用户的决定，正文里没有，重建一次就丢是数据损失。
     static func rebuildAll(in db: Database) throws {
+        let dismissedPairs = try Row.fetchAll(
+            db, sql: "SELECT noteId, targetId FROM mention WHERE dismissed = 1"
+        ).map { (noteId: $0["noteId"] as String, targetId: $0["targetId"] as String) }
         let scanner = try scanner(in: db)
         try db.execute(sql: "DELETE FROM mention")
         let notes = try Note.fetchAll(db)
         for note in notes {
             try reindex(note: note, scanner: scanner, in: db)
+        }
+        for pair in dismissedPairs {
+            try db.execute(
+                sql: "UPDATE mention SET dismissed = 1 WHERE noteId = ? AND targetId = ?",
+                arguments: [pair.noteId, pair.targetId]
+            )
         }
     }
 
