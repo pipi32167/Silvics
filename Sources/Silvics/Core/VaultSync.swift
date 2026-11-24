@@ -24,6 +24,14 @@ final class VaultSync {
     var conflictsURL: URL { vaultURL.appendingPathComponent(VaultFormat.conflictsDir, isDirectory: true) }
     var trashURL: URL { vaultURL.appendingPathComponent(VaultFormat.trashDir, isDirectory: true) }
 
+    /// 某个类型目录的完整 URL。
+    func noteDirURL(_ dir: String) -> URL {
+        vaultURL.appendingPathComponent(dir, isDirectory: true)
+    }
+
+    /// 所有已知笔记目录。`notes/` 一定在第一个。
+    var noteDirURLs: [URL] { VaultFormat.noteDirs.map(noteDirURL) }
+
     var git: GitClient {
         GitClient(
             workDir: vaultURL,
@@ -35,7 +43,7 @@ final class VaultSync {
 
     func prepareDirectories() throws {
         let fm = FileManager.default
-        for dir in [vaultURL, notesURL, baseURL, conflictsURL, trashURL] {
+        for dir in [vaultURL, baseURL, conflictsURL, trashURL] + noteDirURLs {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         let ignore = vaultURL.appendingPathComponent(".gitignore")
@@ -58,7 +66,8 @@ final class VaultSync {
         for note in snapshot {
             live.insert(note.id)
             let data = Data(VaultFormat.encode(note).utf8)
-            let url = notesURL.appendingPathComponent(VaultFormat.fileName(for: note.id))
+            let url = noteDirURL(VaultFormat.noteDir(for: note.type))
+                .appendingPathComponent(VaultFormat.noteFileName(id: note.id, type: note.type))
             if try VaultFormat.writeAtomic(data, to: url) { written += 1 }
         }
 
@@ -76,8 +85,18 @@ final class VaultSync {
     /// 笔记被删掉时同步删掉 vault 里的文件。只有用户主动删除才调用。
     func removeFromVault(id: String) throws {
         let fm = FileManager.default
-        let file = notesURL.appendingPathComponent(VaultFormat.fileName(for: id))
-        if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
+        // 类型可能已经被改过，逐个目录找，不让旧目录里的文件变成孤儿。
+        // 日记的文件名是日期，不是 id，所以两种名字都要试。
+        var names = [VaultFormat.fileName(for: id)]
+        if let date = VaultFormat.journalDate(fromID: id) {
+            names.append(VaultFormat.fileName(for: date))
+        }
+        for dir in noteDirURLs {
+            for name in names {
+                let file = dir.appendingPathComponent(name)
+                if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
+            }
+        }
         let base = baseFileURL(id)
         if fm.fileExists(atPath: base.path) { try fm.removeItem(at: base) }
     }
@@ -85,15 +104,18 @@ final class VaultSync {
     // MARK: - 读取 vault
 
     func readVaultNotes() throws -> [VaultFormat.Note] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: notesURL.path)) ?? []
-        var notes: [VaultFormat.Note] = []
-        for name in names where name.hasSuffix(".md") {
-            let url = notesURL.appendingPathComponent(name)
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            guard let note = try? VaultFormat.decode(text) else { continue }
-            notes.append(note)
+        var entries: [(dir: String, note: VaultFormat.Note)] = []
+        for dir in VaultFormat.noteDirs {
+            let base = noteDirURL(dir)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
+            for name in names.sorted() where name.hasSuffix(".md") {
+                let url = base.appendingPathComponent(name)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                guard let note = try? VaultFormat.decode(text) else { continue }
+                entries.append((dir, note))
+            }
         }
-        return notes
+        return VaultFormat.dedupe(entries)
     }
 
     /// 从 vault 全量恢复（新机器、或库被清空）。返回报告。
@@ -115,7 +137,7 @@ final class VaultSync {
         var problems: [String] = []
         let fm = FileManager.default
 
-        if !fm.fileExists(atPath: notesURL.path) {
+        if !fm.fileExists(atPath: vaultURL.path) {
             return VerifyResult(ok: false, problems: ["vault 目录不存在"], summary: "未初始化")
         }
 
@@ -126,8 +148,16 @@ final class VaultSync {
             return VerifyResult(ok: false, problems: ["manifest.json 缺失或损坏"], summary: "未初始化")
         }
 
-        let files = (try? fm.contentsOfDirectory(atPath: notesURL.path)) ?? []
-        let fileIds = Set(files.compactMap { VaultFormat.id(fromFileName: $0) })
+        var fileIds = Set<String>()
+        for dir in noteDirURLs {
+            let files = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in files where name.hasSuffix(".md") {
+                guard let text = try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8),
+                      let note = try? VaultFormat.decode(text)
+                else { continue }
+                fileIds.insert(note.id)
+            }
+        }
         let manifestIds = Set(manifest.notes.map(\.id))
 
         if fileIds != manifestIds {
@@ -142,7 +172,9 @@ final class VaultSync {
 
         var hashMismatch = 0
         for entry in manifest.notes {
-            let url = notesURL.appendingPathComponent(VaultFormat.fileName(for: entry.id))
+            let dir = entry.dir ?? VaultFormat.notesDir
+            let file = entry.file ?? VaultFormat.fileName(for: entry.id)
+            let url = noteDirURL(dir).appendingPathComponent(file)
             guard let text = try? String(contentsOf: url, encoding: .utf8) else {
                 hashMismatch += 1
                 continue
@@ -333,8 +365,8 @@ final class VaultSync {
         var toDelete: [String] = []
 
         for path in changed {
-            guard path.hasPrefix(VaultFormat.notesDir + "/") else { continue }
-            guard let id = VaultFormat.id(fromFileName: (path as NSString).lastPathComponent) else { continue }
+            guard VaultFormat.isNotePath(path) else { continue }
+            guard let id = VaultFormat.noteID(fromFileName: (path as NSString).lastPathComponent) else { continue }
 
             let remoteText = git.fileContent(path: path, ref: "origin/\(branch)")
             let remote = remoteText.flatMap { try? VaultFormat.decode($0) }
@@ -589,14 +621,17 @@ final class VaultSync {
     /// 同步成功后把当前文件全部记为 base。下次三方合并要用。
     private func writeBaseFiles() throws {
         try prepareDirectories()
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: notesURL.path)) ?? []
         var live = Set<String>()
-        for name in names where name.hasSuffix(".md") {
-            guard let id = VaultFormat.id(fromFileName: name) else { continue }
-            live.insert(id)
-            let url = notesURL.appendingPathComponent(name)
-            guard let data = try? Data(contentsOf: url) else { continue }
-            try VaultFormat.writeAtomic(data, to: baseFileURL(id))
+        for dir in noteDirURLs {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in names where name.hasSuffix(".md") {
+                let url = dir.appendingPathComponent(name)
+                guard let data = try? Data(contentsOf: url) else { continue }
+                // 日记的文件名是日期，id 只能从内容里读。
+                guard let note = try? VaultFormat.decode(String(decoding: data, as: UTF8.self)) else { continue }
+                live.insert(note.id)
+                try VaultFormat.writeAtomic(data, to: baseFileURL(note.id))
+            }
         }
         let bases = (try? FileManager.default.contentsOfDirectory(atPath: baseURL.path)) ?? []
         for name in bases where name.hasSuffix(".md") {

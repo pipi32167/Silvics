@@ -296,9 +296,13 @@ struct GRDBNoteRepository: NoteRepository {
     // MARK: - 索引
 
     /// 在当前库内把「标题或别名」映射到笔记 id。引用解析与提及扫描共用。
+    ///
+    /// `linkable = false` 的类型（日记）不进表：指向它的 `[[ ]]` 保持悬空。
     static func linkTargets(in db: Database) throws -> [String: String] {
         var idByKey: [String: String] = [:]
-        for row in try Row.fetchAll(db, sql: "SELECT id, titleKey FROM note") {
+        for row in try Row.fetchAll(db, sql: "SELECT id, titleKey, type FROM note") {
+            let type: String = row["type"] ?? NoteTypes.noteID
+            guard NoteTypes.descriptor(for: type).linkable else { continue }
             idByKey[row["titleKey"]] = row["id"]
         }
         for row in try Row.fetchAll(db, sql: "SELECT noteId, nameKey FROM alias") {

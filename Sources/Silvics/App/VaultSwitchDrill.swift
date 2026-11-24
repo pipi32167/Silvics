@@ -134,9 +134,14 @@ enum VaultSwitchDrill {
     }
 
     private static func fileCount(_ vault: URL) -> Int {
-        let dir = vault.appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return names.filter { $0.hasSuffix(".md") }.count
+        var count = 0
+        for dir in VaultFormat.noteDirs {
+            let names = (try? FileManager.default.contentsOfDirectory(
+                atPath: vault.appendingPathComponent(dir, isDirectory: true).path
+            )) ?? []
+            count += names.filter { $0.hasSuffix(".md") }.count
+        }
+        return count
     }
 }
 #endif

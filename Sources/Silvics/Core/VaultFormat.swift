@@ -6,6 +6,8 @@ import Foundation
 /// ```text
 /// <vault>/
 ///   notes/<id>.md        真相层：frontmatter + 正文
+///   journal/<日期>.md    日记，按类型落目录
+///   templates/<名字>.md  日记模板，只读
 ///   manifest.json        内容索引：条数与每篇哈希
 ///   .base/<id>.md        上次同步时的版本，三方合并的 base（不进 git）
 ///   .conflicts/          合并不了的两份原文（不进 git）
@@ -15,6 +17,7 @@ enum VaultFormat {
 
     static let schema = 1
     static let notesDir = "notes"
+    static let templatesDir = "templates"
     static let baseDir = ".base"
     static let conflictsDir = ".conflicts"
     static let trashDir = ".trash"
@@ -95,6 +98,92 @@ enum VaultFormat {
     static func id(fromFileName name: String) -> String? {
         guard name.hasSuffix(".md") else { return nil }
         return String(name.dropLast(3))
+    }
+
+    /// 日期式文件名（`2026-11-24.md`）换回日记 id（`j20261124`）；其他文件名按 id 原样返回。
+    ///
+    /// 只靠文件名拿 id 的路径（同步、自检）用它。正文里的 id 仍以文件内容为准。
+    static func noteID(fromFileName name: String) -> String? {
+        guard let base = id(fromFileName: name) else { return nil }
+        let parts = base.split(separator: "-", omittingEmptySubsequences: false)
+        if parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+           parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) {
+            return NoteTypes.journalID(for: base)
+        }
+        return base
+    }
+
+    /// 日记 id → 日期（`j20261124` → `2026-11-24`）。不是日记 id 时返回 nil。
+    static func journalDate(fromID id: String) -> String? {
+        guard id.hasPrefix("j") else { return nil }
+        let digits = Array(id.dropFirst())
+        guard digits.count == 8, digits.allSatisfy(\.isNumber) else { return nil }
+        return "\(String(digits[0..<4]))-\(String(digits[4..<6]))-\(String(digits[6..<8]))"
+    }
+
+    /// 笔记在类型目录里的文件名。
+    ///
+    /// 日记用日期（`journal/2026-11-24.md`，方便手工找），id 由日期派生，两者一一对应。
+    /// 其他类型用 id。
+    static func noteFileName(id: String, type: String) -> String {
+        if NoteTypes.descriptor(for: type).idIsDateDerived, let date = journalDate(fromID: id) {
+            return fileName(for: date)
+        }
+        return fileName(for: id)
+    }
+
+    // MARK: - 路径
+
+    /// 某个类型在 vault 里的目录。`fileDir` 为空时退回 `notes`。
+    static func noteDir(for type: String) -> String {
+        let dir = NoteTypes.descriptor(for: type).fileDir
+        return dir.isEmpty ? notesDir : dir
+    }
+
+    /// 所有已知类型的笔记目录，去重且排序。读取、校验、同步都按它扫。
+    static var noteDirs: [String] {
+        var dirs = Set<String>([notesDir])
+        for descriptor in NoteTypes.all.values where !descriptor.fileDir.isEmpty {
+            dirs.insert(descriptor.fileDir)
+        }
+        return dirs.sorted()
+    }
+
+    /// vault 内的相对路径。日记落 `journal/<日期>.md`，普通笔记落 `notes/<id>.md`。
+    static func relativePath(id: String, type: String) -> String {
+        "\(noteDir(for: type))/\(noteFileName(id: id, type: type))"
+    }
+
+    /// 这个相对路径是不是一篇笔记：已知目录的直接子文件，且是 `.md`。
+    static func isNotePath(_ path: String) -> Bool {
+        guard path.hasSuffix(".md") else { return false }
+        let parts = path.split(separator: "/")
+        guard parts.count == 2 else { return false }
+        return noteDirs.contains(String(parts[0]))
+    }
+
+    // MARK: - 去重
+
+    /// 一批文件读出来可能同一 id 有两份：改类型时旧目录里会留一份旧文件。
+    ///
+    /// 去重规则：目录与类型一致的那份优先；否则取 `updatedAt` 更新的。
+    /// 返回按 id 排序，保证读进来的顺序与目录列举无关。
+    static func dedupe(_ entries: [(dir: String, note: Note)]) -> [Note] {
+        var best: [String: (dir: String, note: Note)] = [:]
+        for entry in entries {
+            guard let current = best[entry.note.id] else {
+                best[entry.note.id] = entry
+                continue
+            }
+            let entryFits = noteDir(for: entry.note.type) == entry.dir
+            let currentFits = noteDir(for: current.note.type) == current.dir
+            if entryFits != currentFits {
+                if entryFits { best[entry.note.id] = entry }
+            } else if entry.note.updatedAt > current.note.updatedAt {
+                best[entry.note.id] = entry
+            }
+        }
+        return best.values.map(\.note).sorted { $0.id < $1.id }
     }
 
     // MARK: - 写
@@ -201,7 +290,22 @@ enum VaultFormat {
 
     // MARK: - 读
 
-    static func decode(_ text: String) throws -> Note {
+    /// frontmatter 的原始解析结果。只认结构，不校验笔记字段。
+    ///
+    /// 模板文件（`templates/<名字>.md`）没有 id / title / created，走 `parse` 而不是 `decode`。
+    struct Frontmatter: Equatable {
+        var scalars: [String: String] = [:]
+        var lists: [String: [String]] = [:]
+        var sections: [String: [String: String]] = [:]
+        var rawSections: [String: [String]] = [:]
+        var body: String = ""
+
+        /// 取一个段。不存在或解析不了时返回 nil。
+        func section(_ name: String) -> [String: String]? { sections[name] }
+    }
+
+    /// 解析 frontmatter 与正文。结构不对才抛错，字段缺不缺交给调用方。
+    static func parse(_ text: String) throws -> Frontmatter {
         let lines = text.components(separatedBy: "\n")
         guard lines.first == "---" else { throw ParseError.missingHeader }
         guard let end = lines.dropFirst().firstIndex(of: "---") else { throw ParseError.missingHeader }
@@ -270,6 +374,22 @@ enum VaultFormat {
             }
         }
 
+        return Frontmatter(
+            scalars: scalars,
+            lists: lists,
+            sections: sections,
+            rawSections: rawSections,
+            body: lines[(end + 1)...].joined(separator: "\n")
+        )
+    }
+
+    static func decode(_ text: String) throws -> Note {
+        let frontmatter = try parse(text)
+        let scalars = frontmatter.scalars
+        let lists = frontmatter.lists
+        var sections = frontmatter.sections
+        let rawSections = frontmatter.rawSections
+
         guard let id = scalars["id"] else { throw ParseError.missingField("id") }
         guard let title = scalars["title"] else { throw ParseError.missingField("title") }
         let type = scalars["type"] ?? NoteTypes.noteID
@@ -299,7 +419,6 @@ enum VaultFormat {
             extra.rawSections[key] = rawSections[key]
         }
 
-        let body = lines[(end + 1)...].joined(separator: "\n")
         return Note(
             id: id,
             title: title,
@@ -308,7 +427,7 @@ enum VaultFormat {
             updatedAt: updated,
             aliases: lists["aliases"] ?? [],
             dismissed: lists["dismissed"] ?? [],
-            body: body,
+            body: frontmatter.body,
             type: type,
             meta: meta,
             extra: extra
@@ -428,6 +547,10 @@ enum VaultFormat {
             var hash: String
             var title: String
             var updated: Int64
+            /// 所在目录。旧 manifest 没有这个字段，缺省按 `notes`。
+            var dir: String? = nil
+            /// 文件名。日记是日期式文件名，不能从 id 直接推。旧 manifest 缺省按 `<id>.md`。
+            var file: String? = nil
         }
     }
 
@@ -436,7 +559,16 @@ enum VaultFormat {
             schema: schema,
             count: notes.count,
             notes: notes
-                .map { Manifest.Entry(id: $0.id, hash: hash($0.body), title: $0.title, updated: $0.updatedAt) }
+                .map {
+                    Manifest.Entry(
+                        id: $0.id,
+                        hash: hash($0.body),
+                        title: $0.title,
+                        updated: $0.updatedAt,
+                        dir: noteDir(for: $0.type),
+                        file: noteFileName(id: $0.id, type: $0.type)
+                    )
+                }
                 .sorted { $0.id < $1.id }
         )
     }

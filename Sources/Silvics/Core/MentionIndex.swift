@@ -13,9 +13,13 @@ enum MentionIndex {
     private static let cache = MentionScannerCache()
 
     /// 全库标题与别名。扫描时再按 `targetId` 排除笔记自身。
+    ///
+    /// `linkable = false` 的类型（日记）不当候选：日期标题不该在正文里被当成提及。
     static func patterns(in db: Database) throws -> [MentionPattern] {
         var patterns: [MentionPattern] = []
-        for row in try Row.fetchAll(db, sql: "SELECT id, title FROM note") {
+        for row in try Row.fetchAll(db, sql: "SELECT id, title, type FROM note") {
+            let type: String = row["type"] ?? NoteTypes.noteID
+            guard NoteTypes.descriptor(for: type).linkable else { continue }
             patterns.append(MentionPattern(
                 targetId: row["id"],
                 displayName: row["title"],
@@ -57,6 +61,8 @@ enum MentionIndex {
             arguments: [note.id]
         ))
         try db.execute(sql: "DELETE FROM mention WHERE noteId = ?", arguments: [note.id])
+        // `scanMentions = false` 的类型（日记）不跑提及扫描，先清后跳。
+        guard note.noteType.scanMentions else { return }
         guard !note.body.isEmpty else { return }
 
         // 排除区：代码块、行内代码、已有引用。
