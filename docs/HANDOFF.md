@@ -193,6 +193,22 @@ sqlite3 "$HOME/Library/Application Support/Silvics/silvics.sqlite" \
 
 **不要用 `xcodebuild test -configuration Release`。** 测试目标是 `@testable import`，Release 下编译报 `Unable to resolve Swift module dependency`。需要 Release 性能数字时，用 `swiftc -O` 单独编 `MentionScanner.swift` + `StopWords.swift` 跑脚本。
 
+### 发布
+
+```bash
+scripts/release.sh 0.1.1 --dry-run   # 只构建 + 打包
+scripts/release.sh 0.1.1             # 提交版本号、打 tag、推送、建 Release
+```
+
+版本号只由脚本写进 `project.yml`。细节见 `docs/RELEASE.md`。
+
+- 当前线上版本：**v0.1.0**（2026-11-24）。DMG 3.0 MB，ad-hoc 签名，arm64。
+- 上传通道已验证：`scripts/release.sh --check-upload`（建 draft → 传资产 → 删除）。
+- 下载回来的 dmg 与本地产物 sha256 一致。
+- 坑：无开发者证书时 `codesign --sign -` 只能 ad-hoc。下载者首次打开要右键「打开」，或 `xattr -d com.apple.quarantine`。
+- 坑：`xcodebuild -showBuildSettings` 不带 `-derivedDataPath` 会返回默认 DerivedData 路径，产物路径直接用 `.build/Build/Products/Release`。
+- 坑：shell 里 `$VAR` 紧跟中文会被吞进变量名，必须写 `${VAR}`。
+
 ### 本机已验证
 
 ```text
