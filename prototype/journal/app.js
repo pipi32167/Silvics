@@ -1,11 +1,12 @@
-/* Silvics 日记 · 低保真原型
+/* Silvics 日记 · 低保真原型（v2）
  *
- * 只做能点的界面与状态变化，不做 Markdown 渲染、不做补全、不做持久化到 vault。
- * 所有数据在 SEED 里，用户点击结果存 localStorage，方便反复评审。
+ * 关键改动：日记就是一份 Markdown 文本，和概念笔记同构。
+ * 模板只在新建时注入骨架；勾选、承接都是对文本的编辑，不是对结构化字段的编辑。
+ * 单栏，可在「源码 / 预览」之间切换。
  */
 
 const TODAY = "2026-11-24";
-const STORAGE_KEY = "silvics.journal.proto.v1";
+const STORAGE_KEY = "{{SECRET_0c4n1r7g}}";
 
 const SEED = {
   templates: [
@@ -40,56 +41,38 @@ const SEED = {
       body: "这条没有任何引用，也不引用别人 —— 用来演示孤儿计数。",
     },
   ],
+  // 日记 = 纯 Markdown 文本
   journals: [
     {
       id: "j20261121",
       date: "2026-11-21",
-      sections: [
-        {
-          name: "工作",
-          items: [
-            { text: "写完同步方案的验收项", done: true },
-            { text: "把 0.1.1 的坑补进 HANDOFF", done: false },
-          ],
-          paras: [],
-        },
-        {
-          name: "生活",
-          items: [{ text: "复核同步的冲突留档", done: false }],
-          paras: ["今天重读 [[标题即接口]] 这一段，有了新感觉。"],
-        },
-      ],
+      body: [
+        "## 工作",
+        "- [x] 写完同步方案的验收项",
+        "- [ ] 把 0.1.1 的坑补进 HANDOFF",
+        "",
+        "## 生活",
+        "- [ ] 复核同步的冲突留档",
+        "",
+        "今天重读 [[标题即接口]] 这一段，有了新感觉。",
+      ].join("\n"),
     },
     {
       id: "j20261123",
       date: "2026-11-23",
-      sections: [
-        {
-          name: "承接",
-          carriedFrom: "2026-11-21",
-          items: [
-            { text: "把 0.1.1 的坑补进 HANDOFF", done: false },
-            { text: "复核同步的冲突留档", done: false },
-          ],
-          paras: [],
-        },
-        {
-          name: "工作",
-          items: [
-            { text: "讨论日记方案", done: true },
-            { text: "补 issue 里五个待定项", done: false },
-          ],
-          paras: [],
-        },
-        {
-          name: "生活",
-          items: [],
-          paras: [
-            "早上跑步 5 公里，[[稀疏重复优于集中突击]] 在跑步上同样成立。",
-            "另外想到标题即接口这件事 —— 这里故意不写引用，用来演示未链接提及。",
-          ],
-        },
-      ],
+      body: [
+        "## 承接（来自 11-21）",
+        "- [ ] 把 0.1.1 的坑补进 HANDOFF",
+        "- [ ] 复核同步的冲突留档",
+        "",
+        "## 工作",
+        "- [x] 讨论日记方案",
+        "- [ ] 补 issue 里五个待定项",
+        "",
+        "## 生活",
+        "早上跑步 5 公里，[[稀疏重复优于集中突击]] 在跑步上同样成立。",
+        "另外想到标题即接口这件事 —— 这里故意不写引用，用来演示未链接提及。",
+      ].join("\n"),
     },
   ],
   lastModules: ["工作", "生活"],
@@ -104,6 +87,7 @@ function load() {
   if (raw) {
     try {
       state = JSON.parse(raw);
+      if (!state.journalMode) state.journalMode = "source";
       return;
     } catch {
       /* 落回种子 */
@@ -116,7 +100,7 @@ function load() {
     search: "",
     selection: { type: "note", id: "n1" },
     journalMentions: false,
-    highlight: null,
+    journalMode: "source",
   };
 }
 
@@ -141,20 +125,71 @@ function weekday(date) {
   return "周" + "日一二三四五六"[d.getDay()];
 }
 
-function noteByTitle(title) {
-  return state.notes.find((n) => n.title === title);
+const noteByTitle = (t) => state.notes.find((n) => n.title === t);
+const journalByDate = (d) => state.journals.find((j) => j.date === d);
+const journalById = (id) => state.journals.find((j) => j.id === id);
+const todayJournalId = () => journalByDate(TODAY)?.id || null;
+
+// ---------- Markdown 极简解析 ----------
+//
+// 只认三种：`## 标题`、`- [ ] / - [x]`、其余当段落。
+// 返回的行都带 line 号，勾选时靠它把「视图里的一次点击」写回「文本里的那一行」。
+
+function parseBody(body) {
+  const lines = body.split("\n");
+  const blocks = [];
+  let para = null;
+
+  lines.forEach((raw, i) => {
+    const line = raw;
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    const todo = line.match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.*)$/);
+
+    if (heading) {
+      para = null;
+      blocks.push({ type: "heading", level: heading[1].length, text: heading[2], line: i });
+      return;
+    }
+    if (todo) {
+      para = null;
+      blocks.push({
+        type: "todo",
+        indent: todo[1].length,
+        done: todo[2].toLowerCase() === "x",
+        text: todo[3],
+        line: i,
+      });
+      return;
+    }
+    if (!line.trim()) {
+      para = null;
+      return;
+    }
+    if (!para) {
+      para = { type: "p", text: line, line: i };
+      blocks.push(para);
+    } else {
+      para.text += "\n" + line;
+    }
+  });
+
+  return blocks;
 }
 
-function journalByDate(date) {
-  return state.journals.find((j) => j.date === date);
+/** 文本里所有未完成待办。 */
+function openTodosIn(body) {
+  return parseBody(body)
+    .filter((b) => b.type === "todo" && !b.done)
+    .map((b) => b.text);
 }
 
-function allJournalTexts(j) {
-  return j.sections.flatMap((s) => [...s.items.map((i) => i.text), ...s.paras]);
-}
-
-function journalOpenItems(j) {
-  return j.sections.flatMap((s) => s.items.filter((i) => !i.done).map((i) => i.text));
+/** 翻转某一行的复选框，其余字符一个不动。 */
+function toggleTodoLine(body, lineIndex) {
+  const lines = body.split("\n");
+  lines[lineIndex] = lines[lineIndex].replace(/- \[([ xX])\]/, (_, mark) =>
+    mark.toLowerCase() === "x" ? "- [ ]" : "- [x]"
+  );
+  return lines.join("\n");
 }
 
 // ---------- 派生数据 ----------
@@ -168,29 +203,29 @@ function backlinksFor(title) {
     }
   }
   for (const j of state.journals) {
-    const hit = allJournalTexts(j).find((t) => t.includes(`[[${title}]]`));
-    if (hit) out.push({ type: "journal", date: j.date, label: `${j.date} 日记`, snippet: hit });
+    if (!j.body.includes(`[[${title}]]`)) continue;
+    const hit = j.body.split("\n").find((l) => l.includes(`[[${title}]]`)) || "";
+    out.push({ type: "journal", date: j.date, label: `${j.date} 日记`, snippet: hit });
   }
   return out;
 }
 
-/** 日记里「没加 [[ ]] 就写了概念标题」的地方。 */
 function mentionsIn(j) {
-  const texts = allJournalTexts(j);
-  const plain = texts.join("\n").replace(/\[\[[^\]]+\]\]/g, "");
+  const plain = j.body.replace(/\[\[[^\]]+\]\]/g, "");
   return state.notes
     .filter((n) => plain.includes(n.title))
     .map((n) => ({
       title: n.title,
-      snippet: texts.find((t) => t.includes(n.title)) || "",
+      snippet: j.body.split("\n").find((l) => l.includes(n.title)) || "",
     }));
 }
 
 function orphans() {
   return state.notes.filter((n) => {
     const hasOut = /\[\[[^\]]+\]\]/.test(n.body);
-    const hasIn = state.notes.some((o) => o.id !== n.id && o.body.includes(`[[${n.title}]]`))
-      || state.journals.some((j) => allJournalTexts(j).some((t) => t.includes(`[[${n.title}]]`)));
+    const hasIn =
+      state.notes.some((o) => o.id !== n.id && o.body.includes(`[[${n.title}]]`)) ||
+      state.journals.some((j) => j.body.includes(`[[${n.title}]]`));
     return !hasOut && !hasIn;
   });
 }
@@ -199,29 +234,33 @@ function orphans() {
 function aggregatedTodos() {
   const map = new Map();
   for (const j of [...state.journals].sort((a, b) => a.date.localeCompare(b.date))) {
-    for (const s of j.sections) {
-      for (const it of s.items) {
-        const key = it.text.trim();
-        if (!key) continue;
-        const rec = map.get(key) || { text: key, days: [], done: false, date: j.date };
-        if (!rec.days.includes(j.date)) rec.days.push(j.date);
-        rec.done = it.done;
-        rec.latest = j.date;
-        map.set(key, rec);
-      }
+    for (const b of parseBody(j.body)) {
+      if (b.type !== "todo") continue;
+      const key = b.text.trim();
+      const rec = map.get(key) || { text: key, days: [], done: false, latest: j.date, earliest: j.date };
+      if (!rec.days.includes(j.date)) rec.days.push(j.date);
+      rec.done = b.done;
+      rec.latest = j.date;
+      map.set(key, rec);
     }
   }
-  return [...map.values()]
-    .filter((r) => !r.done)
-    .sort((a, b) => (b.latest || "").localeCompare(a.latest || ""));
+  return [...map.values()].filter((r) => !r.done).sort((a, b) => b.latest.localeCompare(a.latest));
 }
 
-/** 「上一个有日记的日子」：不跳天，就是最近那篇。 */
+/** 「上一个有日记的日子」：最近那一篇，不跳天。 */
 function previousJournal(beforeDate) {
-  const earlier = state.journals
+  return [...state.journals]
     .filter((j) => j.date < beforeDate)
-    .sort((a, b) => b.date.localeCompare(a.date));
-  return earlier[0] || null;
+    .sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+}
+
+function carryBlock(fromDate, items) {
+  return [
+    `## 承接（来自 ${fromDate.slice(5)}）`,
+    ...items.map((t) => `- [ ] ${t}`),
+    "",
+    "",
+  ].join("\n");
 }
 
 // ---------- 渲染 ----------
@@ -238,57 +277,57 @@ function renderSidebar() {
   $("#count-journal").textContent = state.journals.length;
   $("#count-orphan").textContent = orphans().length;
 
-  document.querySelectorAll("#scope-all, #scope-journal, #scope-orphan").forEach((b) => {
-    b.classList.toggle("on", b.dataset.scope === state.scope);
-  });
-  document.querySelectorAll("#search-scope button").forEach((b) => {
-    b.classList.toggle("on", b.dataset.scope === state.searchScope);
-  });
+  ["#scope-all", "#scope-journal", "#scope-orphan"].forEach((s) =>
+    $(s).classList.toggle("on", $(s).dataset.scope === state.scope)
+  );
+  document.querySelectorAll("#search-scope button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.scope === state.searchScope)
+  );
 
   const list = $("#list");
   const q = state.search.trim();
 
   if (state.scope === "journal") {
     $("#list-title").textContent = "日记（倒序）";
-    const rows = [...state.journals]
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map((j) => {
-        const open = journalOpenItems(j).length;
-        const on = state.selection.type === "journal" && state.selection.id === j.id;
-        const dot = open ? `<span class="dot" title="有 ${open} 条未完成"></span>` : "";
-        return `<button class="item journal ${on ? "on" : ""}" data-kind="journal" data-id="${j.id}">
-          <span class="date">${j.date}</span>${dot}
-          <span class="sub">${weekday(j.date)} · 未完成 ${open} 条</span>
-        </button>`;
-      });
-    list.innerHTML = rows.join("") || `<div class="hint">还没有日记</div>`;
+    const matched = q
+      ? state.journals.filter((j) => j.body.includes(q) || j.date.includes(q))
+      : state.journals;
+    list.innerHTML =
+      [...matched]
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .map((j) => {
+          const open = openTodosIn(j.body).length;
+          const on = state.selection.type === "journal" && state.selection.id === j.id;
+          return `<button class="item journal ${on ? "on" : ""}" data-kind="journal" data-id="${j.id}">
+            <span class="date">${j.date}</span>${open ? `<span class="dot"></span>` : ""}
+            <span class="sub">${weekday(j.date)} · 未完成 ${open} 条</span>
+          </button>`;
+        })
+        .join("") || `<div class="hint">${q ? "没有命中的日记" : "还没有日记"}</div>`;
     return;
   }
 
   $("#list-title").textContent = state.scope === "orphan" ? "孤儿笔记" : "笔记";
   let notes = state.scope === "orphan" ? orphans() : state.notes;
-  if (q) {
-    notes = notes.filter((n) => n.title.includes(q) || n.body.includes(q));
-  }
+  if (q) notes = notes.filter((n) => n.title.includes(q) || n.body.includes(q));
+
   const noteRows = notes.map((n) => {
     const on = state.selection.type === "note" && state.selection.id === n.id;
-    const bl = backlinksFor(n.title).length;
     return `<button class="item ${on ? "on" : ""}" data-kind="note" data-id="${n.id}">
-      ${esc(n.title)}
-      <span class="sub">被引用 ${bl}</span>
+      ${esc(n.title)}<span class="sub">被引用 ${backlinksFor(n.title).length}</span>
     </button>`;
   });
 
-  // 搜索范围内含日记时，命中正文的日记也列出来
   const journalRows =
     q && state.searchScope === "all"
       ? state.journals
-          .filter((j) => allJournalTexts(j).some((t) => t.includes(q)) || j.date.includes(q))
+          .filter((j) => j.body.includes(q) || j.date.includes(q))
           .sort((a, b) => b.date.localeCompare(a.date))
-          .map((j) => `<button class="item journal" data-kind="journal" data-id="${j.id}">
-            <span class="date">${j.date}</span>
-            <span class="sub">日记 · 命中正文</span>
-          </button>`)
+          .map(
+            (j) => `<button class="item journal" data-kind="journal" data-id="${j.id}">
+              <span class="date">${j.date}</span><span class="sub">日记 · 命中正文</span>
+            </button>`
+          )
       : [];
 
   list.innerHTML = [...noteRows, ...journalRows].join("") || `<div class="hint">没有命中</div>`;
@@ -296,68 +335,164 @@ function renderSidebar() {
 
 function renderEditor() {
   const el = $("#editor");
+
   if (state.selection.type === "note") {
     const n = state.notes.find((x) => x.id === state.selection.id);
-    if (!n) {
-      el.innerHTML = `<div class="empty">笔记不存在</div>`;
-      return;
-    }
-    el.innerHTML = `
-      <div class="note-head">
-        <h1>${esc(n.title)}</h1>
-        <div class="note-meta">概念笔记 · 反向链接 ${backlinksFor(n.title).length} 条</div>
-      </div>
-      <div class="note-body">
-        ${n.body.split("\n").map((p) => `<p>${renderWikilinks(p)}</p>`).join("")}
-      </div>`;
+    el.innerHTML = n
+      ? `<div class="note-head">
+           <h1>${esc(n.title)}</h1>
+           <div class="note-meta">概念笔记 · 反向链接 ${backlinksFor(n.title).length} 条</div>
+         </div>
+         <div class="note-body">
+           ${n.body.split("\n").map((p) => `<p>${renderWikilinks(p)}</p>`).join("")}
+         </div>`
+      : `<div class="empty">笔记不存在</div>`;
     bindWikilinks();
     return;
   }
 
-  const j = state.journals.find((x) => x.id === state.selection.id);
+  const j = journalById(state.selection.id);
   if (!j) {
     el.innerHTML = `<div class="empty">日记不存在</div>`;
     return;
   }
 
-  const sections = j.sections
-    .map((s) => {
-      const head = s.carriedFrom
-        ? `<h2>承接 <span class="src">（来自 ${s.carriedFrom.slice(5)}）</span></h2>`
-        : `<h2>${esc(s.name)}</h2>`;
-      const items = s.items
-        .map(
-          (it, idx) => `<li class="${it.done ? "done" : ""}" data-item="${idx}" data-section="${esc(s.name)}">
-            <input type="checkbox" ${it.done ? "checked" : ""}
-                   data-toggle="${idx}" data-section="${esc(s.name)}">
-            <span class="text">${renderWikilinks(it.text)}</span>
-          </li>`
-        )
-        .join("");
-      const paras = s.paras.map((p) => `<p>${renderWikilinks(p)}</p>`).join("");
-      return `<div class="section">${head}<ul>${items}</ul>${paras}</div>`;
-    })
-    .join("");
-
   el.innerHTML = `
     <div class="journal-head">
       <h1>${j.date}</h1>
       <span class="wkd">${weekday(j.date)}</span>
-      <span class="tag">日记 · 不可改名 · 不进 ⌘P</span>
+      <span class="tag">日记 · Markdown · 不可改名</span>
     </div>
-    ${sections}
-    <div class="composer">
-      <input id="composer" type="text" placeholder="写一条…（支持 [[概念]]）">
-      <button id="composer-add">添加</button>
-    </div>
-    ${
-      j.id === todayJournalId()
-        ? `<div class="callout">勾掉这里的条目不会改昨天那一份。历史保留未完成，待办总览按「最近一天的状态」聚合。</div>`
-        : ""
-    }`;
 
-  bindWikilinks();
-  bindJournalEditor(j);
+    <div class="editor-bar">
+      <div class="seg" id="journal-mode">
+        <button data-mode="source" class="${state.journalMode === "source" ? "on" : ""}">源码</button>
+        <button data-mode="preview" class="${state.journalMode === "preview" ? "on" : ""}">预览</button>
+      </div>
+      <button id="btn-carry" class="ghost">插入承接（光标处）</button>
+      <span class="caret-info" id="caret-info"></span>
+    </div>
+
+    ${
+      state.journalMode === "source"
+        ? `<textarea id="journal-src" spellcheck="false">${esc(j.body)}</textarea>`
+        : `<div class="preview-body" id="journal-preview">${renderMarkdown(j.body)}</div>`
+    }
+  `;
+
+  $("#journal-mode").onclick = (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    state.journalMode = btn.dataset.mode;
+    render();
+  };
+  $("#btn-carry").onclick = () => insertCarry(j);
+
+  if (state.journalMode === "source") {
+    const ta = $("#journal-src");
+    ta.oninput = () => {
+      j.body = ta.value;
+      refreshCounts();
+      save();
+    };
+    ta.onkeyup = ta.onclick = updateCaretInfo;
+    updateCaretInfo();
+  } else {
+    bindWikilinks();
+    document.querySelectorAll("#journal-preview input[data-line]").forEach((box) => {
+      box.onchange = () => {
+        const line = Number(box.dataset.line);
+        j.body = toggleTodoLine(j.body, line);
+        render();
+        if (isCarriedLine(j, line)) {
+          toast("已勾掉。承接来源那天的正文没变 —— 历史不改，总览按最近一天算。");
+        }
+      };
+    });
+  }
+}
+
+/** 日记的 markdown → 可点的视图。 */
+function renderMarkdown(body) {
+  const blocks = parseBody(body);
+  let html = "";
+  let listOpen = null;
+
+  const closeList = () => {
+    if (listOpen !== null) {
+      html += "</ul>";
+      listOpen = null;
+    }
+  };
+
+  for (const b of blocks) {
+    if (b.type === "heading") {
+      closeList();
+      const inner = renderWikilinks(b.text).replace(
+        /（来自 (\d{2}-\d{2})）/g,
+        '<span class="src">（来自 $1）</span>'
+      );
+      html += `<h${b.level}>${inner}</h${b.level}>`;
+      continue;
+    }
+    if (b.type === "todo") {
+      if (listOpen !== b.indent) {
+        closeList();
+        html += `<ul class="todo">`;
+        listOpen = b.indent;
+      }
+      html += `<li class="${b.done ? "done" : ""}">
+        <input type="checkbox" data-line="${b.line}" ${b.done ? "checked" : ""}>
+        <span>${renderWikilinks(b.text)}</span>
+      </li>`;
+      continue;
+    }
+    closeList();
+    html += `<p>${renderWikilinks(b.text).replace(/\n/g, "<br>")}</p>`;
+  }
+  closeList();
+  return html || `<div class="hint">这一天还是空的。切到「源码」开始写。</div>`;
+}
+
+function isCarriedLine(j, line) {
+  // 往上找最近的 `## 承接（来自 xx-xx）`
+  const lines = j.body.split("\n");
+  for (let i = line; i >= 0; i--) {
+    if (/^##\s/.test(lines[i])) return /^##\s*承接（来自/.test(lines[i]);
+  }
+  return false;
+}
+
+function updateCaretInfo() {
+  const ta = $("#journal-src");
+  const info = $("#caret-info");
+  if (!ta || !info) return;
+  const before = ta.value.slice(0, ta.selectionStart);
+  const line = before.split("\n").length;
+  info.textContent = `光标：第 ${line} 行`;
+}
+
+function refreshCounts() {
+  // 输入时不重绘编辑器（会丢焦点），只更新左栏计数与条目上的未完成数
+  $("#count-journal").textContent = state.journals.length;
+  const j = journalById(state.selection.id);
+  if (!j) return;
+  const open = openTodosIn(j.body).length;
+  document.querySelectorAll(".item.journal").forEach((btn) => {
+    if (btn.dataset.id !== j.id) return;
+    const sub = btn.querySelector(".sub");
+    if (sub) sub.textContent = `${weekday(j.date)} · 未完成 ${open} 条`;
+  });
+}
+
+function bindWikilinks() {
+  document.querySelectorAll(".wikilink").forEach((el) => {
+    el.onclick = () => {
+      const n = noteByTitle(el.dataset.target);
+      if (n) selectNote(n.id);
+      else toast(`「${el.dataset.target}」还没有笔记（悬空引用）`);
+    };
+  });
 }
 
 function renderRight() {
@@ -370,41 +505,36 @@ function renderRight() {
     el.innerHTML =
       links
         .map(
-          (b) => `<button class="item" data-kind="${b.type}" ${b.type === "note" ? `data-id="${b.id}"` : `data-date="${b.date}"`}>
-            ${esc(b.label)}<span class="sub">${esc(b.snippet.slice(0, 28))}…</span>
-          </button>`
+          (b) => `<button class="item" data-kind="${b.type}" ${
+            b.type === "note" ? `data-id="${b.id}"` : `data-date="${b.date}"`
+          }>${esc(b.label)}<span class="sub">${esc(b.snippet.slice(0, 26))}…</span></button>`
         )
         .join("") || `<div class="hint">还没有反向链接</div>`;
     el.querySelectorAll(".item").forEach((btn) => {
-      btn.onclick = () => {
-        if (btn.dataset.kind === "note") selectNote(btn.dataset.id);
-        else selectJournalByDate(btn.dataset.date);
-      };
+      btn.onclick = () =>
+        btn.dataset.kind === "note" ? selectNote(btn.dataset.id) : selectJournalByDate(btn.dataset.date);
     });
-
     $("#mentions").innerHTML = "";
     $("#mention-hint").textContent = "提及面板只对日记有意义，这条是概念笔记。";
     return;
   }
 
-  const j = state.journals.find((x) => x.id === sel.id);
+  const j = journalById(sel.id);
   if (!j) return;
 
-  // 日记视角：这里演示「日记作为来源」出现在谁的反向链接里
-  const asSource = state.notes.filter((n) => allJournalTexts(j).some((t) => t.includes(`[[${n.title}]]`)));
+  const asSource = state.notes.filter((n) => j.body.includes(`[[${n.title}]]`));
   el.innerHTML =
     asSource
-      .map((n) => `<button class="item" data-kind="note" data-id="${n.id}">
-        ${esc(n.title)}<span class="sub">这一天引用了它</span>
-      </button>`)
+      .map(
+        (n) => `<button class="item" data-kind="note" data-id="${n.id}">
+          ${esc(n.title)}<span class="sub">这一天引用了它</span></button>`
+      )
       .join("") || `<div class="hint">这一天还没引用任何概念</div>`;
   el.querySelectorAll(".item").forEach((btn) => {
     btn.onclick = () => selectNote(btn.dataset.id);
   });
 
-  const toggle = $("#toggle-journal-mentions");
-  toggle.checked = state.journalMentions;
-
+  $("#toggle-journal-mentions").checked = state.journalMentions;
   const mentionBox = $("#mentions");
   if (!state.journalMentions) {
     $("#mention-hint").textContent = "已关闭：日记不参与提及扫描（设置项）";
@@ -418,48 +548,6 @@ function renderRight() {
       .map((m) => `<div class="item">${esc(m.title)}<span class="sub">${esc(m.snippet.slice(0, 26))}…</span></div>`)
       .join("");
   }
-}
-
-function bindWikilinks() {
-  document.querySelectorAll(".wikilink").forEach((el) => {
-    el.onclick = () => {
-      const target = el.dataset.target;
-      const n = noteByTitle(target);
-      if (n) selectNote(n.id);
-      else toast(`「${target}」还没有笔记（悬空引用）`);
-    };
-  });
-}
-
-function bindJournalEditor(j) {
-  document.querySelectorAll("input[data-toggle]").forEach((box) => {
-    box.onchange = () => {
-      const section = j.sections.find((s) => s.name === box.dataset.section);
-      const item = section.items[Number(box.dataset.toggle)];
-      item.done = box.checked;
-      render();
-      if (section.carriedFrom && box.checked) {
-        toast(`已勾掉。${section.carriedFrom} 那份仍是未完成 —— 历史不改，总览按最近一天算。`);
-      }
-    };
-  });
-
-  const input = $("#composer");
-  const add = () => {
-    const text = input.value.trim();
-    if (!text) return;
-    const last = j.sections[j.sections.length - 1];
-    last.paras.push(text);
-    input.value = "";
-    render();
-    // 新加的内容里如果出现某条笔记标题，提示它成为了反向链接来源
-    const hit = state.notes.find((n) => text.includes(n.title));
-    if (hit) toast(`已记录。「${hit.title}」的反向链接会多出「${j.date} 日记」`);
-  };
-  $("#composer-add").onclick = add;
-  input.onkeydown = (e) => {
-    if (e.key === "Enter") add();
-  };
 }
 
 // ---------- 选择 ----------
@@ -481,20 +569,15 @@ function selectJournalByDate(date) {
   render();
 }
 
-function todayJournalId() {
-  return journalByDate(TODAY)?.id || null;
-}
-
 function goToday() {
-  if (todayJournalId()) {
-    selectJournalByDate(TODAY);
-  } else {
+  if (todayJournalId()) selectJournalByDate(TODAY);
+  else {
     toast("还没有今天的日记。点「新建今天的日记」。");
     openNewToday();
   }
 }
 
-// ---------- 新建今天的日记 ----------
+// ---------- 新建 / 承接 ----------
 
 function openNewToday() {
   if (todayJournalId()) {
@@ -502,8 +585,7 @@ function openNewToday() {
     selectJournalByDate(TODAY);
     return;
   }
-  const picker = $("#module-picker");
-  picker.innerHTML = state.templates
+  $("#module-picker").innerHTML = state.templates
     .slice()
     .sort((a, b) => a.order - b.order)
     .map(
@@ -511,9 +593,8 @@ function openNewToday() {
         ${state.lastModules.includes(t.name) ? "checked" : ""}> ${esc(t.name)}</label>`
     )
     .join("");
-
   renderCarryPreview();
-  picker.onchange = renderCarryPreview;
+  $("#module-picker").onchange = renderCarryPreview;
   $("#modal-new").hidden = false;
 }
 
@@ -524,9 +605,9 @@ function renderCarryPreview() {
     box.textContent = "没有更早的日记，今天不承接。";
     return;
   }
-  const open = journalOpenItems(prev);
+  const open = openTodosIn(prev.body);
   box.textContent = open.length
-    ? `来自 ${prev.date}（上一个有日记的日子），将带入 ${open.length} 条未完成：\n` +
+    ? `来自 ${prev.date}（上一个有日记的日子），将带入 ${open.length} 条未完成，插入位置＝创建后光标所在处：\n` +
       open.map((t) => `· ${t}`).join("\n")
     : `来自 ${prev.date}，那天没有未完成项，不需要承接。`;
 }
@@ -537,33 +618,80 @@ function createToday() {
     toast("至少选一个模块");
     return;
   }
-  const prev = previousJournal(TODAY);
-  const sections = [];
 
-  if (prev) {
-    const open = journalOpenItems(prev);
-    if (open.length) {
-      sections.push({
-        name: "承接",
-        carriedFrom: prev.date,
-        items: open.map((text) => ({ text, done: false })),
-        paras: [],
-      });
-    }
-  }
+  // 模板 = 一次性骨架，之后随便改
+  const skeleton = state.templates
+    .filter((t) => picked.includes(t.name))
+    .sort((a, b) => a.order - b.order)
+    .map((t) => `## ${t.name}\n\n`)
+    .join("");
 
-  for (const name of picked) {
-    sections.push({ name, items: [], paras: [] });
-  }
-
-  const j = { id: `j${TODAY.replace(/-/g, "")}`, date: TODAY, sections };
+  const j = { id: `j${TODAY.replace(/-/g, "")}`, date: TODAY, body: skeleton };
   state.journals.push(j);
   state.lastModules = picked;
   state.selection = { type: "journal", id: j.id };
   state.scope = "journal";
+  state.journalMode = "source";
   $("#modal-new").hidden = true;
   render();
-  toast(`已创建 ${TODAY}。承接 ${sections[0]?.carriedFrom ? sections[0].items.length : 0} 条未完成。`);
+
+  // 创建后光标落在文首，承接插在光标处
+  const ta = $("#journal-src");
+  if (ta) {
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = 0;
+    const prev = previousJournal(TODAY);
+    const items = prev ? openTodosIn(prev.body) : [];
+    if (items.length) {
+      ta.selectionStart = ta.selectionEnd = 0;
+      insertCarry(j, prev.date);
+    } else {
+      toast(`已创建 ${TODAY}。模板已预填，光标在文首。`);
+    }
+  }
+}
+
+/** 把上一个有日记的日子的未完成项，插到光标处。 */
+function insertCarry(j, forcedDate) {
+  const ta = $("#journal-src");
+  const prev = forcedDate ? journalByDate(forcedDate) : previousJournal(j.date);
+  if (!prev) {
+    toast("没有更早的日记可承接");
+    return;
+  }
+  const header = `承接（来自 ${prev.date.slice(5)}）`;
+  if (j.body.includes(header)) {
+    toast(`${prev.date} 的承接已经在正文里了，不重复插入。`);
+    return;
+  }
+  const items = openTodosIn(prev.body);
+  if (!items.length) {
+    toast(`${prev.date} 没有未完成项`);
+    return;
+  }
+
+  const block = carryBlock(prev.date, items);
+  if (!ta) {
+    // 预览模式下没有光标，退回插到文首
+    j.body = block + j.body;
+    render();
+    toast(`预览模式没有光标，承接到插到文首（${items.length} 条）。`);
+    return;
+  }
+
+  const pos = ta.selectionStart ?? 0;
+  // 光标前不是空行时补空行，避免承接标题贴在上面那段正文后面
+  const head = j.body.slice(0, pos);
+  const lead = pos === 0 || head.endsWith("\n\n") ? "" : head.endsWith("\n") ? "\n" : "\n\n";
+  j.body = head + lead + block + j.body.slice(pos);
+  ta.value = j.body;
+  ta.focus();
+  const caret = pos + lead.length + block.length;
+  ta.selectionStart = ta.selectionEnd = caret;
+  updateCaretInfo();
+  refreshCounts();
+  save();
+  toast(`承接 ${items.length} 条，插在第 ${j.body.slice(0, caret).split("\n").length} 行。`);
 }
 
 // ---------- 待办总览 ----------
@@ -575,7 +703,7 @@ function openTodos() {
       .map(
         (r) => `<button class="item" data-date="${r.latest}" data-text="${esc(r.text)}">
           ${esc(r.text)}
-          <span class="sub">最近出现在 ${r.latest}${r.days.length > 1 ? ` · 共 ${r.days.length} 天` : ""}</span>
+          <span class="sub">最早 ${r.days[0]} · 最近 ${r.latest}${r.days.length > 1 ? ` · 共 ${r.days.length} 天` : ""}</span>
         </button>`
       )
       .join("") || `<div class="hint">没有未完成的待办</div>`;
@@ -592,13 +720,13 @@ function openTodos() {
 
 function highlight(text) {
   setTimeout(() => {
-    document.querySelectorAll(".section li").forEach((li) => {
+    document.querySelectorAll("#journal-preview li").forEach((li) => {
       if (li.textContent.includes(text)) {
         li.classList.add("hit");
         li.scrollIntoView({ block: "center" });
       }
     });
-  }, 30);
+  }, 40);
 }
 
 // ---------- 按标题打开 ----------
@@ -613,9 +741,8 @@ function openQuick() {
 function renderQuick(q) {
   const notes = state.notes.filter((n) => n.title.includes(q));
   $("#quick-list").innerHTML =
-    notes
-      .map((n) => `<button class="item" data-id="${n.id}">${esc(n.title)}</button>`)
-      .join("") || `<div class="hint">没有命中</div>`;
+    notes.map((n) => `<button class="item" data-id="${n.id}">${esc(n.title)}</button>`).join("") ||
+    `<div class="hint">没有命中</div>`;
   document.querySelectorAll("#quick-list .item").forEach((btn) => {
     btn.onclick = () => {
       $("#modal-quick").hidden = true;
@@ -632,10 +759,10 @@ function toast(msg) {
   el.textContent = msg;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), 3600);
+  toastTimer = setTimeout(() => (el.hidden = true), 4200);
 }
 
-// ---------- 事件绑定 ----------
+// ---------- 事件 ----------
 
 function bind() {
   $("#scope-all").onclick = () => {
@@ -656,9 +783,7 @@ function bind() {
   $("#list").onclick = (e) => {
     const btn = e.target.closest(".item");
     if (!btn) return;
-    if (btn.dataset.kind === "journal") selectJournalByDate(
-      state.journals.find((j) => j.id === btn.dataset.id)?.date
-    );
+    if (btn.dataset.kind === "journal") selectJournalByDate(journalById(btn.dataset.id)?.date);
     else selectNote(btn.dataset.id);
   };
 
@@ -695,13 +820,12 @@ function bind() {
   };
 
   window.addEventListener("keydown", (e) => {
-    if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
-        e.preventDefault();
-        openQuick();
-      }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      openQuick();
       return;
     }
+    if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
     if (e.key.toLowerCase() === "j") {
       e.preventDefault();
       goToday();
