@@ -314,7 +314,9 @@ open -a .build/Build/Products/Debug/Silvics.app \
 15. **深色图标别写进 `AppIcon.appiconset`。** `appearances: luminosity/dark` 在 deployment target 14.0 下不被 actool 接收，每次构建报 10 条 `unassigned children`。等切 Icon Composer（macOS 26 起）再加。生成器会把深色母版落到预览目录。
 16. **`AppIcon.icns` 只有 16/32/128/256 四个尺寸，是正常的。** actool 瘦身所致，10 个尺寸在 `Assets.car` 里。Dock 走 `CFBundleIconFile` → `Assets.car`，别照 icns 的尺寸数下结论。
 17. **图标不要手改 `Assets.xcassets` 里的 PNG。** 母版是 `tools/icon/draw.swift`，重跑一行命令就全覆盖。
-18. **提及与引用的写入顺序**：`reindex` → `resolveAllLinks` → `updateFTS` → `MentionIndex.reindex`，统一收在 `GRDBNoteRepository.reindexAll`。别在别处拆开写。
+18. **`pkill -f "Silvics.app/Contents/MacOS/Silvics"` 会连执行它的 shell 一起杀掉**（命令行里含同样的字符串，退出码 143）。用 `pkill -f "[S]ilvics.app/Contents/MacOS"`。
+19. **`open -a <相对路径>` 报「Unable to find application」**。用 `open .build/Build/Products/Debug/Silvics.app`。
+20. **提及与引用的写入顺序**：`reindex` → `resolveAllLinks` → `updateFTS` → `MentionIndex.reindex`，统一收在 `GRDBNoteRepository.reindexAll`。别在别处拆开写。
 
 ## 8. 已知缺陷与未做
 
