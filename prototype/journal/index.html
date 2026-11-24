@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Silvics 日记 · 低保真原型</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="banner">
+  <strong>低保真原型</strong> · 日记类型（issue #3）· 固定「今天 = 2026-11-24」· 数据是假的，点击结果存 localStorage
+  <button id="btn-reset" class="ghost">重置</button>
+</div>
+
+<div class="app">
+
+  <!-- 左栏 -->
+  <aside class="col col-left">
+    <div class="search">
+      <input id="search" type="text" placeholder="搜索…">
+      <div class="seg" id="search-scope">
+        <button data-scope="notes">只搜笔记</button>
+        <button data-scope="all">含日记</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">视图</div>
+      <button class="row" id="scope-all" data-scope="all">
+        <span>全部</span><span class="num" id="count-all">0</span>
+      </button>
+      <button class="row" id="scope-journal" data-scope="journal">
+        <span>日记</span><span class="num" id="count-journal">0</span>
+      </button>
+      <button class="row" id="scope-orphan" data-scope="orphan">
+        <span>孤儿</span><span class="num" id="count-orphan">0</span>
+      </button>
+    </div>
+
+    <div class="group grow">
+      <div class="group-title" id="list-title">笔记</div>
+      <div id="list" class="list"></div>
+    </div>
+
+    <div class="actions">
+      <button id="btn-today" class="primary">跳到今天 <kbd>⌘⇧J</kbd></button>
+      <button id="btn-new-today">新建今天的日记</button>
+      <button id="btn-todos">待办总览 <kbd>⌘⇧T</kbd></button>
+      <button id="btn-quickopen">按标题打开 <kbd>⌘P</kbd></button>
+    </div>
+  </aside>
+
+  <!-- 中栏 -->
+  <main class="col col-mid" id="editor"></main>
+
+  <!-- 右栏 -->
+  <aside class="col col-right">
+    <div class="group">
+      <div class="group-title">反向链接</div>
+      <div id="backlinks" class="list small"></div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">未链接提及</div>
+      <label class="switch">
+        <input type="checkbox" id="toggle-journal-mentions">
+        <span>日记参与提及扫描</span>
+      </label>
+      <div class="hint" id="mention-hint"></div>
+      <div id="mentions" class="list small"></div>
+    </div>
+
+    <div class="group grow">
+      <div class="group-title">这一栏里什么是假的</div>
+      <ul class="fake">
+        <li>Markdown 渲染、`[[ ]]` 补全：不做</li>
+        <li>撤销栈、自动保存：不做</li>
+        <li>git 同步：不做，日记复用现有 vault</li>
+        <li>日历、提醒、周报：不做</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<!-- 新建今天的日记 -->
+<div class="overlay" id="modal-new" hidden>
+  <div class="dialog">
+    <h3>新建今天的日记 <span class="muted">2026-11-24</span></h3>
+
+    <div class="field">
+      <div class="field-label">模块（模板来自 vault/templates/）</div>
+      <div id="module-picker" class="checks"></div>
+    </div>
+
+    <div class="field">
+      <div class="field-label">承接预览</div>
+      <div id="carry-preview" class="preview"></div>
+    </div>
+
+    <div class="dialog-actions">
+      <button id="modal-new-cancel" class="ghost">取消</button>
+      <button id="modal-new-confirm" class="primary">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 待办总览 -->
+<div class="overlay" id="modal-todos" hidden>
+  <div class="dialog wide">
+    <h3>待办总览 <span class="muted">跨全部日记聚合，取最近一天的状态</span></h3>
+    <div id="todo-list" class="list"></div>
+    <div class="dialog-actions">
+      <button id="modal-todos-close" class="ghost">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 按标题打开 -->
+<div class="overlay" id="modal-quick" hidden>
+  <div class="dialog">
+    <h3>按标题打开 <span class="muted">日记不在此列表</span></h3>
+    <input id="quick-input" type="text" placeholder="输入标题…">
+    <div id="quick-list" class="list"></div>
+    <div class="dialog-actions">
+      <button id="modal-quick-close" class="ghost">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
