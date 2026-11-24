@@ -336,6 +336,56 @@
     },
   ];
 
+  // ---------- DOM 级用例：需要编辑器挂载，跑完恢复原选区 ----------
+
+  function withJournal(fn) {
+    const S = M();
+    const saved = S.getState().selection;
+    S.selectJournalByDate("2026-11-23");
+    try {
+      return fn(S);
+    } finally {
+      if (saved.type === "note") S.selectNoteById(saved.id);
+      else S.selectJournalByDate(S.getState().journals.find((j) => j.id === saved.id).date);
+    }
+  }
+
+  function press(key) {
+    const doc = document.querySelector("#doc");
+    doc.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  }
+
+  const dom = (id, group, title, run) => ({ id, group, title, dom: true, run });
+
+  CASES.push(
+    dom("E15", "编辑", "↓ 从第 3 行移到第 4 行，并保持列位置", () =>
+      withJournal((S) => {
+        S.activateLine(5, 2);
+        press("ArrowDown");
+        const line = Number(document.querySelector("#doc .line.active").dataset.i);
+        return all([eq(line, 6, "行"), eq(S.offsetInActive(), 2, "列")]);
+      })
+    ),
+    dom("E16", "编辑", "↑ 从第 4 行回到第 3 行", () =>
+      withJournal((S) => {
+        S.activateLine(6, 1);
+        press("ArrowUp");
+        return eq(Number(document.querySelector("#doc .line.active").dataset.i), 5, "行");
+      })
+    ),
+    dom("E17", "编辑", "行首按 ← 跳到上一行行尾", () =>
+      withJournal((S) => {
+        S.activateLine(6, 0);
+        const prevLen = S.Model.lines(S.getState().journals.find((j) => j.date === "2026-11-23").body)[5].length;
+        press("ArrowLeft");
+        return all([
+          eq(Number(document.querySelector("#doc .line.active").dataset.i), 5, "行"),
+          eq(S.offsetInActive(), prevLen, "列"),
+        ]);
+      })
+    )
+  );
+
   // 需要人工在真机上确认的用例，面板里只列清单
   const MANUAL = [
     { id: "I01", group: "输入法", title: "拼音组合期间不重绘、不丢字", how: "用系统拼音连续输入一句话，观察是否整字出现、有无吞字" },

@@ -715,11 +715,62 @@ function onDocBeforeInput(e) {
   }
 }
 
+/** 光标矩形，用来判断是否停在首/末行（自动换行时要先在本行内走）。 */
+function caretRect() {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0).cloneRange();
+  range.collapse(true);
+  const rects = range.getClientRects();
+  if (rects.length) return rects[0];
+  const r = range.getBoundingClientRect();
+  return r && (r.width || r.height) ? r : null;
+}
+
+function lineHeightOf(el) {
+  const raw = getComputedStyle(el).lineHeight;
+  const px = parseFloat(raw);
+  return Number.isFinite(px) ? px : 20;
+}
+
 function onDocKeydown(e) {
   const j = currentJournal();
   if (!j) return;
   const el = activeLineEl();
   if (!el) return;
+
+  // 方向键跨行：只有当前行可编辑，浏览器不会自己跳到别的行，这里手工接管
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+    const i = Number(el.dataset.i);
+    const lines = Model.lines(j.body);
+    const text = el.textContent || "";
+    const offset = offsetInLine(el);
+    const box = el.getBoundingClientRect();
+    const rect = caretRect();
+    const lh = lineHeightOf(el);
+
+    if (e.key === "ArrowUp" && i > 0 && (!rect || rect.top < box.top + lh * 0.6)) {
+      e.preventDefault();
+      activate(i - 1, offset);
+      return;
+    }
+    if (e.key === "ArrowDown" && i < lines.length - 1 && (!rect || rect.top > box.bottom - lh * 1.6)) {
+      e.preventDefault();
+      activate(i + 1, offset);
+      return;
+    }
+    if (e.key === "ArrowLeft" && offset === 0 && i > 0) {
+      e.preventDefault();
+      activate(i - 1, (lines[i - 1] || "").length);
+      return;
+    }
+    if (e.key === "ArrowRight" && offset === text.length && i < lines.length - 1) {
+      e.preventDefault();
+      activate(i + 1, 0);
+      return;
+    }
+    return;
+  }
 
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -1203,6 +1254,13 @@ window.SilvicsModel = {
     return out;
   },
   getState: () => state,
+  selectJournalByDate,
+  selectNoteById: (id) => selectNote(id),
+  activateLine: (i, off) => activate(i, off),
+  offsetInActive: () => {
+    const el = activeLineEl();
+    return el ? offsetInLine(el) : -1;
+  },
 };
 
 // ---------- 启动 ----------
