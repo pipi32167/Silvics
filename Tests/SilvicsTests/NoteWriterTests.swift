@@ -261,25 +261,140 @@ final class NoteWriterTests: XCTestCase {
 
     func testLegacyLibraryIsSeededIntoVaultOnce() throws {
         // 老库：笔记只在 sqlite 里，vault 目录还是空的。
+        let source = TempVault("legacy-source")
         let db = try AppDatabase.makeInMemory()
-        let legacyWriter = vault.repo(db)
+        let legacyWriter = source.repo(db)
         var note = try legacyWriter.create(title: "老库里的笔记")
         note.body = "只存在于库里。"
         _ = try legacyWriter.save(note)
 
-        let emptyVault = TempVault("seeded")
+        let emptyVault = TempVault("legacy-empty")
         let legacy = emptyVault.repo(db)
         XCTAssertTrue(try legacy.vaultNotesOnDisk().isEmpty)
 
         let message = try legacy.seedVaultIfNeeded()
         XCTAssertNotNil(message, "库里已有笔记、vault 空时要全量写一份")
         XCTAssertEqual(try legacy.vaultNotesOnDisk().count, 1)
-        XCTAssertNil(try legacy.seedVaultIfNeeded(), "只做一次")
+        XCTAssertNil(try legacy.seedVaultIfNeeded(), "目录里已有文件就不再写：判断看目录，不看全局开关")
 
         // 写完之后删库也能重建
         let fresh = emptyVault.repo(try AppDatabase.makeInMemory())
-        _ = try fresh.repairFromVaultIfNeeded()
+        XCTAssertNotNil(try fresh.repairFromVaultIfNeeded())
         XCTAssertEqual(try fresh.note(id: note.id)?.body, "只存在于库里。")
+    }
+
+    // MARK: - 播种按「当前 vault 目录」判断，不是全局开关
+
+    /// 三篇带正文的笔记写进给定 db + vault，返回 (id, 正文)。
+    @discardableResult
+    private func makeThreeNotes(_ db: AppDatabase, in target: TempVault) throws -> [(id: String, body: String)] {
+        let repo = target.repo(db)
+        var made: [(id: String, body: String)] = []
+        for index in 1...3 {
+            var note = try repo.create(title: "播种第 \(index) 篇")
+            note.body = "第 \(index) 篇的正文，带编号 \(index)。"
+            _ = try repo.save(note)
+            made.append((note.id, note.body))
+        }
+        return made
+    }
+
+    func testSeedsNewVaultAfterVaultPathChanges() throws {
+        let vaultA = TempVault("switch-a")
+        let vaultB = TempVault("switch-b")
+        let db = try AppDatabase.makeInMemory()
+        let made = try makeThreeNotes(db, in: vaultA)
+
+        let repoA = vaultA.repo(db)
+        XCTAssertNil(try repoA.seedVaultIfNeeded(), "vault A 里已经有文件，不用再播")
+        XCTAssertEqual(try repoA.vaultNotesOnDisk().count, 3)
+
+        // 用户把 vault 改到空目录 B，然后重启：同一份库，新的仓库实例。
+        let repoB = vaultB.repo(db)
+        XCTAssertEqual(try repoB.vaultNotesOnDisk().count, 0, "B 一开始是空的")
+
+        let message = try repoB.seedVaultIfNeeded()
+        XCTAssertNotNil(message, "换到空 vault 后必须重新播种，否则 B 永远是空的")
+        XCTAssertEqual(try repoB.vaultNotesOnDisk().count, 3, "B 里应有 3 个文件")
+        XCTAssertEqual(
+            try repoB.vaultNotesOnDisk().map(\.id).sorted(),
+            made.map(\.id).sorted(),
+            "B 里的就是库里那 3 篇"
+        )
+
+        // 再启动一次：目录里已有内容，不再碰。
+        XCTAssertNil(try repoB.seedVaultIfNeeded(), "已播种过就返回 nil")
+        XCTAssertEqual(try repoB.vaultNotesOnDisk().count, 3)
+    }
+
+    func testDeletedDatabaseRecoversFromSecondVault() throws {
+        let vaultA = TempVault("recover-a")
+        let vaultB = TempVault("recover-b")
+        let db = try AppDatabase.makeInMemory()
+        let made = try makeThreeNotes(db, in: vaultA)
+
+        XCTAssertNil(try vaultA.repo(db).seedVaultIfNeeded(), "A 已有文件")
+        // 切到空 vault B，再启动一次。
+        XCTAssertNotNil(try vaultB.repo(db).seedVaultIfNeeded(), "换目录后要重新播种")
+        XCTAssertEqual(try vaultB.repo(db).vaultNotesOnDisk().count, 3)
+
+        // 删掉 silvics.sqlite：全新的空库，仍然指向 B。
+        let fresh = vaultB.repo(try AppDatabase.makeInMemory())
+        XCTAssertEqual(try fresh.vaultNotes().count, 0)
+
+        let message = try fresh.repairFromVaultIfNeeded()
+        XCTAssertNotNil(message, "库空、B 有 3 个文件时必须全量导入")
+        XCTAssertEqual(try fresh.vaultNotes().count, 3, "从 B 重建应得到 3 篇")
+        for want in made {
+            XCTAssertEqual(try fresh.note(id: want.id)?.body, want.body, "正文必须一致：\(want.id)")
+        }
+    }
+
+    func testLegacyVaultSeededFlagDoesNotBlockNewVault() throws {
+        let vaultA = TempVault("flag-a")
+        let vaultB = TempVault("flag-b")
+        let db = try AppDatabase.makeInMemory()
+        let made = try makeThreeNotes(db, in: vaultA)
+
+        // vault A 已有文件，这一步不播；把 B 当成「老库升级上来的」：
+        // 旧版本写过 meta.vaultSeeded=1，但 B 目录是空的。
+        let repoA = vaultA.repo(db)
+        XCTAssertNil(try repoA.seedVaultIfNeeded())
+        let repoB = vaultB.repo(db)
+        try repoB.setMetaValue("vaultSeeded", "1")
+
+        XCTAssertNotNil(try repoB.seedVaultIfNeeded(), "旧开关不能拦住新目录播种")
+        XCTAssertEqual(try repoB.vaultNotesOnDisk().count, made.count)
+        XCTAssertNil(try repoB.metaValue("vaultSeeded"), "旧键要迁走，不再当开关")
+        XCTAssertEqual(try repoB.metaValue("legacyVaultSeeded"), "1", "迁移留痕")
+        XCTAssertEqual(try repoB.metaValue("vaultSeededPath"), vaultB.url.path, "记下播到了哪个目录")
+    }
+
+    func testEmptyVaultAndEmptyDatabaseKeepsRetrying() throws {
+        let emptyVault = TempVault("retry")
+        let repo = emptyVault.repo(try AppDatabase.makeInMemory())
+
+        XCTAssertNil(try repo.repairFromVaultIfNeeded())
+        XCTAssertNil(
+            try repo.repairFromVaultIfNeeded(),
+            "库空 + vault 空不能记成「已正常」，下次启动还要再试"
+        )
+
+        // 后来 vault 里出现了文件：下一次启动必须导进来。
+        let sourceVault = TempVault("retry-source")
+        let sourceRepo = sourceVault.repo(try AppDatabase.makeInMemory())
+        var note = try sourceRepo.create(title: "后来才出现的笔记")
+        note.body = "库和 vault 一开始都是空的。"
+        _ = try sourceRepo.save(note)
+
+        try FileManager.default.createDirectory(at: emptyVault.notesURL, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: sourceVault.fileURL(note.id),
+            to: emptyVault.fileURL(note.id)
+        )
+
+        XCTAssertNotNil(try repo.repairFromVaultIfNeeded(), "重试时必须把新出现的文件导进来")
+        XCTAssertEqual(try repo.note(id: note.id)?.body, "库和 vault 一开始都是空的。")
     }
 
     // MARK: - 其它写通路也要落文件

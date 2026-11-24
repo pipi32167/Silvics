@@ -94,7 +94,7 @@ final class AppState: ObservableObject {
         startSyncTimers()
     }
 
-    /// 启动自愈：先把老库写一份到 vault（只做一次），再从 vault 重建缺失的东西。
+    /// 启动自愈：先把库里已有内容补写一份到当前 vault（当前目录空了才写），再从 vault 重建缺失的东西。
     private func healFromVault() {
         do {
             var messages: [String] = []
@@ -727,10 +727,15 @@ extension AppState {
     }
 
     func saveSyncSettings(_ settings: SyncSettings) {
+        let previousVault = syncSettings.vaultURL.standardizedFileURL
         syncSettings = settings
         settings.save()
         // 保存先写 vault，目录得跟着设置走，否则改完目录还会往旧目录写。
         repo.vaultURL = settings.vaultURL
+        // 换到另一个目录：新目录可能是空的，当场补一次播种，不用等下次启动。
+        if settings.vaultURL.standardizedFileURL != previousVault {
+            healFromVault()
+        }
     }
 
     /// 后台跑一次 vault 操作，回到主线程刷新界面。

@@ -54,6 +54,16 @@ extension GRDBNoteRepository {
         return notes
     }
 
+    /// 当前 vault 的 `notes/` 里有多少个 `.md` 文件。
+    ///
+    /// 数文件而不是数「能解码的笔记」：解不出来的文件也算 vault 里已有内容，
+    /// 不能被播种当成空目录覆盖掉。
+    func vaultNoteFileCountOnDisk() -> Int {
+        let dir = vaultURL.appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { $0.hasSuffix(".md") }.count
+    }
+
     // MARK: - 索引过期标记
 
     func metaValue(_ key: String) throws -> String? {
@@ -71,6 +81,12 @@ extension GRDBNoteRepository {
         }
     }
 
+    func deleteMetaValue(_ key: String) throws {
+        try db.writer.write { conn in
+            try conn.execute(sql: "DELETE FROM meta WHERE key = ?", arguments: [key])
+        }
+    }
+
     /// 上次保存写完了文件但没写完索引。库是索引，可以从文件重算。
     func isIndexDirty() throws -> Bool {
         try metaValue("indexDirty") == "1"
@@ -82,24 +98,39 @@ extension GRDBNoteRepository {
 
     // MARK: - 启动自愈
 
-    /// 老库第一次升级到「文件是真相」：库里已有笔记、vault 里还没有文件时，
-    /// 先把库全量写一份到 vault（只写不删），之后删库才能重建。只做一次。
+    /// 老库第一次升级到「文件是真相」：库里已有笔记、当前 vault 里还没有文件时，
+    /// 先把库全量写一份到 vault（只写不删），之后删库才能重建。
+    ///
+    /// 判断依据是**当前这个 vault 目录里有没有笔记文件**，不是一个全局开关。
+    /// 用户把 vault 换到另一个目录后要能重新播一次，否则新目录一直空着，删库就丢内容。
+    /// 导出本身幂等（内容没变不碰字节），每次启动扫一遍目录的开销可以忽略。
     @discardableResult
     func seedVaultIfNeeded() throws -> String? {
-        guard try metaValue("vaultSeeded") != "1" else { return nil }
+        try migrateLegacyVaultSeedFlag()
+
         let noteCount = try db.reader.read { conn in
             try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM note") ?? 0
         }
-        guard noteCount > 0, try vaultNotesOnDisk().isEmpty else {
-            try setMetaValue("vaultSeeded", "1")
-            return nil
-        }
+        guard noteCount > 0 else { return nil }
+        // 当前 vault 里已经有笔记文件，就是「这个目录已播种」，不再碰。
+        guard vaultNoteFileCountOnDisk() == 0 else { return nil }
 
         var settings = SyncSettings()
         settings.vaultPath = vaultURL.path
         let written = try VaultSync(repo: self, settings: settings).exportAll()
-        try setMetaValue("vaultSeeded", "1")
+        // 只留痕：播到了哪个目录。不参与任何判断。
+        try setMetaValue("vaultSeededPath", vaultURL.path)
         return "已把库里 \(noteCount) 篇写入 vault（\(written) 个文件）"
+    }
+
+    /// 旧版本用 `meta.vaultSeeded` 当全局开关，换了 vault 目录就不再播种，新目录永远空着。
+    /// 现在按目录判断；旧键搬到 `legacyVaultSeeded` 留痕后删掉，免得以后又被当成依据。
+    private func migrateLegacyVaultSeedFlag() throws {
+        guard let legacy = try metaValue("vaultSeeded") else { return }
+        if try metaValue("legacyVaultSeeded") == nil {
+            try setMetaValue("legacyVaultSeeded", legacy)
+        }
+        try deleteMetaValue("vaultSeeded")
     }
 
     /// 启动时自愈：库空了，或上次索引没写完，就拿 vault 里的文件重建。
@@ -118,7 +149,8 @@ extension GRDBNoteRepository {
         guard !disk.isEmpty else {
             // vault 没有文件。库空就是真的空；索引脏就从库里的正文重算。
             guard noteCount > 0 else {
-                try setIndexDirty(false)
+                // 库空 + vault 空：不知道发生了什么，一个标记都别写。
+                // 保持 indexDirty 原样，下次启动照旧进这个方法再试一次。
                 return nil
             }
             try rebuildAllIndexes()

@@ -215,7 +215,9 @@ Silvics/
 
 - 保存 = 编码 → 比字节（没变就一个字节都不碰）→ 原子写 → 写库 + 重算这一篇索引。文件失败不写库，库失败标 `meta.indexDirty=1` 并抛错。
 - `GRDBNoteRepository(db:vaultURL:)` 可注入目录，默认取 `SyncSettings.load().vaultURL`。**测试必须传临时目录**（`TempVault`）。
-- 启动自愈 `repairFromVaultIfNeeded()`：库空或 `indexDirty=1` 而 vault 有文件时全量导入并清标记。
+- 启动自愈 `repairFromVaultIfNeeded()`：库空或 `indexDirty=1` 而 vault 有文件时全量导入并清标记。库空 + vault 空时**不写任何标记**，下次启动继续重试。
+- 播种 `seedVaultIfNeeded()` 只看**当前 vault 目录**：库里有多篇而 `notes/` 里没有 `.md` 就导出一遍。旧版本用 `meta.vaultSeeded` 当全局开关，换目录后不再播种（新目录一直空），已废弃：旧键搬到 `legacyVaultSeeded` 留痕，当前目录记在 `vaultSeededPath`，两者都不参与判断。
+- 演练：`SILVICS_VAULT_SWITCH_DRILL=<dir>` + `SILVICS_DRILL_STEP=write|switch|rebuild`，三次启动之间由 shell `rm silvics.sqlite`。
 
 改名、别名、批量转换、撤销、忽略提及这些「直接改库」的老通路，事后走 `NoteWriter.flush` 把文件补齐。
 
