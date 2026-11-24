@@ -55,7 +55,10 @@ extension GRDBNoteRepository {
                     updatedAt: note.updatedAt,
                     aliases: aliases[note.id] ?? [],
                     dismissed: dismissed[note.id] ?? [],
-                    body: note.body
+                    body: note.body,
+                    type: note.type,
+                    meta: note.metaFields,
+                    extra: note.frontmatterExtra
                 )
             }
         }
@@ -104,8 +107,13 @@ extension GRDBNoteRepository {
                     status: item.status,
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt,
-                    bodyHash: TextNormalizer.bodyHash(item.body)
+                    bodyHash: TextNormalizer.bodyHash(item.body),
+                    type: item.type,
+                    meta: "{}",
+                    extra: "{}"
                 )
+                note.setMetaFields(item.meta)
+                note.setFrontmatterExtra(item.extra)
                 // 创建时间取更早的那个，避免同步把「什么时候写的」改晚。
                 if let existing, existing.createdAt < note.createdAt {
                     note.createdAt = existing.createdAt

@@ -135,6 +135,14 @@ final class AppDatabase {
                 """)
         }
 
+        // v2：笔记类型与类型段。老库直接补默认值，旧 vault 读进来 type 缺省为 note。
+        m.registerMigration("v2") { db in
+            try db.execute(sql: "ALTER TABLE note ADD COLUMN type TEXT NOT NULL DEFAULT 'note'")
+            try db.execute(sql: "ALTER TABLE note ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
+            try db.execute(sql: "ALTER TABLE note ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'")
+            try db.execute(sql: "CREATE INDEX idx_note_type ON note(type)")
+        }
+
         return m
     }
 }

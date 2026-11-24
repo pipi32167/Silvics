@@ -110,6 +110,12 @@ struct Note: Identifiable, Equatable, Hashable, Codable {
     var updatedAt: Int64
     /// 正文哈希。用于判定是否需要重算索引。
     var bodyHash: String
+    /// 笔记类型。见 `NoteTypes`。未注册的类型按 `note` 处理。
+    var type: String
+    /// 类型段的 JSON 镜像（仅索引用途，真相在 frontmatter）。例如 `{"date":"2026-11-24"}`。
+    var meta: String
+    /// 未识别的 frontmatter 键的 JSON 镜像。必须原样写回，否则新旧版本互相踩数据。
+    var extra: String
 
     static func makeId() -> String {
         let ms = Int64(Date().timeIntervalSince1970 * 1000)
@@ -128,8 +134,54 @@ struct Note: Identifiable, Equatable, Hashable, Codable {
             status: .seedling,
             createdAt: now,
             updatedAt: now,
-            bodyHash: TextNormalizer.bodyHash("")
+            bodyHash: TextNormalizer.bodyHash(""),
+            type: NoteTypes.noteID,
+            meta: "{}",
+            extra: "{}"
         )
+    }
+}
+
+extension Note {
+    var noteType: NoteType { NoteTypes.descriptor(for: type) }
+
+    /// 类型段字段（解析 `meta`）。解析失败返回空字典，不抛错。
+    var metaFields: [String: String] {
+        guard let data = meta.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return decoded
+    }
+
+    var frontmatterExtra: VaultFormat.FrontmatterExtra {
+        guard let data = extra.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(VaultFormat.FrontmatterExtra.self, from: data)
+        else { return VaultFormat.FrontmatterExtra() }
+        return decoded
+    }
+
+    mutating func setFrontmatterExtra(_ value: VaultFormat.FrontmatterExtra) {
+        guard let data = try? JSONEncoder().encode(value),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            extra = "{}"
+            return
+        }
+        extra = text
+    }
+
+    /// 写入类型段。键排序后序列化，保证同样的值产出同样的字节。
+    mutating func setMetaFields(_ fields: [String: String]) {
+        let sorted = Dictionary(uniqueKeysWithValues: fields.sorted { $0.key < $1.key })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(sorted),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            meta = "{}"
+            return
+        }
+        meta = text
     }
 }
 

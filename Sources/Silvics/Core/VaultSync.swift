@@ -366,19 +366,30 @@ final class VaultSync {
 
             case (let remote?, let local?):
                 if remote.body == local.body {
-                    // 正文相同，只把元数据取并集。真变了才写，否则每次同步都白跑一遍。
-                    let merged = mergeMetadata(base: base, local: local, remote: remote)
-                    if merged.aliases != local.aliases || merged.dismissed != local.dismissed
-                        || merged.updatedAt != local.updatedAt {
-                        toImport.append(merged)
+                    // 正文相同，元数据按全字段三方合并。真变了才写，否则每次同步都白跑一遍。
+                    let merge = mergeMetadata(base: base, local: local, remote: remote)
+                    if !merge.conflicts.isEmpty {
+                        result.conflicts += merge.conflicts
+                        archiveConflict(local, remote: remote, id: id)
+                    }
+                    if merge.note != local {
+                        toImport.append(merge.note)
                         result.imported += 1
                     }
                     continue
                 }
                 if base?.body == local.body {
-                    toImport.append(remote)
+                    // 本地没改正文：正文取远端，元数据仍要三方合并（本地可能改过 frontmatter）。
+                    let merge = mergeMetadata(base: base, local: local, remote: remote)
+                    var pulled = merge.note
+                    pulled.body = remote.body
+                    if !merge.conflicts.isEmpty {
+                        result.conflicts += merge.conflicts
+                        archiveConflict(local, remote: remote, id: id)
+                    }
+                    toImport.append(pulled)
                     result.imported += 1
-                    result.notes.append("拉入《\(remote.title)》")
+                    result.notes.append("拉入《\(pulled.title)》")
                     continue
                 }
                 if base?.body == remote.body {
@@ -411,9 +422,14 @@ final class VaultSync {
                     archiveConflict(local, remote: remote, id: id)
                     continue
                 }
-                var merged = mergeMetadata(base: base, local: local, remote: remote)
+                var merge = mergeMetadata(base: base, local: local, remote: remote)
+                var merged = merge.note
                 merged.body = outcome.text
                 merged.updatedAt = max(local.updatedAt, remote.updatedAt)
+                if !merge.conflicts.isEmpty {
+                    result.conflicts += merge.conflicts
+                    archiveConflict(local, remote: remote, id: id)
+                }
                 toImport.append(merged)
                 result.imported += 1
                 result.notes.append("合并《\(merged.title)》")
@@ -421,7 +437,9 @@ final class VaultSync {
         }
 
         if !toImport.isEmpty {
-            _ = try repo.importVaultNotes(toImport)
+            // 标题被别的 id 占住时不能覆盖。这类冲突也要报出来，否则看起来「同步成功」实际丢了一篇。
+            let importReport = try repo.importVaultNotes(toImport)
+            result.conflicts += importReport.titleConflicts
         }
         for id in toDelete {
             try? repo.delete(id: id)
@@ -429,18 +447,133 @@ final class VaultSync {
         return result
     }
 
-    /// 元数据合并：标题取本地（标题冲突已单独拦掉），时间取极值，别名与忽略取并集。
+    /// 元数据三方合并的结果。`conflicts` 非空时调用方要留档（`.conflicts/`）。
+    private struct MetadataMerge {
+        var note: VaultFormat.Note
+        var conflicts: [String]
+    }
+
+    /// 元数据合并。规则：
+    ///
+    /// - `type`：两边不同 → 记冲突、留档，不自动选，保留本机
+    /// - `title`：本地没改（== base）而远端改了 → 取远端；两边都改 → 记冲突、留档、保留本机
+    /// - `status`：同 title 的三方判定
+    /// - `meta`：按键并集；同键值不同时未改的一侧让位，两边都改 → 记冲突、留档、保留本机
+    /// - `extra`：scalars / lists / sections / rawSections 全取并集（同键冲突保留本机，标量冲突记档）
+    /// - 时间取极值，别名与已忽略提及取并集
     private func mergeMetadata(
         base: VaultFormat.Note?,
         local: VaultFormat.Note,
         remote: VaultFormat.Note
-    ) -> VaultFormat.Note {
+    ) -> MetadataMerge {
         var merged = local
+        var conflicts: [String] = []
+
         merged.createdAt = min(local.createdAt, remote.createdAt)
         merged.updatedAt = max(local.updatedAt, remote.updatedAt)
         merged.aliases = Array(Set(local.aliases).union(remote.aliases)).sorted()
         merged.dismissed = Array(Set(local.dismissed).union(remote.dismissed)).sorted()
-        return merged
+
+        if local.type != remote.type {
+            conflicts.append(
+                "《\(local.title)》type 两边不同（本机 \(local.type) / 远端 \(remote.type)），未自动选择，已留档"
+            )
+        }
+
+        if local.title != remote.title {
+            if base?.title == local.title {
+                merged.title = remote.title          // 只有远端改了标题
+            } else if base?.title != remote.title {
+                conflicts.append(
+                    "《\(local.title)》标题两边都改了（本机 \(local.title) / 远端 \(remote.title)），已留档"
+                )
+            }
+        }
+
+        if local.status != remote.status {
+            if base?.status == local.status {
+                merged.status = remote.status
+            } else if base?.status != remote.status {
+                conflicts.append(
+                    "《\(local.title)》状态两边都改了（本机 \(local.status.rawValue) / 远端 \(remote.status.rawValue)），已留档"
+                )
+            }
+        }
+
+        let meta = mergeStringMap(base: base?.meta ?? [:], local: local.meta, remote: remote.meta)
+        merged.meta = meta.map
+        if !meta.conflicting.isEmpty {
+            conflicts.append(
+                "《\(local.title)》类型段 \(meta.conflicting.sorted().joined(separator: "、")) 两边值不同，保留本机值，已留档"
+            )
+        }
+
+        let baseExtra = base?.extra ?? VaultFormat.FrontmatterExtra()
+        var extra = local.extra
+
+        let scalars = mergeStringMap(
+            base: baseExtra.scalars, local: local.extra.scalars, remote: remote.extra.scalars
+        )
+        extra.scalars = scalars.map
+        if !scalars.conflicting.isEmpty {
+            conflicts.append(
+                "《\(local.title)》未知键 \(scalars.conflicting.sorted().joined(separator: "、")) 两边值不同，保留本机值，已留档"
+            )
+        }
+
+        for (key, values) in remote.extra.lists {
+            guard var existing = extra.lists[key] else {
+                extra.lists[key] = values
+                continue
+            }
+            var seen = Set(existing)
+            for value in values where seen.insert(value).inserted { existing.append(value) }
+            extra.lists[key] = existing
+        }
+
+        for (key, remotePairs) in remote.extra.sections {
+            let section = mergeStringMap(
+                base: baseExtra.sections[key] ?? [:],
+                local: local.extra.sections[key] ?? [:],
+                remote: remotePairs
+            )
+            extra.sections[key] = section.map
+            if !section.conflicting.isEmpty {
+                conflicts.append(
+                    "《\(local.title)》未知段 \(key) 的 \(section.conflicting.sorted().joined(separator: "、")) 两边值不同，保留本机值，已留档"
+                )
+            }
+        }
+
+        for (key, lines) in remote.extra.rawSections where extra.rawSections[key] == nil {
+            extra.rawSections[key] = lines
+        }
+        merged.extra = extra
+
+        return MetadataMerge(note: merged, conflicts: conflicts)
+    }
+
+    /// 键并集 + 同键值不同的三方判定。未改的一侧让位，两边都改就记下来交给人。
+    private func mergeStringMap(
+        base: [String: String],
+        local: [String: String],
+        remote: [String: String]
+    ) -> (map: [String: String], conflicting: [String]) {
+        var out = local
+        var conflicting: [String] = []
+        for (key, remoteValue) in remote {
+            guard let localValue = out[key] else {
+                out[key] = remoteValue
+                continue
+            }
+            if localValue == remoteValue { continue }
+            if base[key] == localValue {
+                out[key] = remoteValue              // 本地没改过这个键 → 取远端
+            } else if base[key] != remoteValue {
+                conflicting.append(key)             // 两边都改了 → 保留本机并留档
+            }
+        }
+        return (out, conflicting)
     }
 
     // MARK: - base 与留档
