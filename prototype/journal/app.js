@@ -133,34 +133,226 @@ const RE_HEADING = /^(#{1,3})\s+(.*)$/;
 const RE_FENCE = /^\s*```/;
 const RE_TODO = /^(\s*)[-*+]\s+\[([ xX])\]\s(.*)$/;
 
+// ---------- 代码高亮 ----------
+//
+// 只做「识别 + 上色」，一个字符都不改。所有 token 拼起来必须等于原文（H01 守着）。
+// 多行结构（块注释、三引号字符串）在整块代码上一次性扫完，不逐行扫，否则跨行状态会丢。
+
+const LANG_KEYWORDS = {
+  swift:
+    "let var func class struct enum protocol extension import return if else guard switch case for while repeat in where try catch throw throws defer init deinit self super nil true false async await actor some any typealias public private internal fileprivate open static final override mutating lazy weak unowned",
+  js:
+    "const let var function return if else for while do switch case break continue class extends new this super import export default async await try catch throw typeof instanceof in of null undefined true false yield static get set delete void",
+  python:
+    "def class return if elif else for while break continue import from as try except finally raise with lambda pass yield global nonlocal assert del in is not and or None True False async await match case self",
+  json: "true false null",
+  bash:
+    "if then else elif fi for while do done case esac function in export local echo cd ls cp mv rm mkdir rmdir cat grep sed awk read printf exit return set unset source trap shift",
+  // TeX 没有关键字，命令由反斜杠识别
+  latex: "",
+};
+
+const LANG_RULES = {
+  swift: { line: ["//"], block: ["/*", "*/"], quotes: ['"'], multiline: [] },
+  js: { line: ["//"], block: ["/*", "*/"], quotes: ['"', "'"], multiline: ["`"] },
+  python: { line: ["#"], block: [], quotes: ['"', "'"], multiline: ['"""', "'''"] },
+  json: { line: [], block: [], quotes: ['"'], multiline: [] },
+  // bash 的 `#` 只有出现在词首才算注释，否则 `echo $#` 会被当注释
+  bash: { line: ["#"], block: [], quotes: ['"', "'"], multiline: [], lineNeedsSpace: true },
+  // 公式当块级代码：`%` 是注释，`\frac` 这类命令当关键字
+  latex: { line: ["%"], block: [], quotes: [], multiline: [], commands: true },
+  generic: { line: ["//", "#"], block: ["/*", "*/"], quotes: ['"', "'"], multiline: [] },
+};
+
+/** ` ```swift `、` ```Swift linenums `、` ```js `、` ```latex ` 都能归到对应语言。 */
+function normalizeLang(raw) {
+  const name = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9+#-]/)[0];
+  if (["js", "javascript", "ts", "typescript", "jsx", "tsx"].includes(name)) return "js";
+  if (["py", "python3"].includes(name)) return "python";
+  if (["sh", "shell", "zsh", "console"].includes(name)) return "bash";
+  if (["math", "tex", "katex"].includes(name)) return "latex";
+  return LANG_RULES[name] ? name : "generic";
+}
+
+function fenceLang(raw) {
+  const m = String(raw).match(/^\s*```\s*([^`\s]*)/);
+  return m ? m[1] : "";
+}
+
+const RE_NUMBER = /^(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/;
+const RE_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*/;
+const RE_TEX_CMD = /^\\[A-Za-z]+/;
+
+function lexCode(code, rawLang) {
+  const lang = normalizeLang(rawLang);
+  const rules = LANG_RULES[lang];
+  const keywords = new Set((LANG_KEYWORDS[lang] || "").split(/\s+/).filter(Boolean));
+  const tokens = [];
+  const push = (text, cls) => {
+    if (!text) return;
+    const last = tokens[tokens.length - 1];
+    if (last && last.cls === cls) last.text += text;
+    else tokens.push({ text, cls });
+  };
+
+  let i = 0;
+  while (i < code.length) {
+    const rest = code.slice(i);
+
+    if (rules.commands && code[i] === "\\") {
+      const cmd = rest.match(RE_TEX_CMD);
+      if (cmd) {
+        push(cmd[0], "kw");
+        i += cmd[0].length;
+        continue;
+      }
+    }
+
+    if (rules.block.length) {
+      const [open, close] = rules.block;
+      if (rest.startsWith(open)) {
+        const end = code.indexOf(close, i + open.length);
+        const stop = end === -1 ? code.length : end + close.length;
+        push(code.slice(i, stop), "com");
+        i = stop;
+        continue;
+      }
+    }
+
+    const lineMark = rules.line.find((m) => rest.startsWith(m));
+    const atWordStart = i === 0 || /\s/.test(code[i - 1]);
+    if (lineMark && (!rules.lineNeedsSpace || atWordStart)) {
+      const end = code.indexOf("\n", i);
+      const stop = end === -1 ? code.length : end;
+      push(code.slice(i, stop), "com");
+      i = stop;
+      continue;
+    }
+
+    const triple = rules.multiline.find((m) => rest.startsWith(m));
+    if (triple) {
+      const end = code.indexOf(triple, i + triple.length);
+      const stop = end === -1 ? code.length : end + triple.length;
+      push(code.slice(i, stop), "str");
+      i = stop;
+      continue;
+    }
+
+    const quote = rules.quotes.find((q) => rest.startsWith(q));
+    if (quote) {
+      let j = i + quote.length;
+      while (j < code.length) {
+        if (code[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (code[j] === quote) {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      push(code.slice(i, j), "str");
+      i = j;
+      continue;
+    }
+
+    if (code[i] >= "0" && code[i] <= "9") {
+      const m = rest.match(RE_NUMBER);
+      if (m) {
+        push(m[0], "num");
+        i += m[0].length;
+        continue;
+      }
+    }
+
+    const id = rest.match(RE_IDENT);
+    if (id) {
+      const word = id[0];
+      if (keywords.has(word)) push(word, "kw");
+      else if (code[i + word.length] === "(") push(word, "fn");
+      else push(word, "plain");
+      i += word.length;
+      continue;
+    }
+
+    push(code[i], "plain");
+    i += 1;
+  }
+  return tokens;
+}
+
+/** 把 token 流按行切开，供逐行渲染。 */
+function splitTokensByLine(tokens) {
+  const lines = [[]];
+  for (const token of tokens) {
+    token.text.split("\n").forEach((part, index) => {
+      if (index > 0) lines.push([]);
+      if (part) lines[lines.length - 1].push({ text: part, cls: token.cls });
+    });
+  }
+  return lines;
+}
+
 function describeLines(body) {
   const lines = String(body).split("\n");
-  let inFence = false;
-  return lines.map((raw, i) => {
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+
+    // 代码块（含 ```latex 公式块）整块处理：多行注释、三引号、公式都要跨行
     if (RE_FENCE.test(raw)) {
-      inFence = !inFence;
-      return { kind: "fence", raw, i };
+      const lang = fenceLang(raw);
+      out.push({ kind: "fence", raw, i, isMark: true, lang });
+      const start = i + 1;
+      let j = start;
+      while (j < lines.length && !RE_FENCE.test(lines[j])) j += 1;
+      if (j > start) {
+        const tokenLines = splitTokensByLine(lexCode(lines.slice(start, j).join("\n"), lang));
+        for (let k = start; k < j; k += 1) {
+          out.push({ kind: "fence", raw: lines[k], i: k, lang, tokens: tokenLines[k - start] || [] });
+        }
+      }
+      if (j < lines.length) {
+        out.push({ kind: "fence", raw: lines[j], i: j, isMark: true, lang });
+        i = j + 1;
+      } else {
+        i = j;
+      }
+      continue;
     }
-    if (inFence) return { kind: "fence", raw, i };
 
     const h = raw.match(RE_HEADING);
     // `#标签`（# 后面没空格）不是标题
-    if (h) return { kind: "heading", level: h[1].length, text: h[2], raw, i };
+    if (h) {
+      out.push({ kind: "heading", level: h[1].length, text: h[2], raw, i });
+      i += 1;
+      continue;
+    }
 
     const t = raw.match(RE_TODO);
     if (t) {
-      return {
+      out.push({
         kind: "todo",
         indent: t[1].length,
         done: t[2].toLowerCase() === "x",
         text: t[3],
         raw,
         i,
-      };
+      });
+      i += 1;
+      continue;
     }
 
-    return { kind: raw.trim() ? "p" : "blank", text: raw, raw, i };
-  });
+    out.push({ kind: raw.trim() ? "p" : "blank", text: raw, raw, i });
+    i += 1;
+  }
+  return out;
 }
 
 /** 行内：`代码` / [[目标|显示]] / **粗** / *斜*。未闭合的一律当纯文本。 */
@@ -207,8 +399,13 @@ function renderLineHTML(d) {
   switch (d.kind) {
     case "fence": {
       // 围栏行本身淡一点：代码块看着像一块，但标记仍可见、可点进去改
-      const isMark = /^\s*```/.test(d.raw);
-      return `<div class="line code${isMark ? " fence-mark" : ""}" data-i="${d.i}">${esc(d.raw) || '<span class="zws"></span>'}</div>`;
+      if (d.isMark) {
+        return `<div class="line code fence-mark" data-i="${d.i}">${esc(d.raw)}</div>`;
+      }
+      const body = (d.tokens || [])
+        .map((t) => `<span class="tok-${t.cls}">${esc(t.text)}</span>`)
+        .join("");
+      return `<div class="line code" data-i="${d.i}">${body || '<span class="zws"></span>'}</div>`;
     }
     case "heading":
       return `<div class="line h${d.level}" data-i="${d.i}">${inlineHTML(d.text) || '<span class="zws"></span>'}</div>`;
@@ -1288,6 +1485,9 @@ function bind() {
 window.SilvicsModel = {
   TODAY,
   describeLines,
+  lexCode,
+  splitTokensByLine,
+  normalizeLang,
   inlineHTML,
   renderLineHTML,
   Model,

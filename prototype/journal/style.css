@@ -449,3 +449,20 @@ kbd {
 .doc .line.code { border-radius: 0; }
 .doc .line.code:first-of-type { border-radius: 3px 3px 0 0; }
 .doc .line.fence-mark { opacity: .45; }
+
+/* ---------- 代码高亮 ---------- */
+.doc .line.code { font: 12px/1.65 ui-monospace, "SF Mono", Menlo, monospace; }
+.doc .line.fence-mark { opacity: .5; position: relative; }
+.doc .line.fence-mark .lang {
+  float: right;
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--muted);
+  padding-right: 4px;
+}
+.tok-kw { color: #0b5cad; font-weight: 600; }
+.tok-str { color: #2f6f3e; }
+.tok-com { color: #8b8b8b; font-style: italic; }
+.tok-num { color: #8a3b12; }
+.tok-fn { color: #6b3fa0; }
+.tok-plain { color: inherit; }

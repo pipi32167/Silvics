@@ -186,6 +186,183 @@
       ]),
     },
 
+    // ===== H：代码高亮 =====
+    {
+      id: "H01", group: "高亮", title: "token 拼回去必须等于原文（5 种语言 + 公式 + 通用）",
+      run: () => {
+        const samples = {
+          swift: "let a = 1 // 注释\n\"字符串\"\n/* 块\n注释 */\nfunc f() {}",
+          js: "const s = `模板 ${x}`\n// c\nlet y = 0x1f",
+          python: 'def f():\n    """doc\n    string"""\n    return "#不是注释"',
+          json: '{"a": 1, "b": [true, null]}',
+          bash: '#!/bin/sh\necho "$HOME" # 注释',
+          latex: "\\frac{a}{b} % 注释\ne^{ix}",
+          "": "任意 # 未知语言 // 文本",
+        };
+        const bad = [];
+        for (const [lang, code] of Object.entries(samples)) {
+          const rebuilt = M().lexCode(code, lang).map((t) => t.text).join("");
+          if (rebuilt !== code) bad.push(lang || "generic");
+        }
+        return { ok: bad.length === 0, detail: bad.length ? `拼不回原文：${bad.join(",")}` : "" };
+      },
+    },
+    {
+      id: "H02", group: "高亮", title: "字符串里的 `//` 不算注释",
+      run: () => {
+        const tokens = M().lexCode('let s = "// not comment"', "js");
+        return all([
+          falsy(tokens.some((t) => t.cls === "com"), "不应有注释 token"),
+          truthy(tokens.some((t) => t.cls === "str"), "应有字符串 token"),
+        ]);
+      },
+    },
+    {
+      id: "H03", group: "高亮", title: "注释里的引号不开启字符串",
+      run: () => {
+        const tokens = M().lexCode("// don't open a string", "js");
+        return all([
+          eq(tokens.length, 1, "应只有一个 token"),
+          eq(tokens[0].cls, "com", "应为注释"),
+        ]);
+      },
+    },
+    {
+      id: "H04", group: "高亮", title: "未闭合的块注释吃到块尾，不影响下一块",
+      run: () => {
+        const first = M().lexCode("/* 没关\n还在块里", "swift");
+        const second = M().lexCode("let a = 1", "swift");
+        return all([
+          truthy(first.every((t) => t.cls === "com"), "整块都是注释"),
+          truthy(second.some((t) => t.cls === "kw"), "下一块正常识别关键字"),
+        ]);
+      },
+    },
+    {
+      id: "H05", group: "高亮", title: "Python 三引号字符串跨行仍是一个 token",
+      run: () => {
+        const tokens = M().lexCode('x = 1\n"""第一行\n第二行"""\n# 注释', "python");
+        return all([
+          eq(tokens.filter((t) => t.cls === "str").length, 1, "一个字符串 token"),
+          truthy(tokens.some((t) => t.cls === "com"), "后面的注释还认得"),
+        ]);
+      },
+    },
+    {
+      id: "H06", group: "高亮", title: "JS 模板字符串整体当字符串（内部不再细分）",
+      run: () => {
+        const tokens = M().lexCode("const s = `a ${b} c`", "js");
+        const str = tokens.find((t) => t.cls === "str");
+        return all([truthy(str, "有字符串 token"), eq(str.text, "`a ${b} c`", "内容")]);
+      },
+    },
+    {
+      id: "H07", group: "高亮", title: "JSON 里的 `//` 不是注释",
+      run: () => {
+        const tokens = M().lexCode('{"a": 1} // x', "json");
+        return falsy(tokens.some((t) => t.cls === "com"), "JSON 没有行注释");
+      },
+    },
+    {
+      id: "H08", group: "高亮", title: "bash：`#!/bin/sh` 是注释，`echo $#` 里的 # 不是",
+      run: () => {
+        const shebang = M().lexCode("#!/bin/sh", "bash");
+        const argCount = M().lexCode("echo $#", "bash");
+        return all([
+          eq(shebang[0].cls, "com", "shebang"),
+          falsy(argCount.some((t) => t.cls === "com"), "$# 不是注释"),
+        ]);
+      },
+    },
+    {
+      id: "H09", group: "高亮", title: "未知语言退到通用词法，不抛错",
+      run: () => {
+        const tokens = M().lexCode("# 注释\nlet a = 1", "brainfuck");
+        return all([
+          eq(M().normalizeLang("brainfuck"), "generic", "归一化"),
+          truthy(tokens.some((t) => t.cls === "com"), "通用词法认 # 注释"),
+        ]);
+      },
+    },
+    {
+      id: "H10", group: "高亮", title: "语言标记归一：大小写、别名、未知",
+      run: () =>
+        all([
+          eq(M().normalizeLang("Swift"), "swift"),
+          eq(M().normalizeLang("js"), "js"),
+          eq(M().normalizeLang("typescript"), "js"),
+          eq(M().normalizeLang("sh"), "bash"),
+          eq(M().normalizeLang("math"), "latex"),
+          eq(M().normalizeLang("tex"), "latex"),
+          eq(M().normalizeLang("swiftx"), "generic"),
+        ]),
+    },
+    {
+      id: "H11", group: "高亮", title: "空代码块不报错，也不产生内容行",
+      run: () => {
+        const lines = M().describeLines("```\n```");
+        return all([
+          eq(lines.length, 2, "只有两行围栏"),
+          truthy(lines[0].isMark && lines[1].isMark, "两行都是围栏"),
+          truthy(M().renderLineHTML(lines[0]).length > 0, "渲染不报错"),
+        ]);
+      },
+    },
+    {
+      id: "H12", group: "高亮", title: "相邻代码块的状态不串",
+      run: () => {
+        const body = "```swift\n/* 没关\n```\n\n```swift\nlet a = 1\n```";
+        const lines = M().describeLines(body);
+        const second = lines.find((d) => d.raw === "let a = 1");
+        return all([
+          truthy(second, "找到第二块的内容行"),
+          truthy(second.tokens.some((t) => t.cls === "kw"), "第二块的关键字照常高亮"),
+        ]);
+      },
+    },
+    {
+      id: "H13", group: "高亮", title: "渲染结果带 token class，且文本被转义",
+      run: () => {
+        const d = M().describeLines("```js\nlet a = \"<b>\"\n```").find((x) => x.raw.startsWith("let a"));
+        const html = M().renderLineHTML(d);
+        return all([
+          truthy(html.includes("tok-kw"), "有关键字 span"),
+          truthy(html.includes("tok-str"), "有字符串 span"),
+          falsy(html.includes("<b>"), "尖括号要转义"),
+        ]);
+      },
+    },
+
+    // ===== L：公式块（当代码处理）=====
+    {
+      id: "L01", group: "公式", title: "` ```latex ` 里的命令按关键字着色",
+      run: () => {
+        const tokens = M().lexCode("\\frac{a}{b} + \\alpha", "latex");
+        return all([
+          truthy(tokens.some((t) => t.cls === "kw" && t.text === "\\frac"), "tfrac 着色"),
+          truthy(tokens.some((t) => t.cls === "kw" && t.text === "\\alpha"), "alpha 着色"),
+        ]);
+      },
+    },
+    {
+      id: "L02", group: "公式", title: "TeX 的 `%` 是注释",
+      run: () => {
+        const tokens = M().lexCode("e^{ix} % 说明", "latex");
+        return truthy(tokens.some((t) => t.cls === "com"), "注释 token");
+      },
+    },
+    {
+      id: "L03", group: "公式", title: "公式块被识别为代码块，且语言记为 latex",
+      run: () => {
+        const lines = M().describeLines("```latex\ne^{ix}\n```");
+        return all([
+          eq(lines.length, 3, "三行"),
+          eq(M().normalizeLang(lines[1].lang), "latex", "语言"),
+          truthy(lines[1].tokens.length > 0, "内容已词法化"),
+        ]);
+      },
+    },
+
     // ===== E：文本编辑 =====
     {
       id: "E01", group: "编辑", title: "回车拆分：在第 2 个字符后拆分",
@@ -382,12 +559,27 @@
 
   // ---------- DOM 级用例：需要编辑器挂载，跑完恢复原选区 ----------
 
-  /// DOM 用例会改真实日记，跑完必须把正文和选区一起还原，否则会污染后续用例与界面。
+  /// DOM 用例依赖具体的行号与长度，所以先换成固定夹具；
+  /// 跑完把正文和选区一起还原，既不污染界面，也不受用户改动影响。
+  const FIXTURE = [
+    "## 标题",              // 0
+    "- [ ] 甲",             // 1
+    "- [ ] 乙",             // 2
+    "",                     // 3
+    "## 工作",              // 4
+    "- [x] 丙",             // 5
+    "- [ ] 丁",             // 6
+    "## 生活",              // 7
+    "正文 [[标题]] 结尾",    // 8
+  ].join("\n");
+
   function withJournal(fn) {
     const S = M();
     const saved = S.getState().selection;
     const journal = S.getState().journals.find((j) => j.date === "2026-11-23");
     const originalBody = journal.body;
+    S.selectJournalByDate("2026-11-23");
+    journal.body = FIXTURE;
     S.selectJournalByDate("2026-11-23");
     try {
       return fn(S);
@@ -397,6 +589,10 @@
       if (saved.type === "note") S.selectNoteById(saved.id);
       else S.selectJournalByDate(S.getState().journals.find((j) => j.id === saved.id).date);
     }
+  }
+
+  function FIXTURE_LINES() {
+    return FIXTURE.split("\n");
   }
 
   function press(key) {
@@ -449,22 +645,23 @@
     ),
     dom("E19", "编辑", "Home / End 移到当前行首尾", () =>
       withJournal((S) => {
-        S.activateLine(10, 3);
+        S.activateLine(8, 3);
+        const expected = FIXTURE_LINES()[8].length;
         press("End");
         const end = S.offsetInActive();
         press("Home");
         const home = S.offsetInActive();
-        return all([eq(end, 35, "End"), eq(home, 0, "Home")]);
+        return all([eq(end, expected, "End"), eq(home, 0, "Home")]);
       })
     ),
     dom("E20", "编辑", "当前行被浏览器插入 <div> 时按行拆开，不粘成一行", () =>
       withJournal((S) => {
-        S.activateLine(10, 0);
+        S.activateLine(8, 0);
         const el = document.querySelector("#doc .line.active");
         el.innerHTML = "abc<div>def</div>";
         el.dispatchEvent(new Event("input", { bubbles: true }));
         const lines = S.Model.lines(S.getState().journals.find((j) => j.date === "2026-11-23").body);
-        return all([eq(lines[10], "abc", "第 1 行"), eq(lines[11], "def", "第 2 行")]);
+        return all([eq(lines[8], "abc", "第 1 行"), eq(lines[9], "def", "第 2 行")]);
       })
     )
   );
