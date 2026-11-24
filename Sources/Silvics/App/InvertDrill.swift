@@ -105,7 +105,7 @@ enum InvertDrill {
         print("[drill] 已写 \(expected.count) 篇，期望快照 \(expectedURL.path)")
 
         for item in expected {
-            let file = vault.appendingPathComponent(VaultFormat.notesDir)
+            let file = vault.appendingPathComponent(VaultFormat.noteDir(for: item.type))
                 .appendingPathComponent(VaultFormat.fileName(for: item.id))
             let size = (try? Data(contentsOf: file).count) ?? -1
             print("[drill]   \(item.id) 《\(item.title)》 type=\(item.type) 文件 \(size) 字节")
@@ -117,9 +117,13 @@ enum InvertDrill {
 
     private static func rebuild(root: URL, dbURL: URL, vault: URL, expectedURL: URL) throws -> Int32 {
         let expected = try JSONDecoder().decode([Snapshot].self, from: Data(contentsOf: expectedURL))
-        let files = (try? FileManager.default.contentsOfDirectory(
-            atPath: vault.appendingPathComponent(VaultFormat.notesDir).path
-        )) ?? []
+        var files: [String] = []
+        for dir in VaultFormat.noteDirs {
+            let names = (try? FileManager.default.contentsOfDirectory(
+                atPath: vault.appendingPathComponent(dir).path
+            )) ?? []
+            files.append(contentsOf: names.filter { $0.hasSuffix(".md") })
+        }
         print("[drill] 库已删除，vault 里 \(files.count) 个文件")
         print("[drill] 重新打开空库 \(dbURL.path)")
 

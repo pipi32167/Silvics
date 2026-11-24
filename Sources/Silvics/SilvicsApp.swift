@@ -11,6 +11,8 @@ struct SilvicsApp: App {
         InvertDrill.runIfRequested()
         // 仅 DEBUG：`SILVICS_VAULT_SWITCH_DRILL=<dir>` 跑「换 vault 目录 + 删库重建」的三次启动演练。
         VaultSwitchDrill.runIfRequested()
+        // 仅 DEBUG：`SILVICS_JOURNAL_DRILL=<dir>` 跑「模板 + 承接 + journal/ 落盘」的命令行演练。
+        JournalDrill.runIfRequested()
         #endif
     }
 

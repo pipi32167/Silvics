@@ -52,7 +52,7 @@ enum NoteWriter {
         }
 
         let metadata = try repo.vaultMetadata(for: updated.id)
-        let url = repo.vaultFileURL(for: updated.id)
+        let url = repo.vaultFileURL(for: updated.id, type: updated.type)
 
         var wroteFile = false
         if try isUnchanged(updated, metadata: metadata, at: url) == false {
@@ -61,6 +61,8 @@ enum NoteWriter {
             let data = Data(VaultFormat.encode(vaultNote(updated, metadata: metadata)).utf8)
             do {
                 try VaultFormat.writeAtomic(data, to: url)
+                // 类型改了会写到另一个目录，旧目录那份必须删，否则同一 id 两份文件。
+                removeStaleCopies(of: updated, repo: repo)
             } catch {
                 // 文件没写成：库保持原样，索引也别动。
                 throw SaveError.vaultWriteFailed(url, error.localizedDescription)
@@ -76,6 +78,25 @@ enum NoteWriter {
             throw SaveError.indexWriteFailed(error.localizedDescription)
         }
         return Outcome(note: updated, wroteFile: wroteFile)
+    }
+
+    /// 同一个 id 只要一份文件。写新文件后把其他目录里的旧名字删掉。
+    ///
+    /// 文件名由 id（或日记日期）推出来，不会与别的笔记撞名，所以可以直接按名字删。
+    private static func removeStaleCopies(of note: Note, repo: GRDBNoteRepository) {
+        let fm = FileManager.default
+        let target = repo.vaultFileURL(for: note.id, type: note.type)
+        var names = Set([VaultFormat.fileName(for: note.id)])
+        if let date = VaultFormat.journalDate(fromID: note.id) {
+            names.insert(VaultFormat.fileName(for: date))
+        }
+        for dir in repo.vaultNoteDirs {
+            for name in names {
+                let url = dir.appendingPathComponent(name)
+                guard url.path != target.path, fm.fileExists(atPath: url.path) else { continue }
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     /// 内容与磁盘上的文件逐字节相同？相同就什么都不做。
@@ -102,7 +123,7 @@ enum NoteWriter {
             guard let note = try repo.note(id: id) else { continue }
             let metadata = try repo.vaultMetadata(for: id)
             let data = Data(VaultFormat.encode(vaultNote(note, metadata: metadata)).utf8)
-            if try VaultFormat.writeAtomic(data, to: repo.vaultFileURL(for: id)) { written += 1 }
+            if try VaultFormat.writeAtomic(data, to: repo.vaultFileURL(for: id, type: note.type)) { written += 1 }
         }
         return written
     }

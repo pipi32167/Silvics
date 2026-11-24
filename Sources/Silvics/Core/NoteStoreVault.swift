@@ -16,11 +16,16 @@ extension GRDBNoteRepository {
 
     // MARK: - 文件位置
 
-    /// 一篇笔记在 vault 里的文件。
-    func vaultFileURL(for id: String) -> URL {
+    /// 一篇笔记在 vault 里的文件。目录按类型取，文件名也按类型取（日记是 `<日期>.md`）。
+    func vaultFileURL(for id: String, type: String) -> URL {
         vaultURL
-            .appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
-            .appendingPathComponent(VaultFormat.fileName(for: id))
+            .appendingPathComponent(VaultFormat.noteDir(for: type), isDirectory: true)
+            .appendingPathComponent(VaultFormat.noteFileName(id: id, type: type))
+    }
+
+    /// 所有已知笔记目录（`notes/`、`journal/`…）。
+    var vaultNoteDirs: [URL] {
+        VaultFormat.noteDirs.map { vaultURL.appendingPathComponent($0, isDirectory: true) }
     }
 
     /// 别名与已忽略的提及。只存在库里，encode 前必须取出来，否则写进文件就丢了。
@@ -40,28 +45,33 @@ extension GRDBNoteRepository {
         }
     }
 
-    /// 直接读 vault 目录。与 `VaultSync.readVaultNotes` 同一套规则，只是不需要设置对象。
+    /// 直接读 vault 目录（含所有类型目录）。同一 id 只留一份，见 `VaultFormat.dedupe`。
     func vaultNotesOnDisk() throws -> [VaultFormat.Note] {
-        let dir = vaultURL.appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        var notes: [VaultFormat.Note] = []
-        for name in names.sorted() where name.hasSuffix(".md") {
-            let url = dir.appendingPathComponent(name)
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            guard let note = try? VaultFormat.decode(text) else { continue }
-            notes.append(note)
+        var entries: [(dir: String, note: VaultFormat.Note)] = []
+        for dir in VaultFormat.noteDirs {
+            let base = vaultURL.appendingPathComponent(dir, isDirectory: true)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
+            for name in names.sorted() where name.hasSuffix(".md") {
+                let url = base.appendingPathComponent(name)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                guard let note = try? VaultFormat.decode(text) else { continue }
+                entries.append((dir, note))
+            }
         }
-        return notes
+        return VaultFormat.dedupe(entries)
     }
 
-    /// 当前 vault 的 `notes/` 里有多少个 `.md` 文件。
+    /// 当前 vault 的笔记目录里有多少个 `.md` 文件。
     ///
     /// 数文件而不是数「能解码的笔记」：解不出来的文件也算 vault 里已有内容，
     /// 不能被播种当成空目录覆盖掉。
     func vaultNoteFileCountOnDisk() -> Int {
-        let dir = vaultURL.appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return names.filter { $0.hasSuffix(".md") }.count
+        var count = 0
+        for dir in vaultNoteDirs {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            count += names.filter { $0.hasSuffix(".md") }.count
+        }
+        return count
     }
 
     // MARK: - 索引过期标记
