@@ -42,6 +42,21 @@ enum VaultFormat {
         /// 已忽略的提及，存目标笔记 id（不是标题）。标题会改，id 不会。
         var dismissed: [String]
         var body: String
+        /// 笔记类型。省略时按 `note` 处理。
+        var type: String = NoteTypes.noteID
+        /// 类型段字段，例如日记的 `date` / `carryFrom`。
+        var meta: [String: String] = [:]
+        /// 不认识的键。必须原样保留，否则新老版本互相踩数据。
+        var extra: FrontmatterExtra = FrontmatterExtra()
+    }
+
+    /// frontmatter 里当前版本不认识的键。读进来存着，写回去一字不改。
+    struct FrontmatterExtra: Equatable, Codable {
+        var scalars: [String: String] = [:]
+        var lists: [String: [String]] = [:]
+        var sections: [String: [String: String]] = [:]
+
+        var isEmpty: Bool { scalars.isEmpty && lists.isEmpty && sections.isEmpty }
     }
 
     enum ParseError: Error, LocalizedError {
@@ -68,16 +83,47 @@ enum VaultFormat {
     // MARK: - 写
 
     /// 编码成文件内容。同样输入必得同样字节，否则 git 里天天全量 diff。
+    ///
+    /// 输出顺序固定：身份层 → 通用层 → 类型层 → 未知层。层内按 key 排序。
     static func encode(_ note: Note) -> String {
         var lines: [String] = ["---"]
+        // 身份层
         lines.append("schema: \(schema)")
         lines.append("id: \(scalar(note.id))")
+        if note.type != NoteTypes.noteID {
+            lines.append("type: \(scalar(note.type))")
+        }
+        // 通用层
         lines.append("title: \(scalar(note.title))")
         lines.append("status: \(note.status.rawValue)")
         lines.append("created: \(dateString(note.createdAt))")
         lines.append("updated: \(dateString(note.updatedAt))")
         appendList(&lines, key: "aliases", values: note.aliases.sorted())
         appendList(&lines, key: "dismissed", values: note.dismissed.sorted())
+
+        // 类型层
+        let descriptor = NoteTypes.descriptor(for: note.type)
+        if let namespace = descriptor.metaNamespace, !note.meta.isEmpty {
+            lines.append("\(namespace):")
+            for key in note.meta.keys.sorted() {
+                lines.append("  \(key): \(scalar(note.meta[key] ?? ""))")
+            }
+        }
+
+        // 未知层：原样保留
+        for key in note.extra.scalars.keys.sorted() {
+            lines.append("\(key): \(scalar(note.extra.scalars[key] ?? ""))")
+        }
+        for key in note.extra.lists.keys.sorted() {
+            appendList(&lines, key: key, values: note.extra.lists[key] ?? [])
+        }
+        for key in note.extra.sections.keys.sorted() {
+            lines.append("\(key):")
+            for inner in (note.extra.sections[key] ?? [:]).keys.sorted() {
+                lines.append("  \(inner): \(scalar(note.extra.sections[key]?[inner] ?? ""))")
+            }
+        }
+
         lines.append("---")
         lines.append(note.body)
         return lines.joined(separator: "\n")
@@ -131,33 +177,68 @@ enum VaultFormat {
         guard lines.first == "---" else { throw ParseError.missingHeader }
         guard let end = lines.dropFirst().firstIndex(of: "---") else { throw ParseError.missingHeader }
 
-        var fields: [String: String] = [:]
+        var scalars: [String: String] = [:]
         var lists: [String: [String]] = [:]
-        var listKey: String?
+        var sections: [String: [String: String]] = [:]
 
-        for line in lines[1..<end] {
-            if line.hasPrefix("  - ") {
-                guard let key = listKey else { continue }
-                lists[key, default: []].append(unscalar(String(line.dropFirst(4))))
-                continue
-            }
+        var i = 1
+        while i < end {
+            let line = lines[i]
+            defer { i += 1 }
+            guard !line.hasPrefix(" "), !line.isEmpty else { continue }
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = String(line[line.startIndex..<colon])
             let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-            if value.isEmpty {
-                listKey = key
-                lists[key] = []
-            } else {
-                listKey = nil
-                fields[key] = unscalar(value)
+            if !value.isEmpty {
+                scalars[key] = unscalar(value)
+                continue
             }
+            // 空值：后面缩进的行是列表项或子键
+            var items: [String] = []
+            var pairs: [String: String] = [:]
+            var j = i + 1
+            while j < end, lines[j].hasPrefix("  ") {
+                let child = String(lines[j].dropFirst(2))
+                if child.hasPrefix("- ") {
+                    items.append(unscalar(String(child.dropFirst(2))))
+                } else if let innerColon = child.firstIndex(of: ":") {
+                    let innerKey = String(child[child.startIndex..<innerColon])
+                    let innerValue = String(child[child.index(after: innerColon)...])
+                        .trimmingCharacters(in: .whitespaces)
+                    pairs[innerKey] = unscalar(innerValue)
+                }
+                j += 1
+            }
+            if !items.isEmpty || pairs.isEmpty {
+                lists[key] = items
+            } else {
+                sections[key] = pairs
+            }
+            i = j - 1
         }
 
-        guard let id = fields["id"] else { throw ParseError.missingField("id") }
-        guard let title = fields["title"] else { throw ParseError.missingField("title") }
-        let status = NoteStatus(rawValue: fields["status"] ?? "") ?? .seedling
-        guard let created = parseDate(fields["created"]) else { throw ParseError.badDate(fields["created"] ?? "") }
-        guard let updated = parseDate(fields["updated"]) else { throw ParseError.badDate(fields["updated"] ?? "") }
+        guard let id = scalars["id"] else { throw ParseError.missingField("id") }
+        guard let title = scalars["title"] else { throw ParseError.missingField("title") }
+        let type = scalars["type"] ?? NoteTypes.noteID
+        let status = NoteStatus(rawValue: scalars["status"] ?? "") ?? .seedling
+        guard let created = parseDate(scalars["created"]) else { throw ParseError.badDate(scalars["created"] ?? "") }
+        guard let updated = parseDate(scalars["updated"]) else { throw ParseError.badDate(scalars["updated"] ?? "") }
+
+        // 已知键摘出来，剩下的按未知保留
+        var meta: [String: String] = [:]
+        if let namespace = NoteTypes.descriptor(for: type).metaNamespace, let section = sections.removeValue(forKey: namespace) {
+            meta = section
+        }
+        var extra = FrontmatterExtra()
+        for key in scalars.keys where !knownScalarKeys.contains(key) {
+            extra.scalars[key] = scalars[key]
+        }
+        for key in lists.keys where !knownListKeys.contains(key) {
+            extra.lists[key] = lists[key]
+        }
+        for key in sections.keys where !knownSectionKeys.contains(key) {
+            extra.sections[key] = sections[key]
+        }
 
         let body = lines[(end + 1)...].joined(separator: "\n")
         return Note(
@@ -168,8 +249,19 @@ enum VaultFormat {
             updatedAt: updated,
             aliases: lists["aliases"] ?? [],
             dismissed: lists["dismissed"] ?? [],
-            body: body
+            body: body,
+            type: type,
+            meta: meta,
+            extra: extra
         )
+    }
+
+    /// 本版本认识的键。不在表里的键一律按未知原样保留。
+    private static let knownScalarKeys: Set<String> = ["schema", "id", "type", "title", "status", "created", "updated"]
+    private static let knownListKeys: Set<String> = ["aliases", "dismissed"]
+    /// 所有已注册类型的命名空间都算已知，避免把类型段当成未知段再写一遍
+    private static var knownSectionKeys: Set<String> {
+        Set(NoteTypes.all.values.compactMap(\.metaNamespace))
     }
 
     private static func unscalar(_ raw: String) -> String {
