@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 
@@ -25,12 +26,13 @@ enum TextNormalizer {
             .joined(separator: " ")
     }
 
-    /// 正文正文的稳定哈希。
+    /// 正文的稳定哈希。
+    ///
+    /// 必须跨进程稳定：Swift 的 `Hasher` 每个进程随机加盐，用它存进库里，
+    /// 下次启动就永远对不上，只能全量重算。用 SHA256。
     static func bodyHash(_ body: String) -> String {
-        var hasher = Hasher()
-        hasher.combine(body)
-        let h = hasher.finalize()
-        return String(h, radix: 16)
+        let digest = SHA256.hash(data: Data(body.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined().prefix(32).description
     }
 
     /// 标题里禁止出现的字符。理由见设计文档 7.4。

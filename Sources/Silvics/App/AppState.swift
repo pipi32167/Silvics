@@ -37,6 +37,12 @@ final class AppState: ObservableObject {
     /// 已解析的标题键集合。驱动引用是实线还是虚线。
     @Published private(set) var resolvedKeys: Set<String> = []
 
+    // MARK: - 备份与同步
+
+    @Published var isShowingSyncSheet: Bool = false
+    @Published private(set) var syncSettings: SyncSettings = .load()
+    @Published private(set) var isSyncing: Bool = false
+
     // MARK: - 内部
 
     private let repo: GRDBNoteRepository
@@ -46,6 +52,8 @@ final class AppState: ObservableObject {
     private var lastSavedBody: String = ""
     /// 上次批量转换前的正文。按笔记 id 存。
     private var conversionUndo: [String: String]?
+
+    // MARK: - 备份与同步
 
     // MARK: - 启动
 
@@ -262,6 +270,10 @@ final class AppState: ObservableObject {
     func deleteNote(id: String) {
         do {
             try repo.delete(id: id)
+            // vault 里也删掉。导出本身只写不删，删除必须显式做，否则删了的笔记会在下次同步时复活。
+            if syncSettings.isConfigured || !syncSettings.vaultPath.isEmpty {
+                try? VaultSync(repo: repo, settings: syncSettings).removeFromVault(id: id)
+            }
             if selection == id {
                 selection = nil
                 current = nil
@@ -478,5 +490,55 @@ final class AppState: ObservableObject {
 
     func clearStatus() {
         statusMessage = nil
+    }
+}
+
+// MARK: - 备份与同步
+
+extension AppState {
+
+    func saveSyncSettings(_ settings: SyncSettings) {
+        syncSettings = settings
+        settings.save()
+    }
+
+    /// 后台跑一次 vault 操作，回到主线程刷新界面。
+    ///
+    /// 不同步放在主线程：git 一次拉推可能几百毫秒，卡住界面比慢一点更糟。
+    func performSyncWork(
+        _ work: @escaping (VaultSync) throws -> [String],
+        done: @escaping ([String]) -> Void
+    ) {
+        guard !isSyncing else { return }
+        isSyncing = true
+        flushPendingSave()
+        let settings = syncSettings
+        let repo = self.repo
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let sync = VaultSync(repo: repo, settings: settings)
+            var lines: [String] = []
+            var failure: String?
+            do {
+                lines = try work(sync)
+            } catch let err {
+                failure = err.localizedDescription
+            }
+
+            DispatchQueue.main.async {
+                var settings = settings
+                if failure == nil {
+                    settings.lastSyncedAt = Int64(Date().timeIntervalSince1970 * 1000)
+                    settings.lastMessage = lines.first ?? ""
+                } else {
+                    settings.lastMessage = "失败：\(failure ?? "")"
+                }
+                self.syncSettings = settings
+                settings.save()
+                self.isSyncing = false
+                self.loadAll()
+                done(failure.map { ["错误：" + $0] } ?? lines)
+            }
+        }
     }
 }

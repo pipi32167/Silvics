@@ -1,0 +1,491 @@
+import Foundation
+
+/// vault 的导出、恢复、校验，以及基于 git 的双向同步。
+///
+/// 分工：git 只负责搬字节；合并由这里自己算。
+/// 绝不让 git 做 merge —— 它会把 `<<<<<<<` 写进正文。
+final class VaultSync {
+
+    let repo: NoteRepository
+    var settings: SyncSettings
+
+    init(repo: NoteRepository, settings: SyncSettings) {
+        self.repo = repo
+        self.settings = settings
+    }
+
+    // MARK: - 路径
+
+    var vaultURL: URL { settings.vaultURL }
+    var notesURL: URL { vaultURL.appendingPathComponent(VaultFormat.notesDir, isDirectory: true) }
+    var baseURL: URL { vaultURL.appendingPathComponent(VaultFormat.baseDir, isDirectory: true) }
+    var conflictsURL: URL { vaultURL.appendingPathComponent(VaultFormat.conflictsDir, isDirectory: true) }
+    var trashURL: URL { vaultURL.appendingPathComponent(VaultFormat.trashDir, isDirectory: true) }
+
+    var git: GitClient {
+        GitClient(
+            workDir: vaultURL,
+            sshKeyPath: settings.effectiveSSHKeyPath,
+            authorName: settings.authorName,
+            authorEmail: settings.authorEmail
+        )
+    }
+
+    func prepareDirectories() throws {
+        let fm = FileManager.default
+        for dir in [vaultURL, notesURL, baseURL, conflictsURL, trashURL] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let ignore = vaultURL.appendingPathComponent(".gitignore")
+        try VaultFormat.writeAtomic(Data(VaultFormat.gitignore.utf8), to: ignore)
+    }
+
+    // MARK: - 导出
+
+    /// 把库写成 vault。返回真正改动的文件数（幂等：内容没变一个字节都不碰）。
+    ///
+    /// **导出只写不删。** 库空了（换机器、库文件丢了）不能连带把 vault 清空 ——
+    /// 那样一次误操作就把备份也干掉。删除只走 `removeFromVault`，由用户动作触发。
+    @discardableResult
+    func exportAll() throws -> Int {
+        try prepareDirectories()
+        let snapshot = try repo.vaultNotes()
+        var written = 0
+        var live = Set<String>()
+
+        for note in snapshot {
+            live.insert(note.id)
+            let data = Data(VaultFormat.encode(note).utf8)
+            let url = notesURL.appendingPathComponent(VaultFormat.fileName(for: note.id))
+            if try VaultFormat.writeAtomic(data, to: url) { written += 1 }
+        }
+
+        _ = live
+        let manifest = VaultFormat.makeManifest(snapshot)
+        if try VaultFormat.writeAtomic(
+            VaultFormat.encodeManifest(manifest),
+            to: vaultURL.appendingPathComponent(VaultFormat.manifestName)
+        ) {
+            written += 1
+        }
+        return written
+    }
+
+    /// 笔记被删掉时同步删掉 vault 里的文件。只有用户主动删除才调用。
+    func removeFromVault(id: String) throws {
+        let fm = FileManager.default
+        let file = notesURL.appendingPathComponent(VaultFormat.fileName(for: id))
+        if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
+        let base = baseFileURL(id)
+        if fm.fileExists(atPath: base.path) { try fm.removeItem(at: base) }
+    }
+
+    // MARK: - 读取 vault
+
+    func readVaultNotes() throws -> [VaultFormat.Note] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: notesURL.path)) ?? []
+        var notes: [VaultFormat.Note] = []
+        for name in names where name.hasSuffix(".md") {
+            let url = notesURL.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            guard let note = try? VaultFormat.decode(text) else { continue }
+            notes.append(note)
+        }
+        return notes
+    }
+
+    /// 从 vault 全量恢复（新机器、或库被清空）。返回报告。
+    @discardableResult
+    func importAll() throws -> VaultImportReport {
+        let notes = try readVaultNotes()
+        return try repo.importVaultNotes(notes)
+    }
+
+    // MARK: - 校验
+
+    struct VerifyResult {
+        var ok: Bool
+        var problems: [String]
+        var summary: String
+    }
+
+    func verify() throws -> VerifyResult {
+        var problems: [String] = []
+        let fm = FileManager.default
+
+        if !fm.fileExists(atPath: notesURL.path) {
+            return VerifyResult(ok: false, problems: ["vault 目录不存在"], summary: "未初始化")
+        }
+
+        let manifestURL = vaultURL.appendingPathComponent(VaultFormat.manifestName)
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = VaultFormat.decodeManifest(data)
+        else {
+            return VerifyResult(ok: false, problems: ["manifest.json 缺失或损坏"], summary: "未初始化")
+        }
+
+        let files = (try? fm.contentsOfDirectory(atPath: notesURL.path)) ?? []
+        let fileIds = Set(files.compactMap { VaultFormat.id(fromFileName: $0) })
+        let manifestIds = Set(manifest.notes.map(\.id))
+
+        if fileIds != manifestIds {
+            let missing = manifestIds.subtracting(fileIds)
+            let extra = fileIds.subtracting(manifestIds)
+            if !missing.isEmpty { problems.append("manifest 里有 \(missing.count) 篇文件不存在") }
+            if !extra.isEmpty { problems.append("有 \(extra.count) 篇文件不在 manifest 里") }
+        }
+        if manifest.count != manifest.notes.count {
+            problems.append("manifest.count 与条目数不符")
+        }
+
+        var hashMismatch = 0
+        for entry in manifest.notes {
+            let url = notesURL.appendingPathComponent(VaultFormat.fileName(for: entry.id))
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                hashMismatch += 1
+                continue
+            }
+            guard let note = try? VaultFormat.decode(text) else {
+                problems.append("\(entry.id) 解析失败")
+                continue
+            }
+            if VaultFormat.hash(note.body) != entry.hash { hashMismatch += 1 }
+        }
+        if hashMismatch > 0 { problems.append("\(hashMismatch) 篇正文哈希与 manifest 不一致") }
+
+        let local = try repo.vaultNotes()
+        if local.count != manifest.count {
+            problems.append("库里 \(local.count) 篇，vault 里 \(manifest.count) 篇")
+        }
+
+        let git = self.git
+        if git.isRepository() {
+            let branch = (try? git.currentBranch()) ?? settings.branch
+            if git.remoteURL() == nil { problems.append("没有配置远端") }
+            let ab = git.aheadBehind(branch: branch)
+            if ab.ahead > 0 || ab.behind > 0 {
+                problems.append("与远端不同步：领先 \(ab.ahead)，落后 \(ab.behind)")
+            }
+        }
+
+        let ok = problems.isEmpty
+        let summary = ok
+            ? "\(manifest.count) 篇，哈希一致"
+            : "\(problems.count) 个问题"
+        return VerifyResult(ok: ok, problems: problems, summary: summary)
+    }
+
+    // MARK: - 同步
+
+    struct Report {
+        var exportedFiles = 0
+        var importedNotes = 0
+        var removedNotes = 0
+        var pushed = false
+        var conflicts: [String] = []
+        var notes: [String] = []
+
+        var summary: String {
+            var parts: [String] = []
+            if importedNotes > 0 { parts.append("拉入 \(importedNotes) 篇") }
+            if removedNotes > 0 { parts.append("远端删除 \(removedNotes) 篇") }
+            if exportedFiles > 0 { parts.append("写出 \(exportedFiles) 个文件") }
+            if pushed { parts.append("已推送") }
+            if !conflicts.isEmpty { parts.append("\(conflicts.count) 处冲突待处理") }
+            return parts.isEmpty ? "无变化" : parts.joined(separator: "，")
+        }
+    }
+
+    /// 双向同步。失败抛错，调用方负责提示。
+    func sync() throws -> Report {
+        var report = Report()
+
+        // 先补齐「vault 里有、库里没有」的笔记。
+        // 换机器、库文件丢了、库被清空，都靠这一步自动恢复 —— 用户不需要先点「从 vault 恢复」。
+        report.importedNotes += try reconcileWithDisk()
+
+        report.exportedFiles = try exportAll()
+
+        let git = self.git
+        if !git.isRepository() {
+            guard settings.isConfigured else {
+                throw SyncError.notConfigured
+            }
+            try git.initialize(remote: settings.remoteURL, branch: settings.branch)
+        } else if settings.isConfigured, git.remoteURL() != settings.remoteURL {
+            try git.setRemote(settings.remoteURL)
+        }
+
+        if git.hasLocalChanges() {
+            try git.stageAll()
+            if git.stagedChangesExist() {
+                try git.commit(commitMessage())
+            }
+        }
+
+        try git.fetch()
+        let branch = (try? git.currentBranch()) ?? settings.branch
+
+        if !git.remoteBranchExists(branch) {
+            try git.push(branch: branch, setUpstream: true)
+            report.pushed = true
+            try writeBaseFiles()
+            return report
+        }
+
+        var attempt = 0
+        while true {
+            attempt += 1
+            let ab = git.aheadBehind(branch: branch)
+            if ab.behind > 0 {
+                let resolution = try resolveRemote(branch: branch)
+                report.importedNotes += resolution.imported
+                report.removedNotes += resolution.removed
+                report.conflicts += resolution.conflicts
+                report.notes += resolution.notes
+
+                // 顺序很重要：先把合并结果提交成普通提交，工作区干净了才能让 git 记录合并。
+                // 反过来的话，`git merge` 会因为暂存区有改动而失败，历史里就没有远端那个父提交。
+                report.exportedFiles += try exportAll()
+                try git.stageAll()
+                let message = "merge: 同步 \(deviceShortId()) \(timestamp())"
+                if git.stagedChangesExist() {
+                    try git.commit(message)
+                }
+                if git.mergeBase("origin/\(branch)") != nil {
+                    git.beginMergeKeepingOurs("origin/\(branch)")
+                    try git.commit(message, allowEmpty: true)
+                } else if git.isTreeEqual(to: "origin/\(branch)") {
+                    // 没有共同祖先，且内容已经一致：直接采纳远端历史，别制造分叉。
+                    git.resetHard("origin/\(branch)")
+                } else {
+                    git.beginMergeKeepingOurs("origin/\(branch)", allowUnrelated: true)
+                    try git.commit(message, allowEmpty: true)
+                }
+            }
+
+            do {
+                if git.aheadBehind(branch: branch).ahead > 0 || !git.remoteBranchExists(branch) {
+                    try git.push(branch: branch)
+                    report.pushed = true
+                }
+                break
+            } catch {
+                // 多设备并发推送会被拒。重拉一次再解一次，第二次还失败就报错。
+                if attempt >= 2 { throw error }
+                try git.fetch()
+            }
+        }
+
+        try writeBaseFiles()
+        return report
+    }
+
+    enum SyncError: LocalizedError {
+        case notConfigured
+        case badRemote(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notConfigured: return "还没配置远端仓库地址"
+            case .badRemote(let url): return "远端地址不像是 git 仓库：\(url)"
+            }
+        }
+    }
+
+    /// 磁盘上有、库里没有的笔记，直接收进库。返回收进来的篇数。
+    ///
+    /// 删除笔记会同时删掉 vault 文件（`removeFromVault`），所以「文件在而库里没有」
+    /// 只可能是库丢了。
+    @discardableResult
+    func reconcileWithDisk() throws -> Int {
+        let disk = try readVaultNotes()
+        guard !disk.isEmpty else { return 0 }
+        let known = Set(try repo.vaultNotes().map(\.id))
+        let missing = disk.filter { !known.contains($0.id) }
+        guard !missing.isEmpty else { return 0 }
+        let report = try repo.importVaultNotes(missing)
+        return report.inserted + report.updated
+    }
+
+    // MARK: - 冲突解决
+
+    private struct Resolution {
+        var imported = 0
+        var removed = 0
+        var conflicts: [String] = []
+        var notes: [String] = []
+    }
+
+    private func resolveRemote(branch: String) throws -> Resolution {
+        var result = Resolution()
+        let git = self.git
+        let baseRev = git.mergeBase("origin/\(branch)") ?? "HEAD"
+        let changed = git.changedPaths(from: baseRev, to: "origin/\(branch)")
+
+        var localById: [String: VaultFormat.Note] = [:]
+        for note in try repo.vaultNotes() { localById[note.id] = note }
+
+        var toImport: [VaultFormat.Note] = []
+        var toDelete: [String] = []
+
+        for path in changed {
+            guard path.hasPrefix(VaultFormat.notesDir + "/") else { continue }
+            guard let id = VaultFormat.id(fromFileName: (path as NSString).lastPathComponent) else { continue }
+
+            let remoteText = git.fileContent(path: path, ref: "origin/\(branch)")
+            let remote = remoteText.flatMap { try? VaultFormat.decode($0) }
+            let base = readBase(id).flatMap { try? VaultFormat.decode($0) }
+            let local = localById[id]
+
+            switch (remote, local) {
+            case (nil, nil):
+                continue
+
+            case (nil, let local?):
+                // 远端删了。本地没改就跟着删，改过就保留。
+                if base == nil || (base!.body == local.body) {
+                    toDelete.append(id)
+                    archiveToTrash(local, reason: "remote-deleted")
+                    result.removed += 1
+                } else {
+                    result.conflicts.append("《\(local.title)》远端已删除，本地有改动，已保留")
+                }
+
+            case (let remote?, nil):
+                // 本地没有，远端有。要么是新笔记，要么是本机删了而远端改过。
+                // 没 base 说明没同步过 → 直接收；有 base 且远端没变 → 尊重本机删除；否则复活。
+                if base == nil || base!.body != remote.body {
+                    toImport.append(remote)
+                    result.imported += 1
+                    result.notes.append("拉入《\(remote.title)》")
+                }
+
+            case (let remote?, let local?):
+                if remote.body == local.body {
+                    // 正文相同，只把元数据取并集。真变了才写，否则每次同步都白跑一遍。
+                    let merged = mergeMetadata(base: base, local: local, remote: remote)
+                    if merged.aliases != local.aliases || merged.dismissed != local.dismissed
+                        || merged.updatedAt != local.updatedAt {
+                        toImport.append(merged)
+                        result.imported += 1
+                    }
+                    continue
+                }
+                if base?.body == local.body {
+                    toImport.append(remote)
+                    result.imported += 1
+                    result.notes.append("拉入《\(remote.title)》")
+                    continue
+                }
+                if base?.body == remote.body {
+                    continue  // 远端没改正文，保留本地
+                }
+                // 两边都改了正文
+                if local.title != remote.title {
+                    result.conflicts.append("《\(local.title)》两边都改了标题，未合并")
+                    archiveConflict(local, remote: remote, id: id)
+                    continue
+                }
+                guard let base, let outcome = LineMerge.merge(
+                    base: base.body, ours: local.body, theirs: remote.body
+                ), outcome.isClean else {
+                    result.conflicts.append("《\(local.title)》正文两边都改了，未合并，已留档")
+                    archiveConflict(local, remote: remote, id: id)
+                    continue
+                }
+                var merged = mergeMetadata(base: base, local: local, remote: remote)
+                merged.body = outcome.text
+                merged.updatedAt = max(local.updatedAt, remote.updatedAt)
+                toImport.append(merged)
+                result.imported += 1
+                result.notes.append("合并《\(merged.title)》")
+            }
+        }
+
+        if !toImport.isEmpty {
+            _ = try repo.importVaultNotes(toImport)
+        }
+        for id in toDelete {
+            try? repo.delete(id: id)
+        }
+        return result
+    }
+
+    /// 元数据合并：标题取本地（标题冲突已单独拦掉），时间取极值，别名与忽略取并集。
+    private func mergeMetadata(
+        base: VaultFormat.Note?,
+        local: VaultFormat.Note,
+        remote: VaultFormat.Note
+    ) -> VaultFormat.Note {
+        var merged = local
+        merged.createdAt = min(local.createdAt, remote.createdAt)
+        merged.updatedAt = max(local.updatedAt, remote.updatedAt)
+        merged.aliases = Array(Set(local.aliases).union(remote.aliases)).sorted()
+        merged.dismissed = Array(Set(local.dismissed).union(remote.dismissed)).sorted()
+        return merged
+    }
+
+    // MARK: - base 与留档
+
+    private func baseFileURL(_ id: String) -> URL {
+        baseURL.appendingPathComponent(VaultFormat.fileName(for: id))
+    }
+
+    private func readBase(_ id: String) -> String? {
+        try? String(contentsOf: baseFileURL(id), encoding: .utf8)
+    }
+
+    /// 同步成功后把当前文件全部记为 base。下次三方合并要用。
+    private func writeBaseFiles() throws {
+        try prepareDirectories()
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: notesURL.path)) ?? []
+        var live = Set<String>()
+        for name in names where name.hasSuffix(".md") {
+            guard let id = VaultFormat.id(fromFileName: name) else { continue }
+            live.insert(id)
+            let url = notesURL.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            try VaultFormat.writeAtomic(data, to: baseFileURL(id))
+        }
+        let bases = (try? FileManager.default.contentsOfDirectory(atPath: baseURL.path)) ?? []
+        for name in bases where name.hasSuffix(".md") {
+            guard let id = VaultFormat.id(fromFileName: name), !live.contains(id) else { continue }
+            try? FileManager.default.removeItem(at: baseFileURL(id))
+        }
+    }
+
+    private func archiveConflict(_ local: VaultFormat.Note, remote: VaultFormat.Note, id: String) {
+        let stamp = timestamp()
+        let remoteURL = conflictsURL.appendingPathComponent(
+            "\(id).\(deviceShortId()).\(stamp).remote.md"
+        )
+        try? VaultFormat.writeAtomic(Data(VaultFormat.encode(remote).utf8), to: remoteURL)
+        let localURL = conflictsURL.appendingPathComponent(
+            "\(id).\(deviceShortId()).\(stamp).local.md"
+        )
+        try? VaultFormat.writeAtomic(Data(VaultFormat.encode(local).utf8), to: localURL)
+    }
+
+    private func archiveToTrash(_ note: VaultFormat.Note, reason: String) {
+        let url = trashURL.appendingPathComponent("\(note.id).\(reason).md")
+        try? VaultFormat.writeAtomic(Data(VaultFormat.encode(note).utf8), to: url)
+    }
+
+    // MARK: - 文案
+
+    private func timestamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f.string(from: Date())
+    }
+
+    private func deviceShortId() -> String {
+        (try? repo.deviceId()) ?? "unknown"
+    }
+
+    private func commitMessage() -> String {
+        "sync: \(deviceShortId()) \(timestamp())"
+    }
+}
