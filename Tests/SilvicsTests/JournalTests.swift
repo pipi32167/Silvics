@@ -357,4 +357,133 @@ final class JournalTests: XCTestCase {
         // 日记自己要能正常保存，不受影响。
         XCTAssertEqual(try repo.note(id: journal.id)?.type, NoteTypes.journalID)
     }
+
+    // MARK: - 标题被普通笔记占住
+
+    func testJournalDateTakenByPlainNoteIsNotOverwritten() throws {
+        let repo = try makeRepo()
+        var plain = try repo.create(title: "2026-11-24")
+        plain.body = "这是普通笔记，不是日记。"
+        plain = try repo.save(plain)
+        let before = try XCTUnwrap(repo.note(id: plain.id))
+
+        XCTAssertThrowsError(try repo.journalNote(on: "2026-11-24", using: [])) { error in
+            guard case NoteWriter.SaveError.titleTaken = error else {
+                return XCTFail("应为 titleTaken，实际：\(error)")
+            }
+        }
+
+        let after = try XCTUnwrap(repo.note(id: plain.id))
+        XCTAssertEqual(after.body, before.body, "被占住的那篇正文不能动")
+        XCTAssertEqual(after.type, NoteTypes.noteID, "不能把它改成日记")
+        XCTAssertEqual(after.title, "2026-11-24")
+        XCTAssertEqual(try repo.summaries().count, 1, "不能额外建出一篇")
+        XCTAssertNil(try repo.journal(on: "2026-11-24"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: journalFileURL("2026-11-24").path),
+            "不能留下 journal/2026-11-24.md：\(journalFileURL("2026-11-24").path)"
+        )
+    }
+
+    // MARK: - 同一 id 的两份文件
+
+    /// 往 `dir/` 里写一份「同一个 id 的旧文件」，模拟旧版本把日记写在 `notes/`。
+    /// 旧版本的文件名是 id，不是日期。
+    private func writeStaleCopy(
+        id: String,
+        body: String,
+        updatedAt: Int64,
+        dir: String = VaultFormat.notesDir
+    ) throws -> URL {
+        let url = vault.url
+            .appendingPathComponent(dir, isDirectory: true)
+            .appendingPathComponent(VaultFormat.fileName(for: id))
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let note = VaultFormat.Note(
+            id: id,
+            title: "2026-11-24",
+            status: .seedling,
+            createdAt: updatedAt,
+            updatedAt: updatedAt,
+            aliases: [],
+            dismissed: [],
+            body: body,
+            type: NoteTypes.journalID,
+            meta: ["date": "2026-11-24"]
+        )
+        try VaultFormat.encode(note).write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    private func trashFiles() -> [String] {
+        let dir = vault.url.appendingPathComponent(VaultFormat.trashDir, isDirectory: true)
+        return ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
+    }
+
+    /// 旧目录那份更旧：进 `.trash/`，活文件是新写的这份。
+    func testStaleCopyInNotesIsArchivedNotDeleted() throws {
+        let repo = try makeRepo()
+        var journal = try repo.journalNote(on: "2026-11-24", using: [])
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let stale = journal.id
+        let staleURL = try writeStaleCopy(id: stale, body: "手改过的旧版", updatedAt: now - 600_000)
+
+        journal.body = "库里新写的一版"
+        journal = try repo.save(journal)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleURL.path), "旧目录那份不能留在原位")
+        let live = try VaultFormat.decode(
+            String(contentsOf: journalFileURL("2026-11-24"), encoding: .utf8)
+        )
+        XCTAssertEqual(live.body, "库里新写的一版")
+
+        let archived = trashFiles()
+        XCTAssertEqual(archived.count, 1, "\(archived)")
+        XCTAssertTrue(archived[0].hasSuffix("stale-copy.md"), archived[0])
+        let trashText = try String(
+            contentsOf: vault.url
+                .appendingPathComponent(VaultFormat.trashDir, isDirectory: true)
+                .appendingPathComponent(archived[0]),
+            encoding: .utf8
+        )
+        XCTAssertEqual(try VaultFormat.decode(trashText).body, "手改过的旧版", "旧内容必须完整留在 .trash，不能直接删")
+    }
+
+    /// 旧目录那份更新（用户手改过且 `updated:` 更晚）：以它为准，刚写的那份进 `.trash/`。
+    func testNewerStaleCopyWinsAndOlderSaveIsArchived() throws {
+        let repo = try makeRepo()
+        var journal = try repo.journalNote(on: "2026-11-24", using: [])
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let staleURL = try writeStaleCopy(
+            id: journal.id, body: "手改过的新版", updatedAt: now + 600_000
+        )
+
+        journal.body = "库里写的旧一版"
+        journal = try repo.save(journal)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleURL.path))
+        let live = try VaultFormat.decode(
+            String(contentsOf: journalFileURL("2026-11-24"), encoding: .utf8)
+        )
+        XCTAssertEqual(live.body, "手改过的新版", "较新的那份要活下来")
+        XCTAssertEqual(live.updatedAt, now + 600_000)
+
+        // 库跟着文件走，否则下次保存又把旧的写回去。
+        let stored = try XCTUnwrap(repo.note(id: journal.id))
+        XCTAssertEqual(stored.body, "手改过的新版")
+        XCTAssertEqual(journal.body, "手改过的新版", "返回给调用方的也是较新的这份")
+
+        let archived = trashFiles()
+        XCTAssertEqual(archived.count, 1, "\(archived)")
+        XCTAssertTrue(archived[0].hasSuffix("superseded.md"), archived[0])
+        let trashText = try String(
+            contentsOf: vault.url
+                .appendingPathComponent(VaultFormat.trashDir, isDirectory: true)
+                .appendingPathComponent(archived[0]),
+            encoding: .utf8
+        )
+        XCTAssertEqual(try VaultFormat.decode(trashText).body, "库里写的旧一版")
+    }
 }

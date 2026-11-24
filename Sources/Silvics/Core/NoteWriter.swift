@@ -61,8 +61,9 @@ enum NoteWriter {
             let data = Data(VaultFormat.encode(vaultNote(updated, metadata: metadata)).utf8)
             do {
                 try VaultFormat.writeAtomic(data, to: url)
-                // 类型改了会写到另一个目录，旧目录那份必须删，否则同一 id 两份文件。
-                removeStaleCopies(of: updated, repo: repo)
+                // 类型改了会写到另一个目录，旧目录那份要处理掉，否则同一 id 两份文件。
+                // 不能直接删：旧目录那份可能被用户手改过，正文与这份不同。
+                updated = reconcileStaleCopies(of: updated, metadata: metadata, repo: repo)
             } catch {
                 // 文件没写成：库保持原样，索引也别动。
                 throw SaveError.vaultWriteFailed(url, error.localizedDescription)
@@ -80,23 +81,97 @@ enum NoteWriter {
         return Outcome(note: updated, wroteFile: wroteFile)
     }
 
-    /// 同一个 id 只要一份文件。写新文件后把其他目录里的旧名字删掉。
+    /// 同一个 id 只留一份**活文件**，但别的目录里那份不能直接删。
     ///
-    /// 文件名由 id（或日记日期）推出来，不会与别的笔记撞名，所以可以直接按名字删。
-    private static func removeStaleCopies(of note: Note, repo: GRDBNoteRepository) {
+    /// 旧版本把日记写在 `notes/<id>.md`，新版本写 `journal/<日期>.md`；两份正文可能不同
+    /// （用户手改过旧目录那份）。直接删 = 丢内容。规则：
+    ///
+    /// - 按 frontmatter 的 `updated:` 比较，**较新的那份留在类型目录**；
+    /// - 另一份（旧目录的、或刚写的）复制进 `.trash/` 后从原目录移除，不直接删；
+    /// - 较新的是旧目录那份时，返回带它正文与时间的笔记，调用方据此落库，
+    ///   否则文件和库各说一套；
+    /// - 读不出来或解析不了的文件原地不动，留给人看。
+    ///
+    /// 文件名由 id（或日记日期）推出来，不会与别的笔记撞名。
+    private static func reconcileStaleCopies(
+        of note: Note,
+        metadata: (aliases: [String], dismissed: [String]),
+        repo: GRDBNoteRepository
+    ) -> Note {
         let fm = FileManager.default
         let target = repo.vaultFileURL(for: note.id, type: note.type)
+        var current = note
+
+        for stale in staleCopyURLs(of: note, repo: repo) where stale.path != target.path {
+            guard let raw = try? Data(contentsOf: stale),
+                  let other = try? VaultFormat.decode(String(decoding: raw, as: UTF8.self))
+            else { continue }
+
+            // 内容一样：删掉不丢东西，照样留一份档。
+            if other.body == current.body {
+                archive(raw, from: stale, reason: "same-content", repo: repo)
+                try? fm.removeItem(at: stale)
+                continue
+            }
+
+            // 旧目录那份更新：以它为准，把刚写的那份存进 .trash。
+            if other.updatedAt > current.updatedAt {
+                var adopted = current
+                adopted.body = other.body
+                adopted.bodyHash = TextNormalizer.bodyHash(other.body)
+                adopted.updatedAt = other.updatedAt
+                let winner = Data(VaultFormat.encode(vaultNote(adopted, metadata: metadata)).utf8)
+                // 写不成就别动旧环境那份，宁可留两份也不能丢。
+                guard (try? VaultFormat.writeAtomic(winner, to: target)) != nil else { continue }
+                archive(
+                    Data(VaultFormat.encode(vaultNote(current, metadata: metadata)).utf8),
+                    from: stale,
+                    reason: "superseded",
+                    repo: repo
+                )
+                try? fm.removeItem(at: stale)
+                current = adopted
+                continue
+            }
+
+            // 常规情况：刚写的那份更新，旧目录那份留档后移出。
+            archive(raw, from: stale, reason: "stale-copy", repo: repo)
+            try? fm.removeItem(at: stale)
+        }
+        return current
+    }
+
+    /// 同一个 id 在别的目录里可能存在文件。日记的文件名是日期不是 id，两种名字都要试。
+    /// 返回包含目标路径在内的所有命中文件，调用方自己排除目标。
+    private static func staleCopyURLs(of note: Note, repo: GRDBNoteRepository) -> [URL] {
         var names = Set([VaultFormat.fileName(for: note.id)])
         if let date = VaultFormat.journalDate(fromID: note.id) {
             names.insert(VaultFormat.fileName(for: date))
         }
+        let fm = FileManager.default
+        var urls: [URL] = []
         for dir in repo.vaultNoteDirs {
-            for name in names {
+            for name in names.sorted() {
                 let url = dir.appendingPathComponent(name)
-                guard url.path != target.path, fm.fileExists(atPath: url.path) else { continue }
-                try? fm.removeItem(at: url)
+                if fm.fileExists(atPath: url.path) { urls.append(url) }
             }
         }
+        return urls
+    }
+
+    /// 把一份文件复制进 `.trash/`。重名但内容不同就加序号，绝不覆盖已有留档。
+    private static func archive(_ data: Data, from source: URL, reason: String, repo: GRDBNoteRepository) {
+        let dir = repo.vaultURL.appendingPathComponent(VaultFormat.trashDir, isDirectory: true)
+        let dirName = source.deletingLastPathComponent().lastPathComponent
+        let stem = "\(dirName)-\(source.deletingPathExtension().lastPathComponent).\(reason)"
+        var candidate = dir.appendingPathComponent("\(stem).md")
+        var index = 2
+        while let existing = try? Data(contentsOf: candidate) {
+            if existing == data { return }
+            candidate = dir.appendingPathComponent("\(stem)-\(index).md")
+            index += 1
+        }
+        try? VaultFormat.writeAtomic(data, to: candidate)
     }
 
     /// 内容与磁盘上的文件逐字节相同？相同就什么都不做。
