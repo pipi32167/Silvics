@@ -246,6 +246,45 @@ final class ClipSyncTests: XCTestCase {
         XCTAssertNil(try repo.clip(id: clip.id), "从 vault 恢复不能把删掉的剪藏拉回来")
     }
 
+    @MainActor
+    func testRemoteDeletionOfClipRemovesLocalFileAndDoesNotResurrect() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote, syncClips: true)
+        let b = try makeDevice("device-b", remote: remote, syncClips: true)
+
+        let clip = try a.repo.createClip(ClipDraft(
+            url: "https://example.com/shared",
+            title: "两台设备都有的剪藏",
+            body: "这段正文会先同步到 B，再从 A 删除。"
+        ))
+        _ = try a.sync.sync()
+        _ = try b.sync.sync()
+        XCTAssertNotNil(try b.repo.clip(id: clip.id))
+
+        let bClipFile = b.sync.vaultURL
+            .appendingPathComponent(VaultFormat.noteDir(for: NoteTypes.clipID), isDirectory: true)
+            .appendingPathComponent(VaultFormat.fileName(for: clip.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bClipFile.path))
+
+        // A 删除并同步：删除要传播到远端。
+        let appA = AppState(repo: a.repo)
+        appA.deleteClip(id: clip.id)
+        _ = try a.sync.sync()
+
+        // B 拉取远端删除：库里与文件都要消失，且再次同步不能复活。
+        _ = try b.sync.sync()
+        XCTAssertNil(try b.repo.clip(id: clip.id), "远端删除后 B 的库应清掉剪藏")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: bClipFile.path),
+            "远端删除后 B 的 vault 文件也要删，否则会被下一次提交推回去"
+        )
+
+        _ = try b.sync.sync()
+        XCTAssertNil(try b.repo.clip(id: clip.id), "再次同步不能复活")
+        _ = try a.sync.sync()
+        XCTAssertNil(try a.repo.clip(id: clip.id), "A 也不应被 B 推回来的文件复活")
+    }
+
     func testVerifyRightAfterDisablingClipsDoesNotReportCountMismatch() throws {
         try makeClipAndNote()
         // 先在开启状态导出一次，manifest 里含剪藏。

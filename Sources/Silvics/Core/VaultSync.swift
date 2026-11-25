@@ -504,6 +504,9 @@ final class VaultSync {
         }
         for id in toDelete {
             try? repo.delete(id: id)
+            // 远端删了，本地文件也要删。只删库的话，本机遗留的 md 会随下一次合并提交
+            // 被推回远端，剪藏在两台设备之间反复复活。
+            try? removeFromVault(id: id)
         }
         return result
     }
