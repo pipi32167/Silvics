@@ -5,7 +5,7 @@ extension AppState {
 
     // MARK: - 范围
 
-    var isClipScope: Bool { sidebarScope.isClipScope }
+    var isClipScope: Bool { nav.active == .clips }
 
     /// 当前范围下要显示的剪藏。搜索优先，其次范围。
     var visibleClips: [ClipSummary] {
@@ -13,12 +13,13 @@ extension AppState {
         if !q.isEmpty {
             return (try? repo.clipSummaries(query: q)) ?? []
         }
-        switch sidebarScope {
-        case .clipUnread: return clipSummaries.filter { $0.status == .unread }
-        case .clipArchived: return clipSummaries.filter { $0.status == .archived }
-        case .clipTag(let name): return clipSummaries.filter { $0.tags.contains(name) }
-        case .clipAll: return clipSummaries
-        default: return []
+        guard nav.active == .clips else { return [] }
+        switch nav.clipScope {
+        case .unread: return clipSummaries.filter { $0.status == .unread }
+        case .archived: return clipSummaries.filter { $0.status == .archived }
+        case .pending: return clipSummaries.filter { $0.aiState != .done }
+        case .tag(let name): return clipSummaries.filter { $0.tags.contains(name) }
+        case .all: return clipSummaries
         }
     }
 
@@ -32,27 +33,8 @@ extension AppState {
         clipArchivedCount = counts.archived
 
         // 标签被删掉后停在空范围会显示空白，退回「全部剪藏」。
-        if case .clipTag(let name) = sidebarScope, !clipTags.contains(where: { $0.name == name }) {
-            sidebarScope = .clipAll
-        }
-    }
-
-    /// 切到剪藏范围。没有选中剪藏时选第一条未读。
-    func selectClipScope(_ scope: SidebarScope) {
-        flushPendingSave()
-        sidebarScope = scope
-        searchQuery = ""
-        refreshClips()
-        // 当前选中的剪藏还在这个范围里就不动它；否则换成范围里的第一条。
-        if let current, current.type == NoteTypes.clipID,
-           visibleClips.contains(where: { $0.id == current.id }) {
-            return
-        }
-        if let first = visibleClips.first {
-            select(first.id)
-        } else {
-            selection = nil
-            current = nil
+        if case .tag(let name) = nav.clipScope, !clipTags.contains(where: { $0.name == name }) {
+            setModuleScope(.clip(.all))
         }
     }
 
@@ -225,7 +207,7 @@ extension AppState {
         refreshClips()
         loadAll()
         selection = note.id
-        sidebarScope = .clipUnread
+        enterModule(.clips, scope: .clip(.unread))
         loadNote(id: note.id)
         return note
     }

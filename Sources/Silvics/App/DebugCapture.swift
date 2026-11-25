@@ -75,8 +75,9 @@ enum DebugCapture {
         }
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
-            // 演示数据最后停在日记上，先把范围切回「全部」，否则选中的普通笔记不在列表里。
-            app.selectScope(.all)
+            // 演示数据最后停在日记上，先切回笔记模块的「全部」，否则选中的笔记不在列表里。
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
             app.select(match.id)
         }
         // 先切 vault 再播种 / 开面板：`SILVICS_VAULT` 换目录后，后面的写入要落到新目录。
@@ -103,11 +104,8 @@ enum DebugCapture {
             applyPanelFlag(app, panel: showPanel)
         }
 
-        // `SILVICS_SEARCH=<词>` + `SILVICS_SEARCH_SCOPE=all`：取证时预置搜索。
-        // 必须放在范围切换之后：`selectScope` 会清空搜索词。
-        if let raw = ProcessInfo.processInfo.environment["SILVICS_SEARCH_SCOPE"], raw == "all" {
-            app.searchScope = .includingJournal
-        }
+        // `SILVICS_SEARCH=<词>`：取证时在当前模块里预置搜索。
+        // 必须放在范围切换之后：换范围会清空搜索词。
         if let q = ProcessInfo.processInfo.environment["SILVICS_SEARCH"], !q.isEmpty {
             app.searchQuery = q
         }
@@ -134,15 +132,27 @@ enum DebugCapture {
                    let todo = app.todoOverview.first(where: { $0.text.contains(text) }) {
                     app.jumpToTodo(todo)
                 }
-            case "journal": app.selectScope(.journal)
-            case "clips", "clip-unread": app.selectClipScope(.clipUnread)
-            case "clips-all": app.selectClipScope(.clipAll)
-            case "clips-archived": app.selectClipScope(.clipArchived)
+            case "list-collapsed": if app.isListPaneVisible { app.toggleListPane() }
+            case "list-expanded": if !app.isListPaneVisible { app.toggleListPane() }
+            case "module-notes": app.selectModule(.notes)
+            case "module-journal": app.selectModule(.journal)
+            case "module-clips": app.selectModule(.clips)
+            case "journal": app.selectModule(.journal); app.applyScope(.journal(.all))
+            case "clips", "clip-unread": app.selectModule(.clips); app.applyScope(.clip(.unread))
+            case "clips-all": app.selectModule(.clips); app.applyScope(.clip(.all))
+            case "clips-archived": app.selectModule(.clips); app.applyScope(.clip(.archived))
+            case "clips-pending": app.selectModule(.clips); app.applyScope(.clip(.pending))
+            case "journal-todos", "journal-todo": app.selectModule(.journal); app.applyScope(.journal(.todos))
+            case "journal-templates-nav": app.selectModule(.journal); app.applyScope(.journal(.templates))
+            case "note-tag":
+                if let tag = ProcessInfo.processInfo.environment["SILVICS_NOTE_TAG"], !tag.isEmpty {
+                    app.selectModule(.notes); app.applyScope(.note(.tag(tag)))
+                }
             case "clip-tag":
                 if let tag = ProcessInfo.processInfo.environment["SILVICS_CLIP_TAG"], !tag.isEmpty {
-                    app.selectClipScope(.clipTag(tag))
+                    app.selectModule(.clips); app.applyScope(.clip(.tag(tag)))
                 }
-            case "new-clip": app.selectClipScope(.clipUnread); app.isShowingNewClip = true
+            case "new-clip": app.selectModule(.clips); app.applyScope(.clip(.unread)); app.isShowingNewClip = true
             case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
             case "lists", "lists-demo": seedListsDemo(app)
             case "tables", "tables-demo": seedTablesDemo(app)
@@ -158,7 +168,8 @@ enum DebugCapture {
                 SettingsWindowController.show(app: app, tab: .about)
             case "journal-templates", "journal-template", "templates":
                 seedDemoTemplates(app)
-                app.isShowingJournalTemplateSheet = true
+                app.selectModule(.journal)
+                app.applyScope(.journal(.templates))
             case "templates-result":
                 // 取证：先落盘 3 份演示模板，再用面板保存时的同一个 `saveJournalTemplate` 新建一份，
                 // 然后走 `⌘⇧J` 的同一条链路建今天这篇，截的是真实保存 + 真实新建的结果。
@@ -256,7 +267,8 @@ enum DebugCapture {
         // 所以这里再按同一个关键字选一次，截图才能指定截哪篇。
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
-            app.selectScope(.all)
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
             app.select(match.id)
         }
     }
@@ -314,7 +326,8 @@ enum DebugCapture {
 
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
-            app.selectScope(.all)
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
             app.select(match.id)
         }
     }

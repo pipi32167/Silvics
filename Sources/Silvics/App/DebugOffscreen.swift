@@ -149,8 +149,14 @@ enum OffscreenCapture {
             log("库里一篇笔记都没有，接下来渲染空态")
             return
         }
-        // 日记不在「全部」列表里，范围要跟着切，否则侧栏与列表对不上。
-        app.selectScope(chosen.isJournal ? .journal : .all)
+        // 日记不在「全部」列表里，模块要跟着切，否则导航与列表对不上。
+        if chosen.isJournal {
+            app.selectModule(.journal)
+            app.applyScope(.journal(.all))
+        } else {
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
+        }
         app.select(chosen.id)
         log("选中《\(chosen.title)》id=\(chosen.id) 类型=\(chosen.type)")
     }

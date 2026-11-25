@@ -1,12 +1,11 @@
 import SwiftUI
 
-/// `⌘⇧T` 待办总览。
+/// `⌘⇧T` 待办总览，占满中栏。
 ///
 /// 跨全部日记聚合未完成的 `- [ ]`：同一句话取最近一天的状态，
 /// 每行写清最早 / 最近出现与共几天。点一行跳到最近那天并滚动到那一行。
-struct TodoOverviewSheet: View {
+struct TodoOverviewView: View {
     @EnvironmentObject private var app: AppState
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,14 +46,11 @@ struct TodoOverviewSheet: View {
                 Text("\(app.todoOverview.count) 条")
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.tertiary)
-                Button("关闭") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .controlSize(.small)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
-        .frame(width: 560, height: 420)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var header: some View {
@@ -76,7 +72,6 @@ struct TodoOverviewSheet: View {
     private func row(_ todo: JournalTodo) -> some View {
         Button {
             app.jumpToTodo(todo)
-            dismiss()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "square")

@@ -9,7 +9,13 @@ final class AppState: ObservableObject {
     // MARK: - 发布状态
 
     @Published private(set) var summaries: [NoteSummary] = []
-    @Published var selection: String?          // 选中的笔记 id
+    /// 导航状态：当前模块、每模块的范围、选中与搜索词。
+    @Published private(set) var nav = NavigationState()
+    /// 当前模块选中的条目 id。读写都落到 `nav`，只留一个真相。
+    var selection: String? {
+        get { nav.selection }
+        set { nav.setSelection(newValue) }
+    }
     @Published var current: Note?
     @Published private(set) var backlinks: [Backlink] = []
     @Published private(set) var outgoing: [NoteLink] = []
@@ -21,16 +27,17 @@ final class AppState: ObservableObject {
     @Published private(set) var journalEntries: [JournalEntry] = []
     /// 待办总览，跨全部日记聚合。
     @Published private(set) var todoOverview: [JournalTodo] = []
-    @Published var isShowingTodoOverview: Bool = false
-    /// 「模板…」面板：勾选下一次新建日记要用的模板。
-    @Published var isShowingJournalTemplateSheet: Bool = false
-    @Published var searchQuery: String = ""
-    /// 搜索范围：只搜笔记 / 含日记。
-    @Published var searchScope: SearchScope = .notes
+    /// 未完成待办条数。模块导航的「待办总览」用。
+    @Published private(set) var journalOpenTodoCount: Int = 0
+    /// 模板个数。模块导航的「模板」用。
+    @Published private(set) var journalTemplateCount: Int = 0
+    /// 当前模块的搜索词。各模块各存各的，切走不丢。
+    var searchQuery: String {
+        get { nav.query }
+        set { nav.setQuery(newValue) }
+    }
     /// 日记是否参与未链接提及扫描。设置入口在右侧面板，值落 UserDefaults。
     @Published private(set) var journalScanMentions: Bool = JournalMentionSettings.scanMentions
-    /// 侧栏当前范围：全部 / 孤儿 / 日记 / 某个标签。
-    @Published var sidebarScope: SidebarScope = .all
     /// 外观设置。改动即时生效并落 UserDefaults。
     @Published private(set) var appearance: AppearanceSettings = .init()
     /// 模型服务设置。密钥在 Keychain，这里只有非敏感部分。
@@ -44,6 +51,9 @@ final class AppState: ObservableObject {
     @Published var clipUnreadCount: Int = 0
     @Published var clipTotalCount: Int = 0
     @Published var clipArchivedCount: Int = 0
+
+    /// 待整理：正文已存、模型还没整理完。
+    var clipPendingCount: Int { clipSummaries.filter { $0.aiState != .done }.count }
     @Published var isShowingNewClip: Bool = false
     /// 哪些 provider 已经存了密钥。列表里显示「已配置」用。
     @Published private(set) var providersWithKey: Set<UUID> = []
@@ -220,6 +230,117 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - 布局
+
+    /// 窗口内容宽度。窄于 `narrowWidth` 时列表栏自动收起。
+    @Published private(set) var windowWidth: CGFloat = 1400
+    /// 列表栏是否展开。用户手动改，落 UserDefaults。
+    @Published private(set) var listPaneExpanded = ListPaneSettings.isVisible
+    /// 窄窗口下手动展开过列表栏。拉宽后清掉，回到手动状态。
+    @Published private(set) var narrowListOverride: Bool?
+
+    /// 窄窗口门槛。低于这个宽度让列表栏让位给内容区。
+    static let narrowWidth: CGFloat = 1000
+    /// 四栏同时放得下的宽度。低于它就收起右栏，否则列表栏一展开就把内容挤没。
+    static let fourColumnWidth: CGFloat = 1020
+
+    /// 右栏在窄窗口下让位。拉宽自动回来。
+    var isContextPaneVisible: Bool { windowWidth >= Self.fourColumnWidth }
+
+    var isNarrowWindow: Bool { windowWidth < Self.narrowWidth }
+
+    /// 列表栏现在是否可见。窄窗口默认收起，手动展开后按手动值。
+    var isListPaneVisible: Bool {
+        isNarrowWindow ? (narrowListOverride ?? false) : listPaneExpanded
+    }
+
+    func setWindowWidth(_ width: CGFloat) {
+        guard abs(width - windowWidth) > 0.5 else { return }
+        let wasNarrow = isNarrowWindow
+        windowWidth = width
+        // 从窄拉宽：丢掉窄窗口下的临时展开，回到上次手动状态。
+        if wasNarrow && !isNarrowWindow {
+            narrowListOverride = nil
+        }
+    }
+
+    /// 收起或展开列表栏。宽窗口记进 UserDefaults，窄窗口只记临时展开。
+    func toggleListPane() {
+        if isNarrowWindow {
+            narrowListOverride = !(narrowListOverride ?? false)
+        } else {
+            listPaneExpanded.toggle()
+            ListPaneSettings.isVisible = listPaneExpanded
+        }
+    }
+
+    /// 换范围：清搜索词，选中落到新范围的第一条。
+    func applyScope(_ scope: ModuleScope) {
+        guard scope.module == nav.active else { return }
+        flushPendingSave()
+        nav.setScope(scope)
+        searchQuery = ""
+        // 待办总览的数据只在打开时算，切到这一页就刷新一次。
+        if case .journal(.todos) = nav.scope {
+            todoOverview = (try? repo.todoOverview()) ?? []
+        }
+        restoreSelectionForActiveModule()
+    }
+
+    /// 切模块。记住的目标模块范围与选中都还原，不清搜索词。
+    func selectModule(_ module: AppModule) {
+        guard nav.active != module else { return }
+        flushPendingSave()
+        nav.enter(module)
+        restoreSelectionForActiveModule()
+    }
+
+    /// 切到模块后把选中落到它记住的那条；没有就选当前范围的第一条。
+    func restoreSelectionForActiveModule() {
+        switch nav.active {
+        case .notes:
+            let ids = visibleSummaries().map(\.id)
+            restoreSelection(from: ids)
+        case .journal:
+            // 总览与模板没有列表，选中保持不动。
+            if case .todos = nav.journalScope { return }
+            if case .templates = nav.journalScope { return }
+            var ids = journalEntries.map(\.id)
+            if case .today = nav.journalScope {
+                let today = JournalDate.today()
+                ids = journalEntries.filter { $0.date == today }.map(\.id)
+            }
+            restoreSelection(from: ids)
+        case .clips:
+            refreshClips()
+            let ids = visibleClips.map(\.id)
+            if let id = nav.selection, ids.contains(id) {
+                loadNote(id: id)
+                return
+            }
+            if let first = ids.first {
+                select(first)
+            } else {
+                selection = nil
+                current = nil
+            }
+        }
+    }
+
+    private func restoreSelection(from ids: [String]) {
+        if let id = nav.selection, ids.contains(id) {
+            loadNote(id: id)
+            return
+        }
+        if let first = ids.first {
+            selection = first
+            loadNote(id: first)
+        } else {
+            selection = nil
+            current = nil
+        }
+    }
+
     // MARK: - 载入
 
     func loadAll(selectFirst: Bool = false) {
@@ -228,11 +349,13 @@ final class AppState: ObservableObject {
             orphanCount = try repo.orphanCount()
             noteCount = try repo.noteCount()
             journalEntries = try repo.journalEntries()
+            journalOpenTodoCount = (try? repo.todoOverview())?.count ?? 0
+            journalTemplateCount = JournalTemplates.load(in: repo.vaultURL).count
             tags = try repo.allTags(types: repo.mainListTypes)
             refreshClips()
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
-            if case .tag(let name) = sidebarScope, !tags.contains(where: { $0.name == name }) {
-                sidebarScope = .all
+            if case .tag(let name) = nav.noteScope, !tags.contains(where: { $0.name == name }) {
+                nav.setScope(.note(.all))
             }
 
             if let id = selection, summaries.contains(where: { $0.id == id }) {
@@ -304,21 +427,31 @@ final class AppState: ObservableObject {
     /// 搜索命中在「含日记」时会带上日记。
     func visibleSummaries() -> [NoteSummary] {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.isEmpty else {
-            return (try? repo.search(q, includeJournal: searchScope == .includingJournal)) ?? []
+        if nav.active == .clips { return [] }
+        if !q.isEmpty {
+            return (try? repo.search(q, types: searchTypes)) ?? []
         }
-        switch sidebarScope {
-        case .all, .search:
+        guard nav.active == .notes else { return [] }
+        switch nav.noteScope {
+        case .all:
             return noteSummaries
         case .orphans:
             return noteSummaries.filter { $0.backlinkCount == 0 && $0.outgoingCount == 0 }
-        case .journal:
-            return []
         case .tag(let name):
             let ids = Set(occurrenceSummaryIds(tagged: name))
             return noteSummaries.filter { ids.contains($0.id) }
-        case .clipUnread, .clipAll, .clipArchived, .clipTag:
-            return []
+        }
+    }
+
+    /// 当前模块搜索要查哪些类型。每个模块只查自己的，互不串。
+    var searchTypes: Set<String> {
+        switch nav.active {
+        case .clips:
+            return [NoteTypes.clipID]
+        case .journal:
+            return [NoteTypes.journalID]
+        case .notes:
+            return Set(repo.mainListTypes)
         }
     }
 
@@ -341,22 +474,31 @@ final class AppState: ObservableObject {
         (try? repo.summaries(tagged: name, types: repo.mainListTypes))?.map(\.id) ?? []
     }
 
-    func selectScope(_ scope: SidebarScope) {
-        if scope.isClipScope {
-            selectClipScope(scope)
-            return
+    /// 切模块并指定范围。范围与模块不匹配时只切模块。
+    func enterModule(_ module: AppModule, scope: ModuleScope) {
+        nav.enter(module, scope: scope)
+    }
+
+    /// 只改当前模块的范围。
+    func setModuleScope(_ moduleScope: ModuleScope) {
+        nav.setScope(moduleScope)
+    }
+
+    /// `⌘N`：按当前模块分流。笔记 → 新建笔记；日记 → 今天；剪藏 → 新建剪藏。
+    func newInActiveModule() {
+        switch nav.active {
+        case .notes: isShowingNewNote = true
+        case .journal: goToToday()
+        case .clips: isShowingNewClip = true
         }
-        flushPendingSave()
-        sidebarScope = scope
-        searchQuery = ""
-        // 从剪藏范围回来时，当前选中的是剪藏，换回一条普通笔记。
-        if current?.type == NoteTypes.clipID {
-            if let first = visibleSummaries().first {
-                selection = first.id
-                loadNote(id: first.id)
-            } else {
-                current = nil
-            }
+    }
+
+    /// `⌘N` 菜单标题，跟着模块变。
+    var newInActiveModuleTitle: String {
+        switch nav.active {
+        case .notes: return "新建笔记"
+        case .journal: return "打开今天的日记"
+        case .clips: return "新建剪藏…"
         }
     }
 
@@ -369,7 +511,7 @@ final class AppState: ObservableObject {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return summaries }
         do {
-            return try repo.search(q, includeJournal: searchScope == .includingJournal)
+            return try repo.search(q, types: searchTypes)
         } catch {
             return summaries
         }
@@ -387,7 +529,7 @@ final class AppState: ObservableObject {
             let names = templates ?? JournalTemplates.newJournalNames(in: repo.vaultURL)
             let note = try repo.journalNote(on: date, using: names)
             loadAll()
-            sidebarScope = .journal
+            nav.enter(.journal, scope: .journal(.all))
             searchQuery = ""
             selection = note.id
             loadNote(id: note.id)
@@ -450,7 +592,7 @@ final class AppState: ObservableObject {
         do {
             let saved = try repo.save(updated)
             loadAll()
-            sidebarScope = .journal
+            nav.enter(.journal, scope: .journal(.all))
             searchQuery = ""
             selection = saved.id
             loadNote(id: saved.id)
@@ -547,21 +689,21 @@ final class AppState: ObservableObject {
     }
 
     /// `⌘⇧T`：刷新待办总览并打开面板。只聚合已经存在的日记，不代为新建。
+    /// `⌘⇧T`：切到日记模块的「待办总览」，占中栏。
     func openTodoOverview() {
         flushPendingSave()
         todoOverview = (try? repo.todoOverview()) ?? []
-        isShowingTodoOverview = true
+        nav.enter(.journal, scope: .journal(.todos))
     }
 
     /// 从待办总览跳到「最近出现」那天，并把那一行滚到可见。
     func jumpToTodo(_ todo: JournalTodo) {
-        isShowingTodoOverview = false
         guard let note = try? repo.journal(on: todo.lastDate) else {
             statusMessage = "找不到 \(todo.lastDate) 的日记"
             return
         }
         flushPendingSave()
-        sidebarScope = .journal
+        nav.enter(.journal, scope: .journal(.all))
         searchQuery = ""
         selection = note.id
         loadNote(id: note.id)
@@ -967,7 +1109,7 @@ final class AppState: ObservableObject {
     }
 
     func search(query: String) -> [NoteSummary] {
-        (try? repo.search(query, includeJournal: searchScope == .includingJournal)) ?? []
+        (try? repo.search(query, types: searchTypes)) ?? []
     }
 
     func duplicateTitleExists(_ title: String) -> Bool {

@@ -20,10 +20,25 @@ struct ContextPanelView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if let clip = clipNote {
+                if app.nav.active == .journal, app.nav.journalScope == .todos {
+                    Text("待办总览占满中栏，右栏留空。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 20)
+                } else if app.nav.active == .journal, app.nav.journalScope == .templates {
+                    Text("模板是配置页，右栏留空。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 20)
+                } else if let clip = clipNote {
                     clipSections(clip)
+                } else if let note = app.current, note.type == NoteTypes.journalID {
+                    // 日记不能被引用（linkable = false），只看出链与提及。
+                    journalSection(note)
+                    backlinkSection
+                    mentionSection
                 } else if app.current == nil {
-                    Text("选一条笔记查看连接")
+                    Text(emptyHint)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .padding(.top, 20)
@@ -38,7 +53,7 @@ struct ContextPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(clipNote == nil ? "连接" : "剪藏")
+
         .onChange(of: app.current?.id) { _, _ in
             summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
             tagInput = ""
@@ -479,6 +494,33 @@ struct ContextPanelView: View {
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var emptyHint: String {
+        switch app.nav.active {
+        case .journal:
+            return app.nav.journalScope == .todos ? "待办总览占满中栏，右栏留空。" : "选一篇日记查看当天的连接"
+        case .clips:
+            return "选一篇剪藏查看来源与被引用"
+        case .notes:
+            return "选一条笔记查看连接"
+        }
+    }
+
+    /// 日记右栏：当天统计 + 承接来源。
+    private func journalSection(_ note: Note) -> some View {
+        let entry = app.journalEntries.first { $0.id == note.id }
+        let carried = note.metaFields["carryFrom"] ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("当天", count: entry?.openTodoCount ?? 0)
+            VStack(alignment: .leading, spacing: 5) {
+                sourceRow("日期", entry?.date ?? note.title)
+                sourceRow("星期", entry?.weekday ?? "")
+                sourceRow("未完成", "\(entry?.openTodoCount ?? 0) 条")
+                sourceRow("承接自", carried.isEmpty ? "无" : carried)
+                sourceRow("字数", "\(note.body.count)")
+            }
+        }
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {

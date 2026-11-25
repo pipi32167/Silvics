@@ -5,15 +5,17 @@ struct RootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
-        } content: {
-            EditorPane()
-                .navigationSplitViewColumnWidth(min: 420, ideal: 680)
-        } detail: {
-            ContextPanelView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
+        GeometryReader { geo in
+            split
+                .onAppear {
+                    app.setWindowWidth(geo.size.width)
+                    #if DEBUG
+                    runDebugHooks()
+                    #endif
+                }
+                .onChange(of: geo.size.width) { _, width in
+                    app.setWindowWidth(width)
+                }
         }
         .sheet(isPresented: $app.isShowingNewNote) {
             NewNoteSheet()
@@ -43,32 +45,60 @@ struct RootView: View {
             QuickOpenSheet()
                 .environmentObject(app)
         }
-        .sheet(isPresented: $app.isShowingTodoOverview) {
-            TodoOverviewSheet()
-                .environmentObject(app)
-        }
-        .sheet(isPresented: $app.isShowingJournalTemplateSheet) {
-            JournalTemplateSheet()
-                .environmentObject(app)
-        }
         .overlay(alignment: .bottom) {
             StatusBanner()
         }
-        .onAppear {
-            #if DEBUG
-            if DemoSeeder.isRequested {
-                let n = DemoSeeder.seedIfEmpty(app)
-                if n > 0 { print("[Silvics] seeded \(n) notes") }
+    }
+
+    /// 四栏骨架：模块导航 | 列表 | 内容 | 右栏。
+    ///
+    /// 系统 `NavigationSplitView` 只支持三列，所以第一列交给它管，
+    /// 后三列放进 `HSplitView`，列表栏收起只是把那一列拿掉。
+    private var split: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            ModuleNavView()
+                .navigationSplitViewColumnWidth(min: 132, ideal: 152, max: 200)
+        } detail: {
+            HSplitView {
+                if app.isListPaneVisible {
+                    ListPaneView()
+                        .frame(minWidth: 200, idealWidth: 232, maxWidth: 340)
+                }
+                ContentPane()
+                    .frame(minWidth: 380, idealWidth: 680, maxWidth: .infinity)
+                if app.isContextPaneVisible {
+                    ContextPanelView()
+                        .frame(minWidth: 240, idealWidth: 292, maxWidth: 380)
+                }
             }
-            DebugCapture.applyShowFlag(app)
-            DebugCapture.runSelfTest(app)
-            DebugCapture.runConflictDrill(app)
-            DebugCapture.seedConflictDemo(app)
-            DebugCapture.applyCaretProbe()
-            DebugCapture.schedule()
-            #endif
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    app.toggleListPane()
+                } label: {
+                    Image(systemName: app.isListPaneVisible ? "sidebar.left" : "sidebar.right")
+                }
+                .help(app.isListPaneVisible ? "隐藏列表栏 ⌘⌥L" : "显示列表栏 ⌘⌥L")
+            }
         }
     }
+
+    #if DEBUG
+    /// 仅 DEBUG：演示数据与取证钩子。放在 onAppear 里跑，顺序保持不变。
+    private func runDebugHooks() {
+        if DemoSeeder.isRequested {
+            let n = DemoSeeder.seedIfEmpty(app)
+            if n > 0 { print("[Silvics] seeded \(n) notes") }
+        }
+        DebugCapture.applyShowFlag(app)
+        DebugCapture.runSelfTest(app)
+        DebugCapture.runConflictDrill(app)
+        DebugCapture.seedConflictDemo(app)
+        DebugCapture.applyCaretProbe()
+        DebugCapture.schedule()
+    }
+    #endif
 }
 
 // MARK: - 状态条
@@ -108,6 +138,31 @@ private struct StatusBanner: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: app.statusMessage)
+    }
+}
+
+// MARK: - 中栏
+
+/// 中栏按模块切换：笔记与日记用编辑器，剪藏用只读阅读视图，
+/// 日记的「待办总览」「模板」占满中栏，不再弹 sheet。
+private struct ContentPane: View {
+    @EnvironmentObject private var app: AppState
+
+    @ViewBuilder
+    var body: some View {
+        switch app.nav.active {
+        case .notes, .clips:
+            EditorPane()
+        case .journal:
+            switch app.nav.journalScope {
+            case .todos:
+                TodoOverviewView()
+            case .templates:
+                JournalTemplateView()
+            case .today, .all:
+                EditorPane()
+            }
+        }
     }
 }
 
@@ -218,9 +273,9 @@ private struct EditorPane: View {
             .accessibilityIdentifier("journal-carry")
 
             Button {
-                app.isShowingJournalTemplateSheet = true
+                app.applyScope(.journal(.templates))
             } label: {
-                Label("模板…", systemImage: "square.grid.2x2")
+                Label("模板", systemImage: "square.grid.2x2")
                     .font(.system(size: 11))
             }
             .buttonStyle(.borderless)
@@ -274,13 +329,32 @@ private struct EditorPane: View {
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: "tree")
+            Image(systemName: emptyIcon)
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(.quaternary)
-            Text("选一条笔记，或按 ⌘N 新建；⌘⇧V 收一篇剪藏")
+            Text(emptyText)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyIcon: String {
+        switch app.nav.active {
+        case .notes: return "tree"
+        case .journal: return "calendar"
+        case .clips: return "bookmark"
+        }
+    }
+
+    private var emptyText: String {
+        switch app.nav.active {
+        case .notes:
+            return "选一条笔记，或按 ⌘N 新建"
+        case .journal:
+            return "选一篇日记，或按 ⌘⇧J 打开今天"
+        case .clips:
+            return "选一篇剪藏，或按 ⌘⇧V 收一篇"
+        }
     }
 }

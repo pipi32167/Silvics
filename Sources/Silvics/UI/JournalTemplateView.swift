@@ -8,9 +8,8 @@ import SwiftUI
 /// - 勾选：下一次新建日记用哪些。记忆落 `JournalTemplateMemory`（UserDefaults）。
 ///
 /// 只影响之后新建的日记，已有日记的正文一个字都不改。
-struct JournalTemplateSheet: View {
+struct JournalTemplateView: View {
     @EnvironmentObject private var app: AppState
-    @Environment(\.dismiss) private var dismiss
 
     /// 从磁盘读出来的模板，按 order 升序。保存后重新读，保证界面与文件一致。
     @State private var choices: [JournalTemplate] = []
@@ -41,8 +40,8 @@ struct JournalTemplateSheet: View {
             Divider()
             footer
         }
-        .padding(16)
-        .frame(width: 540, height: 480)
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             reloadChoices()
             selected = Set(app.journalTemplateNames())
@@ -232,13 +231,14 @@ struct JournalTemplateSheet: View {
                 Spacer()
 
                 if draft == nil {
-                    Button("取消") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                        .controlSize(.small)
+                    Button("还原") {
+                        selected = Set(app.journalTemplateNames())
+                        errorText = nil
+                    }
+                    .controlSize(.small)
 
                     Button("保存") {
                         app.setJournalTemplateNames(orderedSelection())
-                        dismiss()
                     }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.small)
@@ -400,7 +400,7 @@ struct JournalTemplateSheet: View {
 
 /// 表单下方的骨架预览。独立出来只为让 `form` 少一层缩进。
 private enum HintText {
-    static func preview(_ draft: JournalTemplateSheet.Draft) -> String {
+    static func preview(_ draft: JournalTemplateView.Draft) -> String {
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = JournalTemplates.normalizeBody(draft.body)
         let title = name.isEmpty ? "## （名字）" : "## \(name)"
