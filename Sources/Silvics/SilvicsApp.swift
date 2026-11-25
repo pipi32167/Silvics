@@ -58,6 +58,15 @@ struct SilvicsApp: App {
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
 
+                Button("插入承接（当前行之前）") {
+                    app.insertCarryAtCaret()
+                }
+                .disabled(app.current?.type != NoteTypes.journalID)
+
+                Button("日记模板…") {
+                    app.isShowingJournalTemplateSheet = true
+                }
+
                 Divider()
 
                 Button("立即保存") {

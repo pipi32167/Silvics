@@ -57,17 +57,46 @@ enum JournalTemplates {
             .map(\.name)
     }
 
+    /// 新建日记实际要用的模板名：记忆优先，失效退回默认。
+    ///
+    /// - 记忆里按当前模板的 order 排序（不是记住时的顺序）。
+    /// - 模板文件已被删掉的跳过；重名只取第一次出现。
+    /// - 一个都不剩时退回 `defaultNames`（order 最小的前 `limit` 个）。
+    static func newJournalNames(
+        in vaultURL: URL,
+        remembered: [String] = JournalTemplateMemory.names,
+        limit: Int = 2
+    ) -> [String] {
+        let byName = templatesByName(in: vaultURL)
+        var picked: [JournalTemplate] = []
+        var seen = Set<String>()
+        for raw in remembered {
+            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, seen.insert(name).inserted else { continue }
+            guard let template = byName[name] else { continue }
+            picked.append(template)
+        }
+        guard !picked.isEmpty else { return defaultNames(in: vaultURL, limit: limit) }
+        picked.sort { a, b in a.order != b.order ? a.order < b.order : a.name < b.name }
+        return picked.map(\.name)
+    }
+
+    /// 名字 → 模板。重名只取第一份，与 `skeleton` 的口径一致。
+    private static func templatesByName(in vaultURL: URL) -> [String: JournalTemplate] {
+        var byName: [String: JournalTemplate] = [:]
+        for template in load(in: vaultURL) where byName[template.name] == nil {
+            byName[template.name] = template
+        }
+        return byName
+    }
+
     /// 按 order 升序拼骨架：每段 `## <名字>`，段间一个空行。
     ///
     /// 点名但文件缺失的模板直接跳过（不报错，也不在正文里留空标题）。
     /// 名字重复时只取第一份。
     static func skeleton(named names: [String], in vaultURL: URL) -> String {
         guard !names.isEmpty else { return "" }
-        let templates = load(in: vaultURL)
-        var byName: [String: JournalTemplate] = [:]
-        for template in templates where byName[template.name] == nil {
-            byName[template.name] = template
-        }
+        let byName = templatesByName(in: vaultURL)
 
         var picked: [JournalTemplate] = []
         var seen = Set<String>()

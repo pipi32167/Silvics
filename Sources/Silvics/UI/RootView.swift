@@ -43,6 +43,10 @@ struct RootView: View {
             TodoOverviewSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingJournalTemplateSheet) {
+            JournalTemplateSheet()
+                .environmentObject(app)
+        }
         .overlay(alignment: .bottom) {
             StatusBanner()
         }
@@ -159,6 +163,10 @@ private struct EditorPane: View {
 
                 statusPicker
 
+                if note.type == NoteTypes.journalID {
+                    journalActions
+                }
+
                 if !app.aliases.isEmpty {
                     Label("\(app.aliases.count)", systemImage: "tag")
                         .font(.system(size: 10).monospacedDigit())
@@ -181,6 +189,34 @@ private struct EditorPane: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(height: 34)
+    }
+
+    /// 日记专用：把上一篇的未完成项插到当前行之前、选下次新建的模板。
+    private var journalActions: some View {
+        HStack(spacing: 2) {
+            Button {
+                app.insertCarryAtCaret()
+            } label: {
+                Label("承接", systemImage: "arrow.turn.down.right")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .help("把上一个有日记的日子的未完成项插到光标所在行之前。")
+            .accessibilityIdentifier("journal-carry")
+
+            Button {
+                app.isShowingJournalTemplateSheet = true
+            } label: {
+                Label("模板…", systemImage: "square.grid.2x2")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .help("勾选下一次新建日记要用的模板。已有日记正文不受影响。")
+            .accessibilityIdentifier("journal-templates")
+        }
+        .foregroundStyle(.secondary)
+        .labelStyle(.titleAndIcon)
+        .controlSize(.small)
     }
 
     private var statusPicker: some View {

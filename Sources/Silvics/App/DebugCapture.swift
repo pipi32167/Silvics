@@ -9,7 +9,7 @@ import SwiftUI
 ///
 /// 两个环境变量：
 /// - `SILVICS_CAPTURE=/tmp/reports/x.png`：图片路径前缀。有多个可见窗口时追加 `-1`、`-2`。
-/// - `SILVICS_SHOW=quickopen|mentions|alias|rename`：启动后直接打开对应面板，便于截取。
+/// - `SILVICS_SHOW=quickopen|mentions|alias|rename|journal-templates`：启动后直接打开对应面板，便于截取。
 /// - `SILVICS_CARET=<文本>`：把光标放到含该文本的段落（验收「光标行露源码」必须能指定光标）。
 enum DebugCapture {
 
@@ -69,6 +69,23 @@ enum DebugCapture {
             app.selectScope(.all)
             app.select(match.id)
         }
+        // 先切 vault 再播种 / 开面板：`SILVICS_VAULT` 换目录后，后面的写入要落到新目录。
+        applySyncFlags(app)
+
+        // `SILVICS_JOURNAL_CARRY=<关键字>`：取证「承接插在当前行之前」。
+        // 先备好上一篇日记与今天的正文（同步），等编辑区出来后把光标放进含关键字的段落，
+        // 再走 `insertCarryAtCaret` 的真实链路。截图里要能看出承接段不在最前。
+        if let keyword = ProcessInfo.processInfo.environment["SILVICS_JOURNAL_CARRY"], !keyword.isEmpty {
+            seedCarryDemo(app)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                guard app.debugPlaceCaret(atKeyword: keyword) else {
+                    print("[carry-demo] 编辑区里找不到「\(keyword)」")
+                    return
+                }
+                print("[carry-demo] 插入前光标在含「\(keyword)」的段落，结果：\(app.insertCarryAtCaret())")
+            }
+        }
+
         switch showPanel {
         case "quickopen": app.isShowingQuickOpen = true
         case "mentions", "mentions-preview":
@@ -86,6 +103,9 @@ enum DebugCapture {
             SettingsWindowController.show(app: app, tab: .providers)
         case "settings-about":
             SettingsWindowController.show(app: app, tab: .about)
+        case "journal-templates", "journal-template":
+            seedDemoTemplates(app)
+            app.isShowingJournalTemplateSheet = true
         case "alias": app.isShowingAliasSheet = true
         case "rename": app.isShowingRenameSheet = true
         case "sync": SettingsWindowController.show(app: app, tab: .sync)
@@ -101,11 +121,57 @@ enum DebugCapture {
             app.searchQuery = q
         }
 
-        applySyncFlags(app)
-
         // 取证时先把状态条清掉，截图里不出现「已从 vault 重建…」这类启动提示。
         if path != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { app.clearStatus() }
+        }
+    }
+
+    /// 仅取证：备好「上一篇日记 + 今天日记」，供 `SILVICS_JOURNAL_CARRY` 演示中间插入。
+    ///
+    /// 今天的正文固定 6 行，`## 生活` 在第 4 行（1-based），承接段插在它之前。
+    @MainActor
+    private static func seedCarryDemo(_ app: AppState) {
+        let today = JournalDate.today()
+        let previous = JournalDate.offset(today, by: -1)
+        app.debugSeedJournal(on: previous, body: """
+        ## 工作
+        - [ ] 把保存链路倒过来
+        - [x] 补类型注册表
+        ## 生活
+        - [ ] 跑步 20 分钟
+        """)
+        app.debugSeedJournal(on: today, body: """
+        ## 工作
+        - [ ] 写批次 6 的测试
+        - [ ] 把日记接到界面上
+        ## 生活
+        - [ ] 买咖啡豆
+        今天重读 稀疏重复优于集中突击 的论证，集中突击只能短期见效。
+        """)
+        _ = app.openJournal(on: today, using: [])
+    }
+
+    /// 仅取证：`SILVICS_TEMPLATES=1` 往 vault 的 `templates/` 写三份演示模板（order 1/2/3）。
+    /// `SILVICS_TEMPLATE_MEMORY=工作,复盘` 再预置记忆，便于截到「部分勾选」的状态。
+    @MainActor
+    private static func seedDemoTemplates(_ app: AppState) {
+        let env = ProcessInfo.processInfo.environment
+        if env["SILVICS_TEMPLATES"] == "1" {
+            let dir = app.debugVaultURL.appendingPathComponent(VaultFormat.templatesDir, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for (name, order) in [("工作", 1), ("生活", 2), ("复盘", 3)] {
+                let text = "---\ntemplate:\n  name: \(name)\n  order: \(order)\n---\n"
+                try? text.write(
+                    to: dir.appendingPathComponent("\(name).md"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+        }
+        if let raw = env["SILVICS_TEMPLATE_MEMORY"] {
+            let names = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if !names.isEmpty { app.setJournalTemplateNames(names) }
         }
     }
 
