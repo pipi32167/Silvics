@@ -13,6 +13,13 @@ struct SilvicsApp: App {
         VaultSwitchDrill.runIfRequested()
         // 仅 DEBUG：`SILVICS_JOURNAL_DRILL=<dir>` 跑「模板 + 承接 + journal/ 落盘」的命令行演练。
         JournalDrill.runIfRequested()
+        // 离屏截图：`@NSApplicationDelegateAdaptor` 的 `applicationDidFinishLaunching`
+        // 在「一个可见窗口都没有」的会话里实测不触发，所以入口放在 init，投一次主队列。
+        if OffscreenCapture.isRequested {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { OffscreenCapture.startIfRequested() }
+            }
+        }
         #endif
     }
 
@@ -133,6 +140,14 @@ struct SilvicsApp: App {
 /// 负责在失焦与退出时把未落库的正文刷进数据库。
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var app: AppState?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        // 离屏通道：App 起来但一个可见窗口都没有时，窗口截图与 `onAppear` 钩子全都失效。
+        // 入口放在这里，因为它不依赖任何窗口被创建。
+        MainActor.assumeIsolated { OffscreenCapture.startIfRequested() }
+        #endif
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {

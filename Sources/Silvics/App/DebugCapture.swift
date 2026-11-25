@@ -21,9 +21,19 @@ enum DebugCapture {
         ProcessInfo.processInfo.environment["SILVICS_SHOW"]
     }
 
+    /// 需要真实窗口才能挂 sheet 的面板开关。离屏通道（`SILVICS_OFFSCREEN`）跳过这些。
+    static let sheetPanels: Set<String> = [
+        "quickopen", "mentions", "mentions-preview", "todos", "todo-overview", "todo-jump",
+        "settings", "settings-providers", "settings-providers-demo", "settings-about",
+        "sync", "journal-templates", "journal-template", "templates", "templates-result",
+        "alias", "rename",
+    ]
+
     /// 启动时按环境变量打开面板。
+    ///
+    /// `offscreen` 为 true 时走离屏通道：sheet 类面板没有窗口挂不住，跳过并写日志。
     @MainActor
-    static func applyShowFlag(_ app: AppState) {
+    static func applyShowFlag(_ app: AppState, offscreen: Bool = false) {
         // `SILVICS_DARK=1`：取证时切深色外观，用于「同一篇的深浅色对比」。
         if ProcessInfo.processInfo.environment["SILVICS_DARK"] == "1" {
             NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -86,50 +96,11 @@ enum DebugCapture {
             }
         }
 
-        switch showPanel {
-        case "quickopen": app.isShowingQuickOpen = true
-        case "mentions", "mentions-preview":
-            app.refreshMentionGroups()
-            app.isShowingMentionsSheet = true
-        case "todos", "todo-overview": app.openTodoOverview()
-        case "todo-jump":
-            // 取证用：打开总览并按文本跳转，走的是面板里点击的同一路径。
-            app.openTodoOverview()
-            if let text = ProcessInfo.processInfo.environment["SILVICS_TODO_TEXT"],
-               let todo = app.todoOverview.first(where: { $0.text.contains(text) }) {
-                app.jumpToTodo(todo)
-            }
-        case "journal": app.selectScope(.journal)
-        case "lists", "lists-demo": seedListsDemo(app)
-        case "tables", "tables-demo": seedTablesDemo(app)
-        case "journal-today": app.goToToday()
-        case "settings":
-            SettingsWindowController.show(app: app, tab: .appearance)
-        case "settings-providers-demo":
-            seedDemoProvider(app)
-            SettingsWindowController.show(app: app, tab: .providers)
-        case "settings-providers":
-            SettingsWindowController.show(app: app, tab: .providers)
-        case "settings-about":
-            SettingsWindowController.show(app: app, tab: .about)
-        case "journal-templates", "journal-template", "templates":
-            seedDemoTemplates(app)
-            app.isShowingJournalTemplateSheet = true
-        case "templates-result":
-            // 取证：先落盘 3 份演示模板，再用面板保存时的同一个 `saveJournalTemplate` 新建一份，
-            // 然后走 `⌘⇧J` 的同一条链路建今天这篇，截的是真实保存 + 真实新建的结果。
-            seedDemoTemplates(app)
-            _ = try? app.saveJournalTemplate(
-                nil,
-                name: "早间",
-                order: "4",
-                body: "- [ ] 写今天的三件事\n- [ ] 读 15 分钟"
-            )
-            app.setJournalTemplateNames(["工作", "生活"])
-            app.goToToday()
-        case "alias": app.isShowingAliasSheet = true        case "rename": app.isShowingRenameSheet = true
-        case "sync": SettingsWindowController.show(app: app, tab: .sync)
-        default: break
+        // 离屏通道没有窗口可挂 sheet：面板类钩子跳过，其余（日记、列表、表格演示）照旧。
+        if offscreen, let showPanel, sheetPanels.contains(showPanel) {
+            OffscreenCapture.log("SILVICS_SHOW=\(showPanel) 需要窗口挂 sheet，离屏通道跳过（只渲染主界面）")
+        } else {
+            applyPanelFlag(app, panel: showPanel)
         }
 
         // `SILVICS_SEARCH=<词>` + `SILVICS_SEARCH_SCOPE=all`：取证时预置搜索。
@@ -145,6 +116,56 @@ enum DebugCapture {
         if path != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { app.clearStatus() }
         }
+    }
+
+    /// `SILVICS_SHOW` 的实际动作。抽出来是为了让离屏通道能整块跳过 sheet 类面板。
+    @MainActor
+    private static func applyPanelFlag(_ app: AppState, panel: String?) {
+        switch panel {
+            case "quickopen": app.isShowingQuickOpen = true
+            case "mentions", "mentions-preview":
+                app.refreshMentionGroups()
+                app.isShowingMentionsSheet = true
+            case "todos", "todo-overview": app.openTodoOverview()
+            case "todo-jump":
+                // 取证用：打开总览并按文本跳转，走的是面板里点击的同一路径。
+                app.openTodoOverview()
+                if let text = ProcessInfo.processInfo.environment["SILVICS_TODO_TEXT"],
+                   let todo = app.todoOverview.first(where: { $0.text.contains(text) }) {
+                    app.jumpToTodo(todo)
+                }
+            case "journal": app.selectScope(.journal)
+            case "lists", "lists-demo": seedListsDemo(app)
+            case "tables", "tables-demo": seedTablesDemo(app)
+            case "journal-today": app.goToToday()
+            case "settings":
+                SettingsWindowController.show(app: app, tab: .appearance)
+            case "settings-providers-demo":
+                seedDemoProvider(app)
+                SettingsWindowController.show(app: app, tab: .providers)
+            case "settings-providers":
+                SettingsWindowController.show(app: app, tab: .providers)
+            case "settings-about":
+                SettingsWindowController.show(app: app, tab: .about)
+            case "journal-templates", "journal-template", "templates":
+                seedDemoTemplates(app)
+                app.isShowingJournalTemplateSheet = true
+            case "templates-result":
+                // 取证：先落盘 3 份演示模板，再用面板保存时的同一个 `saveJournalTemplate` 新建一份，
+                // 然后走 `⌘⇧J` 的同一条链路建今天这篇，截的是真实保存 + 真实新建的结果。
+                seedDemoTemplates(app)
+                _ = try? app.saveJournalTemplate(
+                    nil,
+                    name: "早间",
+                    order: "4",
+                    body: "- [ ] 写今天的三件事\n- [ ] 读 15 分钟"
+                )
+                app.setJournalTemplateNames(["工作", "生活"])
+                app.goToToday()
+            case "alias": app.isShowingAliasSheet = true        case "rename": app.isShowingRenameSheet = true
+            case "sync": SettingsWindowController.show(app: app, tab: .sync)
+            default: break
+            }
     }
 
     /// 仅取证：备好「上一篇日记 + 今天日记」，供 `SILVICS_JOURNAL_CARRY` 演示中间插入。
@@ -359,7 +380,7 @@ enum DebugCapture {
     /// 选中行的材质由 WindowServer 合成，离屏栅格化会画成黑块。
     /// 捕获前改成普通材质，事后原样恢复。
     @MainActor
-    private static func neutraliseEffectViews(in root: NSView) -> [NSVisualEffectView: (NSVisualEffectView.Material, NSVisualEffectView.BlendingMode, NSVisualEffectView.State)] {
+    static func neutraliseEffectViews(in root: NSView) -> [NSVisualEffectView: (NSVisualEffectView.Material, NSVisualEffectView.BlendingMode, NSVisualEffectView.State)] {
         var saved: [NSVisualEffectView: (NSVisualEffectView.Material, NSVisualEffectView.BlendingMode, NSVisualEffectView.State)] = [:]
         func walk(_ view: NSView) {
             if let effect = view as? NSVisualEffectView {
@@ -375,7 +396,7 @@ enum DebugCapture {
     }
 
     @MainActor
-    private static func restore(_ saved: [NSVisualEffectView: (NSVisualEffectView.Material, NSVisualEffectView.BlendingMode, NSVisualEffectView.State)]) {
+    static func restore(_ saved: [NSVisualEffectView: (NSVisualEffectView.Material, NSVisualEffectView.BlendingMode, NSVisualEffectView.State)]) {
         for (view, state) in saved {
             view.material = state.0
             view.blendingMode = state.1
