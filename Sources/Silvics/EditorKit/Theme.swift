@@ -96,6 +96,57 @@ enum Theme {
             : NSColor(white: 0, alpha: 0.12)
     }
 
+    // MARK: - 代码高亮
+    //
+    // 只改字色，不改字符。深色模式下一律抬高亮度、降饱和，避免浅底配色在暗底上刺眼。
+
+    /// 关键字（`let`、`func`、`return`、`\frac`）。
+    static let tokenKeyword = NSColor(name: "tokenKeyword") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.83, green: 0.58, blue: 0.98, alpha: 1)
+            : NSColor(red: 0.52, green: 0.13, blue: 0.62, alpha: 1)
+    }
+
+    /// 字符串（含三引号、模板字符串）。
+    static let tokenString = NSColor(name: "tokenString") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.94, green: 0.62, blue: 0.46, alpha: 1)
+            : NSColor(red: 0.66, green: 0.20, blue: 0.10, alpha: 1)
+    }
+
+    /// 注释（`//`、`#`、`%`、`/* */`）。压亮度，不与正文抢注意力。
+    static let tokenComment = NSColor(name: "tokenComment") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.56, green: 0.66, blue: 0.58, alpha: 1)
+            : NSColor(red: 0.38, green: 0.47, blue: 0.40, alpha: 1)
+    }
+
+    /// 数字（`42`、`0x1F`、`1e-3`）。
+    static let tokenNumber = NSColor(name: "tokenNumber") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.56, green: 0.73, blue: 0.99, alpha: 1)
+            : NSColor(red: 0.10, green: 0.30, blue: 0.72, alpha: 1)
+    }
+
+    /// 函数名（标识符后紧跟 `(`）。
+    static let tokenFunction = NSColor(name: "tokenFunction") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.47, green: 0.83, blue: 0.86, alpha: 1)
+            : NSColor(red: 0.06, green: 0.40, blue: 0.44, alpha: 1)
+    }
+
+    /// token 类别 → 字色。`plain` 返回 `nil`：调用方跳过，保留正文色。
+    static func tokenColor(_ kind: CodeTokenKind) -> NSColor? {
+        switch kind {
+        case .keyword: return tokenKeyword
+        case .string: return tokenString
+        case .comment: return tokenComment
+        case .number: return tokenNumber
+        case .function: return tokenFunction
+        case .plain: return nil
+        }
+    }
+
     // MARK: - 段落
 
     static func bodyParagraph() -> NSParagraphStyle {

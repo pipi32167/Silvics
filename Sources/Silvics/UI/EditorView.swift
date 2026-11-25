@@ -302,7 +302,7 @@ struct NoteEditorView: NSViewRepresentable {
 
             applyHeadings(spans, storage, fullRange)
             applyInline(spans, storage, fullRange)
-            applyBlocks(spans, storage, fullRange)
+            applyBlocks(spans, in: text, storage, fullRange)
             applyWikiLinks(wikis, in: text, storage, fullRange)
             applyMentions(storage)
             applySyntaxMarks(marks, storage)
@@ -419,7 +419,12 @@ struct NoteEditorView: NSViewRepresentable {
             }
         }
 
-        private func applyBlocks(_ spans: EditorSpans, _ storage: NSTextStorage, _ full: NSRange) {
+        private func applyBlocks(
+            _ spans: EditorSpans,
+            in text: String,
+            _ storage: NSTextStorage,
+            _ full: NSRange
+        ) {
             for range in spans.codeBlocks {
                 guard let r = clamp(range, storage.length) else { continue }
                 storage.addAttributes([
@@ -428,12 +433,31 @@ struct NoteEditorView: NSViewRepresentable {
                     .paragraphStyle: Theme.codeParagraph(),
                 ], range: r)
             }
+            applyCodeTokens(spans, in: text, storage)
             for range in spans.blockQuotes {
                 guard let r = clamp(range, storage.length) else { continue }
                 storage.addAttributes([
                     .foregroundColor: Theme.secondaryText,
                     .paragraphStyle: Theme.quoteParagraph(),
                 ], range: r)
+            }
+        }
+
+        /// 代码块上色。围栏行不碰，只给内容行按 `CodeLexer` 的 token 改字色。
+        /// `plain` 不上色，保留正文色。
+        private func applyCodeTokens(_ spans: EditorSpans, in text: String, _ storage: NSTextStorage) {
+            let ns = text as NSString
+            for region in MarkdownStyler.codeBlockRegions(in: text, spans: spans) {
+                guard region.contentRange.location >= 0,
+                      region.contentRange.location + region.contentRange.length <= ns.length else { continue }
+                let code = ns.substring(with: region.contentRange)
+                let base = region.contentRange.location
+                for token in CodeLexer.lex(code, language: region.language) {
+                    guard let color = Theme.tokenColor(token.kind) else { continue }
+                    let range = NSRange(location: base + token.range.location, length: token.range.length)
+                    guard let r = clamp(range, storage.length) else { continue }
+                    storage.addAttribute(.foregroundColor, value: color, range: r)
+                }
             }
         }
 

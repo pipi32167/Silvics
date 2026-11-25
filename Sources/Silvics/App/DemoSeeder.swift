@@ -220,6 +220,42 @@ enum DemoSeeder {
             这时候先保证每天都写。连接密度是结果，不是前提。
             """
         ),
+        // 代码高亮取证用：六种语言各一个块，围栏行本身不该上色（见批次 5 的截图验收）。
+        Seed(
+            title: "代码高亮取证",
+            status: .evergreen,
+            body: #"""
+            六个块，六种词法。围栏行不上色，块内按语言上色。
+            ```swift
+            // 计数器
+            struct Counter {
+                let hits = 0x1F
+                func bump(_ step: Int) -> Int { return hits + step }
+            }
+            ```
+            ```js
+            const label = "step // 不是注释";
+            function bump(n) { return n * 1.5e-3; } // 真注释
+            ```
+            ```python
+            def bump(step):
+                """跨行
+                字符串"""
+                return step + 1  # 注释
+            ```
+            ```bash
+            #!/bin/sh
+            echo $#
+            total=$((1 + 2))   # 注释
+            ```
+            ```json
+            {"hits": 31, "ok": true, "label": "x"}
+            ```
+            ```latex
+            \frac{a}{b} + \alpha = 0 % 注释
+            ```
+            """#
+        ),
     ]
 
     /// 库为空时写入演示数据。返回写入条数。

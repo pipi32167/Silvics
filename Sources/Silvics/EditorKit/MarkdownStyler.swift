@@ -28,6 +28,14 @@ struct SyntaxMarkVisibility: Equatable {
     var hide: [NSRange] = []
 }
 
+/// 一个代码块里「该上色」的那段：内容行，不含围栏行。
+struct CodeBlockRegion: Equatable {
+    /// 内容行区间（不含首尾围栏，末尾不含换行）。
+    var contentRange: NSRange
+    /// 围栏上的语言标记原文（` ```swift linenums ` → `swift`）；空表示未标注或缩进代码块。
+    var language: String
+}
+
 /// 把 `swift-markdown` 的 AST 区间翻译成 `NSRange`。
 ///
 /// 关键坑（见设计文档 7.4）：`SourceLocation.column` 的单位是 **UTF-8 字节**，
@@ -197,6 +205,89 @@ enum MarkdownStyler {
     /// 只标反引号本身，语言标记留着可见——它是判断块语言的唯一线索。
     static func codeFenceMarkerRanges(in text: String) -> [NSRange] {
         scanLineMarkers(in: text).compactMap(\.fence)
+    }
+
+    /// 每个代码块里「该上色」的内容行 + 语言标记。
+    ///
+    /// 区间来自 `swift-markdown` 的 `codeBlocks`（围栏块与缩进块都算），
+    /// 再在块内自己找围栏行：围栏行本身不上色，只把中间的内容行交给 `CodeLexer`（H11）。
+    static func codeBlockRegions(in text: String, spans: EditorSpans) -> [CodeBlockRegion] {
+        guard !text.isEmpty, !spans.codeBlocks.isEmpty else { return [] }
+        let ns = text as NSString
+        var out: [CodeBlockRegion] = []
+        for span in spans.codeBlocks {
+            guard span.length > 0, span.location >= 0,
+                  span.location + span.length <= ns.length else { continue }
+            out += regions(in: ns, span: span)
+        }
+        return out
+    }
+
+    /// 围栏行识别：行首（允许缩进）连缀 ≥3 个反引号或波浪号。
+    /// 返回围栏字符、长度、以及围栏后面的语言标记。
+    private static func fenceLine(_ line: String) -> (character: Character, count: Int, language: String)? {
+        let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let rest = line.dropFirst(indent.count)
+        guard let first = rest.first, first == "`" || first == "~" else { return nil }
+        let count = rest.prefix(while: { $0 == first }).count
+        guard count >= 3 else { return nil }
+        let info = rest.dropFirst(count).drop(while: { $0 == " " || $0 == "\t" })
+        let language = String(info.prefix(while: { $0 != " " && $0 != "\t" && $0 != "`" && $0 != "~" }))
+        return (first, count, language)
+    }
+
+    /// 一个代码块：切出行，去掉首尾围栏，返回内容行区间。
+    private static func regions(in ns: NSString, span: NSRange) -> [CodeBlockRegion] {
+        let end = span.location + span.length
+        var lines: [NSRange] = []
+        var index = span.location
+        while index < end {
+            let lineRange = ns.lineRange(for: NSRange(location: index, length: 0))
+            guard lineRange.length > 0 else { break }
+            lines.append(lineRange)
+            index = lineRange.location + lineRange.length
+        }
+        guard let first = lines.first else { return [] }
+
+        /// 行文本，去掉行尾换行（`\n` / `\r\n`）。
+        func lineText(_ range: NSRange) -> String {
+            var r = range
+            while r.length > 0 {
+                let last = ns.character(at: r.location + r.length - 1)
+                if last == 0x0A || last == 0x0D { r.length -= 1 } else { break }
+            }
+            return ns.substring(with: r)
+        }
+
+        /// 从 `start` 到 `lines[to]` 末尾（去掉尾部换行）的区间。
+        func contentRange(from start: Int, to lastLine: NSRange) -> NSRange? {
+            var trailing = 0
+            while trailing < lastLine.length {
+                let last = ns.character(at: lastLine.location + lastLine.length - 1 - trailing)
+                if last == 0x0A || last == 0x0D { trailing += 1 } else { break }
+            }
+            let stop = lastLine.location + lastLine.length - trailing
+            guard stop > start else { return nil }
+            return NSRange(location: start, length: stop - start)
+        }
+
+        guard let open = fenceLine(lineText(first)) else {
+            // 缩进代码块（四个空格）：没有围栏，整段按通用词法上色
+            guard let range = contentRange(from: span.location, to: lines[lines.count - 1]) else { return [] }
+            return [CodeBlockRegion(contentRange: range, language: "")]
+        }
+
+        var last = lines.count
+        for k in 1..<lines.count {
+            if let close = fenceLine(lineText(lines[k])),
+               close.character == open.character, close.count >= open.count {
+                last = k
+                break
+            }
+        }
+        guard last > 1 else { return [] }
+        guard let range = contentRange(from: lines[1].location, to: lines[last - 1]) else { return [] }
+        return [CodeBlockRegion(contentRange: range, language: open.language)]
     }
 
     /// 一行上可能出现的三种行首标记。
