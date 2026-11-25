@@ -104,6 +104,11 @@ enum DebugCapture {
             applyPanelFlag(app, panel: showPanel)
         }
 
+        // `SILVICS_LIST_WIDTH=300`：取证时把列表栏拉到指定宽度。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_LIST_WIDTH"], let width = Double(raw) {
+            app.setListPaneWidth(CGFloat(width))
+        }
+
         // `SILVICS_SEARCH=<词>`：取证时在当前模块里预置搜索。
         // 必须放在范围切换之后：换范围会清空搜索词。
         if let q = ProcessInfo.processInfo.environment["SILVICS_SEARCH"], !q.isEmpty {

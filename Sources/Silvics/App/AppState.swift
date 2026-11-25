@@ -241,11 +241,8 @@ final class AppState: ObservableObject {
 
     /// 窄窗口门槛。低于这个宽度让列表栏让位给内容区。
     static let narrowWidth: CGFloat = 1000
-    /// 四栏同时放得下的宽度。低于它就收起右栏，否则列表栏一展开就把内容挤没。
-    static let fourColumnWidth: CGFloat = 1020
-
-    /// 右栏在窄窗口下让位。拉宽自动回来。
-    var isContextPaneVisible: Bool { windowWidth >= Self.fourColumnWidth }
+    /// 列表栏宽度，可拖可记。范围见 `ListPaneSettings.width`。
+    @Published private(set) var listPaneWidth = ListPaneSettings.width
 
     var isNarrowWindow: Bool { windowWidth < Self.narrowWidth }
 
@@ -262,6 +259,14 @@ final class AppState: ObservableObject {
         if wasNarrow && !isNarrowWindow {
             narrowListOverride = nil
         }
+    }
+
+    /// 拖动列表栏分隔条。夹在 200–360，改完立刻落盘。
+    func setListPaneWidth(_ width: CGFloat) {
+        let clamped = min(max(width, 200), 360)
+        guard abs(clamped - listPaneWidth) > 0.5 else { return }
+        listPaneWidth = clamped
+        ListPaneSettings.width = clamped
     }
 
     /// 收起或展开列表栏。宽窗口记进 UserDefaults，窄窗口只记临时展开。

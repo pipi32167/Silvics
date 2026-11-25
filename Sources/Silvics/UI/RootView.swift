@@ -59,16 +59,17 @@ struct RootView: View {
             ModuleNavView()
                 .navigationSplitViewColumnWidth(min: 132, ideal: 152, max: 200)
         } detail: {
-            HSplitView {
+            HStack(spacing: 0) {
                 if app.isListPaneVisible {
                     ListPaneView()
-                        .frame(minWidth: 200, idealWidth: 232, maxWidth: 340)
+                        .frame(width: app.listPaneWidth)
+                    ListPaneResizeHandle()
                 }
-                ContentPane()
-                    .frame(minWidth: 380, idealWidth: 680, maxWidth: .infinity)
-                if app.isContextPaneVisible {
+                HSplitView {
+                    ContentPane()
+                        .frame(minWidth: 320, idealWidth: 680, maxWidth: .infinity)
                     ContextPanelView()
-                        .frame(minWidth: 240, idealWidth: 292, maxWidth: 380)
+                        .frame(minWidth: 200, idealWidth: 292, maxWidth: 380)
                 }
             }
         }
@@ -138,6 +139,41 @@ private struct StatusBanner: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: app.statusMessage)
+    }
+}
+
+// MARK: - 列表栏分隔条
+
+/// 拖动改列表栏宽度，松手落盘。宽度有上下限，见 `ListPaneSettings`。
+private struct ListPaneResizeHandle: View {
+    @EnvironmentObject private var app: AppState
+    @State private var dragStart: CGFloat?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.10))
+            .frame(width: 1)
+            .overlay(
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside {
+                            NSCursor.resizeLeftRight.set()
+                        } else {
+                            NSCursor.arrow.set()
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let start = dragStart ?? app.listPaneWidth
+                                if dragStart == nil { dragStart = start }
+                                app.setListPaneWidth(start + value.translation.width)
+                            }
+                            .onEnded { _ in dragStart = nil }
+                    )
+            )
     }
 }
 

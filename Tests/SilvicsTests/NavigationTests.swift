@@ -165,13 +165,23 @@ final class NavigationTests: XCTestCase {
         XCTAssertFalse(relaunched.isListPaneVisible)
     }
 
-    func testContextPaneYieldsWhenTooNarrowForFourColumns() {
+    func testListPaneWidthClampedAndRemembered() {
         let app = AppState(repo: repo)
-        app.setWindowWidth(1440)
-        XCTAssertTrue(app.isContextPaneVisible)
+        XCTAssertEqual(app.listPaneWidth, ListPaneSettings.defaultWidth, accuracy: 0.5)
 
-        app.setWindowWidth(900)
-        XCTAssertFalse(app.isContextPaneVisible)
+        app.setListPaneWidth(280)
+        XCTAssertEqual(app.listPaneWidth, 280, accuracy: 0.5)
+        XCTAssertEqual(ListPaneSettings.width, 280, accuracy: 0.5)
+
+        // 越界钳回 200...360
+        app.setListPaneWidth(120)
+        XCTAssertEqual(app.listPaneWidth, 200, accuracy: 0.5)
+        app.setListPaneWidth(999)
+        XCTAssertEqual(app.listPaneWidth, 360, accuracy: 0.5)
+
+        // 模拟重启：新 AppState 读同一个 store
+        let relaunched = AppState(repo: repo)
+        XCTAssertEqual(relaunched.listPaneWidth, 360, accuracy: 0.5)
     }
 
     // MARK: - AppState 集成

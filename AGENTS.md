@@ -180,4 +180,37 @@ open .build/Build/Products/Debug/Silvics.app \
 
 真截屏：`screencapture -x -o -l<windowID> out.png`（窗口 ID 用 `CGWindowListCopyWindowInfo`；`-l` 抓 sheet 会连父窗口一起捕获）。**注意 TCC 在进程启动时判定**：给宿主 App 授权后，除界面进程外还要重启常驻的 supervisor / daemon 侧进程。
 
-截图放 `/tmp/reports/silvics-*`，不入库。
+截图默认放 `/tmp/reports/silvics-*`。要贴进 issue 时，把报告与截图拷到 `docs/acceptance/<功能>-v<版本>/`（`report.md` + `artifacts/*.png`，图先 `sips -Z 1280` 压一遍），再链 GitHub 地址。
+
+## 发版与验收
+
+每次功能做完做两件事：发 release，把验收报告贴到 issue 评论。
+
+### 版本号
+
+- 修 bug：patch +1（`0.3.6` → `0.3.7`）。
+- 加功能或改结构：minor +1（`0.4.0` → `0.4.1`）。
+- 动数据格式或要迁移：才走 major。
+- 版本号只由 `scripts/release.sh` 写入 `project.yml`。
+
+### 验收报告
+
+- 正文用 `shot-compare finish` 生成的 `report.md`。
+- 不要手写报告，图片也不要手工拼。
+- 报告五段：结论、用例表、偏差、未覆盖、复现命令。
+- 证据必须是拼接图：并排、状态矩阵、2x 放大。
+- 单张原图不算证据。
+- 贴到对应 issue 评论，标题写版本号。
+
+### 报告入库
+
+- 放 `docs/acceptance/<功能>-v<版本>/`。
+- 结构：`report.md` 加 `artifacts/*.png`。
+- 图片先 `sips -Z 1280` 压一遍，整份 ≤ 2 MB。
+- issue 评论里链这份报告的 GitHub 地址。
+
+### 发版前检查
+
+1. `xcodebuild test` 全过。
+2. 报告齐，图能打开。
+3. 跑过 `xctest-cache-clean.sh`。
