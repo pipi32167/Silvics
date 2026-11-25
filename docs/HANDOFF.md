@@ -228,10 +228,19 @@ Silvics/
 | 1 | 类型注册表 + frontmatter 分层 | 已合入 |
 | 2 | 保存链路倒转（先写文件，再写库） | 已合入 |
 | 3 | 模板与承接、按类型落目录 | 本分支待合（`feat/journal-batch3`） |
-| 4 | 日记编辑器 | 未做 |
-| 5 | 代码高亮 | 未做 |
-| 6 | 交叉影响与待办总览 | 未做 |
+| 4 | 日记编辑器 | 已合入 |
+| 5 | 代码高亮 | 已合入 |
+| 6 | 交叉影响与待办总览 | 已合入（余项：承接按行插入、模板记忆在本分支 `feat/journal-b6-rest`） |
 | 7 | 发布 | 未做 |
+
+批次 6 余项（分支 `feat/journal-b6-rest`）：
+
+- **承接按行插入**：`JournalCarry.insertion(into:beforeLine:from:items:)`。新建日记传 `beforeLine: 0`；
+  日记里点「承接」（编辑区标题栏，日记才出现）按光标所在行插入，插完光标落在承接块之后。
+  判重只认 `## 承接（来自 MM-DD）` 标题；已有同名承接段就只给提示，不改正文。
+- **模板记忆**：`JournalTemplateMemory`（`UserDefaults` 键 `silvics.journal.templateNames`）。
+  新建时 `JournalTemplates.newJournalNames` 先按记忆取（按当前 order 排序，文件没了的跳过），
+  一个都不剩才退回 order 最小的前两个。编辑区标题栏「模板…」勾选即覆盖记忆，只影响下次新建。
 
 已知限制：日记文件落在 `journal/<日期>.md`。旧 vault 里 `notes/` 下的日记（如果有）读入时
 按「目录与类型一致优先」去重（`VaultFormat.dedupe`），旧目录那份仍在磁盘上；保存时按 `updated:`

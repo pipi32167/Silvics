@@ -22,6 +22,8 @@ final class AppState: ObservableObject {
     /// 待办总览，跨全部日记聚合。
     @Published private(set) var todoOverview: [JournalTodo] = []
     @Published var isShowingTodoOverview: Bool = false
+    /// 「模板…」面板：勾选下一次新建日记要用的模板。
+    @Published var isShowingJournalTemplateSheet: Bool = false
     @Published var searchQuery: String = ""
     /// 搜索范围：只搜笔记 / 含日记。
     @Published var searchScope: SearchScope = .notes
@@ -324,11 +326,13 @@ final class AppState: ObservableObject {
     // MARK: - 日记
 
     /// 打开某天的日记；不存在就按模板与承接新建。`⌘⇧J` 与演示数据都走这里。
+    ///
+    /// `templates` 传 nil 时按「模板…」记住的选择取，记忆失效才退回 order 最小的前两个。
     @discardableResult
     func openJournal(on date: String, using templates: [String]? = nil) -> Note? {
         flushPendingSave()
         do {
-            let names = templates ?? JournalTemplates.defaultNames(in: repo.vaultURL, limit: 2)
+            let names = templates ?? JournalTemplates.newJournalNames(in: repo.vaultURL)
             let note = try repo.journalNote(on: date, using: names)
             loadAll()
             sidebarScope = .journal
@@ -345,6 +349,112 @@ final class AppState: ObservableObject {
     /// `⌘⇧J`：打开今天。没有就建。
     func goToToday() {
         _ = openJournal(on: JournalDate.today())
+    }
+
+    // MARK: - 日记承接（C02 / C06）
+
+    /// 「插入承接（当前行之前）」：把上一篇日记的未完成项插到光标所在行之前。
+    ///
+    /// 光标行从编辑区的 `NSTextView.selectedRange()` 换算；没有可用编辑区时按第 0 行（文首）。
+    /// 判重、空行规则、光标落点都在 `JournalCarry.insertion`，这里只负责取光标、落库、给提示。
+    @discardableResult
+    func insertCarryAtCaret() -> Bool {
+        flushPendingSave()
+        guard let note = current, note.type == NoteTypes.journalID else {
+            statusMessage = "只有日记能插入承接。"
+            return false
+        }
+        guard let day = note.metaFields["date"], !day.isEmpty else { return false }
+        guard let previous = try? repo.previousJournal(before: day),
+              let previousDay = previous.metaFields["date"] else {
+            statusMessage = "没有更早的日记可承接。"
+            return false
+        }
+        let short = JournalTodo.short(previousDay)
+        if JournalCarry.hasCarry(in: note.body, from: previousDay) {
+            statusMessage = "\(short) 的承接已经在正文里了，不重复插入。"
+            return false
+        }
+        let items = JournalCarry.openTodos(in: previous.body)
+        guard !items.isEmpty else {
+            statusMessage = "\(short) 没有未完成项。"
+            return false
+        }
+
+        let body = note.body
+        let line = editorCaretLine(matching: body)
+        let result = JournalCarry.insertion(into: body, beforeLine: line, from: previousDay, items: items)
+        guard result.didInsert else {
+            statusMessage = "承接没有插入：\(short) 已经在正文里了。"
+            return false
+        }
+
+        var updated = note
+        updated.body = result.body
+        var meta = note.metaFields
+        meta["carryFrom"] = previousDay
+        updated.setMetaFields(meta)
+        do {
+            let saved = try repo.save(updated)
+            loadAll()
+            sidebarScope = .journal
+            searchQuery = ""
+            selection = saved.id
+            loadNote(id: saved.id)
+            statusMessage = "承接 \(items.count) 条，插在第 \(line + 1) 行之前。"
+            placeCaret(onLine: result.caretLine, in: result.body)
+            return true
+        } catch {
+            statusMessage = "插入承接失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// 编辑区光标所在行（0-based）。找不到编辑区时退回第 0 行。
+    private func editorCaretLine(matching body: String) -> Int {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+              let textView = Self.editorTextView(in: window.contentView!, matching: body) else { return 0 }
+        return JournalCarry.lineIndex(ofUTF16Offset: textView.selectedRange().location, in: textView.string)
+    }
+
+    /// 插入后把光标放到承接块之后的那一行。
+    private func placeCaret(onLine line: Int, in body: String) {
+        guard let offset = JournalCarry.utf16Offset(ofLine: line, in: body) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = Self.editorTextView(in: window.contentView!, matching: body) else { return }
+            textView.window?.makeFirstResponder(textView)
+            let target = min(offset, (textView.string as NSString).length)
+            textView.setSelectedRange(NSRange(location: target, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: target, length: 0))
+        }
+    }
+
+    // MARK: - 日记模板（记忆 + 「模板…」）
+
+    /// 「模板…」里的候选：vault 里全部模板，按 order 升序。
+    func journalTemplateChoices() -> [JournalTemplate] {
+        JournalTemplates.load(in: repo.vaultURL)
+            .sorted { a, b in a.order != b.order ? a.order < b.order : a.name < b.name }
+    }
+
+    /// 下一次新建日记会用的模板名（记忆优先，失效退回默认）。
+    func journalTemplateNames() -> [String] {
+        JournalTemplates.newJournalNames(in: repo.vaultURL)
+    }
+
+    /// 不带记忆的默认模板名：order 最小的前 `limit` 个。
+    func defaultJournalTemplateNames(limit: Int = 2) -> [String] {
+        JournalTemplates.defaultNames(in: repo.vaultURL, limit: limit)
+    }
+
+    /// 「模板…」确认：覆盖记忆。只影响之后新建的日记，不改已有日记正文。
+    func setJournalTemplateNames(_ names: [String]) {
+        JournalTemplateMemory.names = names
+        let applied = journalTemplateNames()
+        statusMessage = applied.isEmpty
+            ? "下次新建日记不加模块骨架。"
+            : "下次新建日记将用：\(applied.joined(separator: "、"))。"
     }
 
     /// `⌘⇧T`：刷新待办总览并打开面板。只聚合已经存在的日记，不代为新建。
@@ -404,6 +514,18 @@ final class AppState: ObservableObject {
             if let found = findTextView(in: sub) { return found }
         }
         return nil
+    }
+
+    /// 正文与 `body` 一致的编辑区。窗口里还有搜索框的 field editor，不能只取第一个 `NSTextView`。
+    private static func editorTextView(in view: NSView, matching body: String) -> NSTextView? {
+        var candidates: [NSTextView] = []
+        collectTextViews(in: view, into: &candidates)
+        return candidates.first { $0.string == body } ?? candidates.first
+    }
+
+    private static func collectTextViews(in view: NSView, into out: inout [NSTextView]) {
+        if let textView = view as? NSTextView { out.append(textView) }
+        for sub in view.subviews { collectTextViews(in: sub, into: &out) }
     }
 
     // MARK: - 新建
@@ -809,6 +931,31 @@ extension AppState {
     /// 仅 DEBUG：取证用，直接塞一组冲突。
     func debugSetConflicts(_ conflicts: [VaultConflict]) {
         syncConflicts = conflicts
+    }
+
+    /// 仅 DEBUG：取证用，vault 目录（写模板文件、塞日记正文都要它）。
+    var debugVaultURL: URL { repo.vaultURL }
+
+    /// 仅 DEBUG：取证用，不经编辑器直接写一篇日记的正文。
+    func debugSeedJournal(on date: String, body: String) {
+        flushPendingSave()
+        guard let existing = try? repo.journalNote(on: date, using: []) else { return }
+        var note = existing
+        note.body = body
+        _ = try? repo.save(note)
+        loadAll()
+    }
+
+    /// 仅 DEBUG：取证用，把光标放到含 `keyword` 的段落之后回报行号。
+    @discardableResult
+    func debugPlaceCaret(atKeyword keyword: String) -> Bool {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+              let textView = Self.findTextView(in: window.contentView!) else { return false }
+        let range = (textView.string as NSString).range(of: keyword)
+        guard range.location != NSNotFound else { return false }
+        window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: range.location, length: 0))
+        return true
     }
     #endif
 

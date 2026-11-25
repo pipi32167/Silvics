@@ -11,10 +11,13 @@ final class JournalTests: XCTestCase {
     override func setUp() {
         super.setUp()
         JournalMentionSettings.defaults = UserDefaults(suiteName: "silvics.tests.\(UUID().uuidString)") ?? .standard
+        // 模板记忆同样要被隔离：本机记住的模板会改变「新建时用哪些模板」。
+        JournalTemplateMemory.defaults = UserDefaults(suiteName: "silvics.tests.templates.\(UUID().uuidString)") ?? .standard
     }
 
     override func tearDown() {
         JournalMentionSettings.defaults = .standard
+        JournalTemplateMemory.defaults = .standard
         super.tearDown()
     }
 
@@ -248,6 +251,215 @@ final class JournalTests: XCTestCase {
         let repo = try makeRepo()
         let today = try repo.journalNote(on: "2026-11-24", using: ["没有名字"])
         XCTAssertEqual(today.body, "## 没有名字\n")
+    }
+
+    // MARK: - C06 承接插在当前行之前
+
+    func testC06CarryInsertsBeforeThirdLine() throws {
+        let repo = try makeRepo()
+        _ = try seedJournal(repo, date: "2026-11-21", body: """
+        ## 工作
+        - [ ] 承接下来的第一件事
+        - [ ] 承接下来的第二件事
+        """)
+        let today = try seedJournal(repo, date: "2026-11-24", body: """
+        ## 工作
+        - [ ] 今天自己的事
+        ## 生活
+        - [ ] 买咖啡豆
+        """)
+
+        let source = try XCTUnwrap(repo.note(id: NoteTypes.journalID(for: "2026-11-21")))
+        let result = JournalCarry.insertion(
+            into: today.body,
+            beforeLine: 2,
+            from: "2026-11-21",
+            items: JournalCarry.openTodos(in: source.body)
+        )
+        XCTAssertTrue(result.didInsert)
+
+        // 原第 3 行（1-based，`## 生活`）顺延到承接块之后，一个字符都不丢。
+        let lines = result.body.components(separatedBy: "\n")
+        XCTAssertEqual(Array(lines[0...1]), ["## 工作", "- [ ] 今天自己的事"])
+        XCTAssertEqual(lines[2], "", "上一行非空，插之前补一个空行")
+        XCTAssertEqual(lines[3], "## 承接（来自 11-21）", "承接段落在第 3 行之前")
+        XCTAssertEqual(lines[4], "- [ ] 承接下来的第一件事")
+        XCTAssertEqual(lines[5], "- [ ] 承接下来的第二件事")
+        XCTAssertEqual(lines[6], "", "下一行非空，插之后补一个空行")
+        XCTAssertEqual(Array(lines[7...]), ["## 生活", "- [ ] 买咖啡豆"], "原第 3 行及之后全部顺延")
+        XCTAssertEqual(lines.filter { $0.hasPrefix("## 承接") }.count, 1)
+    }
+
+    func testC06CarryAtLineZeroMatchesFrontInsert() throws {
+        // 行 0 就是旧行为：承接在最前，不补前置空行，末尾留一个空行。
+        let legacy = JournalCarry.insert(into: "## 工作\n", from: "2026-11-21", items: ["一", "二"])
+        let lineZero = JournalCarry.insertion(into: "## 工作\n", beforeLine: 0, from: "2026-11-21", items: ["一", "二"])
+        XCTAssertTrue(lineZero.didInsert)
+        XCTAssertEqual(lineZero.body, legacy, "文首插入只能有一条实现路径")
+        XCTAssertEqual(lineZero.body, """
+        ## 承接（来自 11-21）
+        - [ ] 一
+        - [ ] 二
+
+        ## 工作
+
+        """)
+
+        // 空正文也走同一条路径，不多出空行。
+        XCTAssertEqual(JournalCarry.insert(into: "", from: "2026-11-21", items: ["一"]),
+                       JournalCarry.insertion(into: "", beforeLine: 0, from: "2026-11-21", items: ["一"]).body)
+        XCTAssertEqual(JournalCarry.insert(into: "", from: "2026-11-21", items: ["一"]),
+                       "## 承接（来自 11-21）\n- [ ] 一\n")
+    }
+
+    func testC06DuplicateCarryIsNotInsertedAtAnyLine() throws {
+        let body = """
+        ## 承接（来自 11-21）
+        - [ ] 已经在正文里了
+
+        ## 工作
+        - [ ] 别的事
+        """
+        XCTAssertTrue(JournalCarry.hasCarry(in: body, from: "2026-11-21"))
+
+        for line in 0...4 {
+            let result = JournalCarry.insertion(into: body, beforeLine: line, from: "2026-11-21", items: ["重复一条"])
+            XCTAssertFalse(result.didInsert, "第 \(line) 行之前不该插入")
+            XCTAssertEqual(result.body, body, "已有同名承接段时正文一个字都不改")
+        }
+
+        // 换一天就不算重复。
+        XCTAssertTrue(JournalCarry.insertion(into: body, beforeLine: 3, from: "2026-11-22", items: ["新一天"]).didInsert)
+    }
+
+    func testC06BlankLineRulesOnBothSides() throws {
+        // 上一行非空 → 补一个空行。
+        let noBlank = JournalCarry.insertion(into: "引言\n正文\n## 生活", beforeLine: 2,
+                                             from: "2026-11-21", items: ["一"])
+        XCTAssertEqual(noBlank.body, "引言\n正文\n\n## 承接（来自 11-21）\n- [ ] 一\n\n## 生活")
+
+        // 上一行已经是空行 → 不重复补，结果里没有连续两个空行。
+        let withBlank = JournalCarry.insertion(into: "引言\n正文\n\n## 生活", beforeLine: 3,
+                                               from: "2026-11-21", items: ["一"])
+        XCTAssertEqual(withBlank.body, "引言\n正文\n\n## 承接（来自 11-21）\n- [ ] 一\n\n## 生活")
+        for body in [noBlank.body, withBlank.body] {
+            XCTAssertFalse(body.contains("\n\n\n"), "不产生连续两个空行：\(body)")
+        }
+
+        // 两边都已经是空行 → 两边都不补。
+        let spaced = JournalCarry.insertion(into: "引言\n\n\n## 生活", beforeLine: 2,
+                                           from: "2026-11-21", items: ["一"])
+        XCTAssertEqual(spaced.body, "引言\n\n## 承接（来自 11-21）\n- [ ] 一\n\n## 生活")
+    }
+
+    func testC06CaretLinePointsRightAfterCarryBlock() throws {
+        let body = """
+        ## 工作
+        - [ ] a
+        - [ ] b
+        ## 生活
+        """
+        let result = JournalCarry.insertion(into: body, beforeLine: 3, from: "2026-11-21", items: ["承接下来"])
+        XCTAssertTrue(result.didInsert)
+        let lines = result.body.components(separatedBy: "\n")
+        XCTAssertEqual(lines[result.caretLine], "## 生活", "光标落在承接块之后的那一行")
+        let expectedOffset = (lines[0...result.caretLine - 1].joined(separator: "\n") as NSString).length + 1
+        XCTAssertEqual(JournalCarry.utf16Offset(ofLine: result.caretLine, in: result.body), expectedOffset)
+        // 没插入时光标行等于传入行，调用方不需要分支。
+        let skipped = JournalCarry.insertion(into: body, beforeLine: 2, from: "2026-11-21", items: [])
+        XCTAssertFalse(skipped.didInsert)
+        XCTAssertEqual(skipped.caretLine, 2)
+    }
+
+    func testC06LineHelpersUseUTF16Offsets() throws {
+        // 一行里有中文与 emoji：按 UTF-16 数才和 NSTextView 的光标位置一致。
+        let body = "第一行😀\n第二行\n第三行"
+        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: 0, in: body), 0)
+        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: (body as NSString).range(of: "第二行").location, in: body), 1)
+        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: (body as NSString).length, in: body), 2)
+        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: 9_999, in: body), 2, "越界夹到末行")
+
+        XCTAssertEqual(JournalCarry.utf16Offset(ofLine: 0, in: body), 0)
+        XCTAssertEqual(JournalCarry.utf16Offset(ofLine: 1, in: body), ("第一行😀\n" as NSString).length)
+        XCTAssertNil(JournalCarry.utf16Offset(ofLine: 3, in: body))
+
+        // 行号 → 偏移 → 行号 往返一致。
+        for line in 0..<3 {
+            let offset = try XCTUnwrap(JournalCarry.utf16Offset(ofLine: line, in: body))
+            XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: offset, in: body), line)
+        }
+    }
+
+    // MARK: - 模板记忆
+
+    func testTemplateMemoryOrderFollowsTemplateOrder() throws {
+        try writeTemplate("生活", order: 2)
+        try writeTemplate("工作", order: 1)
+
+        JournalTemplateMemory.names = ["生活", "工作"]
+        XCTAssertEqual(JournalTemplateMemory.names, ["生活", "工作"], "记忆按写入顺序保存")
+
+        let repo = try makeRepo()
+        // 记住的是「生活、工作」，骨架必须按 order 排：工作在生活之前。
+        let names = JournalTemplates.newJournalNames(in: vault.url)
+        XCTAssertEqual(names, ["工作", "生活"])
+
+        let today = try repo.journalNote(on: "2026-11-24", using: names)
+        XCTAssertEqual(today.body, "## 工作\n\n## 生活\n")
+    }
+
+    func testTemplateMemorySkipsDeletedTemplate() throws {
+        try writeTemplate("工作", order: 1)
+        try writeTemplate("生活", order: 2)
+        JournalTemplateMemory.names = ["生活", "已删除的模板"]
+
+        let names = JournalTemplates.newJournalNames(in: vault.url)
+        XCTAssertEqual(names, ["生活"], "文件没了的模板跳过，不报错也不留空标题")
+
+        let repo = try makeRepo()
+        let today = try repo.journalNote(on: "2026-11-24", using: names)
+        XCTAssertEqual(today.body, "## 生活\n")
+        XCTAssertFalse(today.body.contains("已删除的模板"))
+    }
+
+    func testTemplateMemoryFallsBackWhenAllStale() throws {
+        try writeTemplate("工作", order: 1)
+        try writeTemplate("生活", order: 2)
+        try writeTemplate("复盘", order: 3)
+        JournalTemplateMemory.names = ["已删除", "也没了"]
+
+        XCTAssertEqual(JournalTemplates.newJournalNames(in: vault.url), ["工作", "生活"], "一个都不剩就退回 order 最小的前两个")
+
+        let repo = try makeRepo()
+        let today = try repo.journalNote(on: "2026-11-24", using: JournalTemplates.newJournalNames(in: vault.url))
+        XCTAssertEqual(today.body, "## 工作\n\n## 生活\n")
+    }
+
+    func testTemplateOverrideAppliesToNextCreateOnly() throws {
+        try writeTemplate("工作", order: 1)
+        try writeTemplate("生活", order: 2)
+        try writeTemplate("复盘", order: 3)
+        let repo = try makeRepo()
+
+        // 先记住「工作」，新建 11-24。
+        JournalTemplateMemory.names = ["工作"]
+        let first = try repo.journalNote(on: "2026-11-24", using: JournalTemplates.newJournalNames(in: vault.url))
+        XCTAssertEqual(first.body, "## 工作\n")
+
+        // 「模板…」保存：勾选改成「复盘、生活」（这一步就是把 UserDefaults 里的名单覆盖掉）。
+        JournalTemplateMemory.names = ["复盘", "生活"]
+        XCTAssertEqual(JournalTemplateMemory.names, ["复盘", "生活"])
+
+        // 下一次新建用新选择，顺序仍按 order。
+        let second = try repo.journalNote(on: "2026-11-25", using: JournalTemplates.newJournalNames(in: vault.url))
+        XCTAssertEqual(second.body, "## 生活\n\n## 复盘\n")
+
+        // 已有日记的正文一个字都不改。
+        XCTAssertEqual(try repo.note(id: first.id)?.body, "## 工作\n")
+
+        // 清空记忆 → 下一次回到默认前两个。
+        JournalTemplateMemory.reset()
+        XCTAssertEqual(JournalTemplates.newJournalNames(in: vault.url), ["工作", "生活"])
     }
 
     // MARK: - 确定性 id
