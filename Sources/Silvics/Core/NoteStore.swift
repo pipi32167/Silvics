@@ -304,6 +304,8 @@ struct GRDBNoteRepository: NoteRepository {
         try db.writer.write { conn in
             _ = try Note.deleteOne(conn, key: id)
             try conn.execute(sql: "DELETE FROM note_fts WHERE rowid = (SELECT rowid FROM note WHERE id = ?)", arguments: [id])
+            // 删掉的笔记可能被别人引用：旧边要退回悬空，否则界面上仍是实线。
+            try Self.resolveAllLinks(in: conn)
         }
     }
 

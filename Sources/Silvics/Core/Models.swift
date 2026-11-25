@@ -54,7 +54,7 @@ enum TextNormalizer {
         return nil
     }
 
-    private static func isDateLike(_ t: String) -> Bool {
+    static func isDateLike(_ t: String) -> Bool {
         let patterns = [
             #"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$"#,
             #"^\d{1,2}月\d{1,2}日$"#,

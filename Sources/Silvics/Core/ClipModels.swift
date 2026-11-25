@@ -81,3 +81,48 @@ enum ClipURL {
         return text
     }
 }
+
+/// 剪藏列表的一行。正文不进列表，避免每次查询搬运长文本。
+struct ClipSummary: Identifiable, Equatable, Hashable {
+    var id: String
+    var title: String
+    var site: String
+    var url: String
+    var summary: String
+    var status: ClipStatus
+    var aiState: ClipAIState
+    var tags: [String]
+    var createdAt: Int64
+    var charCount: Int
+}
+
+/// 新建剪藏的输入。抓取、粘贴、文件导入都产出这一份。
+struct ClipDraft {
+    var url: String = ""
+    var title: String = ""
+    /// 原文标题。与 `title` 不同：`title` 是最终落库的标题，可能被清洗或追加来源。
+    var sourceTitle: String = ""
+    var site: String = ""
+    var author: String = ""
+    var published: String = ""
+    var body: String
+    var summary: String = ""
+    var tags: [String] = []
+    var status: ClipStatus = .unread
+    var aiState: ClipAIState = .pending
+    var aiModel: String = ""
+}
+
+enum ClipError: LocalizedError, Equatable {
+    case invalidURL(String)
+    case emptyBody
+    case duplicateURL(noteId: String, title: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL(let raw): return "地址不是 http(s) 链接：\(raw)"
+        case .emptyBody: return "正文是空的，没有可保存的内容"
+        case .duplicateURL(_, let title): return "这个地址已经剪藏过：《\(title)》"
+        }
+    }
+}
