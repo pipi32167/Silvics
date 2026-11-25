@@ -55,6 +55,11 @@ final class VaultSync {
         settings.syncClips || type != NoteTypes.clipID
     }
 
+    /// git 暂存时要排除的目录。关闭「同步剪藏」时 clips/ 一律不进提交。
+    private var gitExcludes: [String] {
+        settings.syncClips ? [] : [VaultFormat.noteDir(for: NoteTypes.clipID)]
+    }
+
     // MARK: - 导出
 
     /// 把库写成 vault。返回真正改动的文件数（幂等：内容没变一个字节都不碰）。
@@ -202,8 +207,11 @@ final class VaultSync {
         }
 
         let local = try repo.vaultNotes().filter { shouldSync(type: $0.type) }
-        if local.count != manifest.count {
-            problems.append("库里 \(local.count) 篇，vault 里 \(manifest.count) 篇")
+        let enabledManifestCount = manifest.notes
+            .filter { enabledDirs.contains($0.dir ?? VaultFormat.notesDir) }
+            .count
+        if local.count != enabledManifestCount {
+            problems.append("库里 \(local.count) 篇，vault 里 \(enabledManifestCount) 篇")
         }
 
         let git = self.git
@@ -266,7 +274,7 @@ final class VaultSync {
         }
 
         // 关闭「同步剪藏」时，clips/ 既不进暂存，也不参与「有没有改动」的判断。
-        let excludes: [String] = settings.syncClips ? [] : [VaultFormat.noteDir(for: NoteTypes.clipID)]
+        let excludes = gitExcludes
         if !excludes.isEmpty { git.unstage(excludes) }
         if git.hasLocalChanges(excluding: excludes) {
             try git.stageAll(excluding: excludes)
@@ -299,7 +307,7 @@ final class VaultSync {
                 // 顺序很重要：先把合并结果提交成普通提交，工作区干净了才能让 git 记录合并。
                 // 反过来的话，`git merge` 会因为暂存区有改动而失败，历史里就没有远端那个父提交。
                 report.exportedFiles += try exportAll()
-                try git.stageAll()
+                try git.stageAll(excluding: gitExcludes)
                 let message = "merge: 同步 \(deviceShortId()) \(timestamp())"
                 if git.stagedChangesExist() {
                     try git.commit(message)

@@ -1068,11 +1068,15 @@ extension AppState {
             syncConflicts.removeAll { $0.noteId == conflict.noteId }
             if syncSettings.isConfigured || !syncSettings.vaultPath.isEmpty {
                 let sync = VaultSync(repo: repo, settings: syncSettings)
+                let syncClips = syncSettings.syncClips
                 DispatchQueue.global(qos: .utility).async {
                     try? sync.exportAll()
                     let git = sync.git
-                    if git.isRepository(), git.hasLocalChanges() {
-                        try? git.stageAll()
+                    let excludes: [String] = syncClips
+                        ? []
+                        : [VaultFormat.noteDir(for: NoteTypes.clipID)]
+                    if git.isRepository(), git.hasLocalChanges(excluding: excludes) {
+                        try? git.stageAll(excluding: excludes)
                         if git.stagedChangesExist() {
                             try? git.commit("resolve: \(conflict.title)")
                         }

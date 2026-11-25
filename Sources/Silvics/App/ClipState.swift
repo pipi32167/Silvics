@@ -117,6 +117,11 @@ extension AppState {
         let refs = clipReferenceCount(id: id)
         do {
             try repo.delete(id: id)
+            // vault 里也要删。导出只写不删，不显式删的话下次同步会把剪藏重新导回来。
+            // 用仓库自己的 vault 路径，保证测试注入的临时目录也一致。
+            var settings = syncSettings
+            settings.vaultPath = repo.vaultURL.path
+            try? VaultSync(repo: repo, settings: settings).removeFromVault(id: id)
             if current?.id == id { current = nil }
             if selection == id { selection = nil }
             refreshClips()

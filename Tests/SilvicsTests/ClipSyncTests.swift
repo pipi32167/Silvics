@@ -26,6 +26,51 @@ final class ClipSyncTests: XCTestCase {
         return settings
     }
 
+    @discardableResult
+    private func git(at dir: URL, _ args: [String]) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = args
+        p.currentDirectoryURL = dir
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_AUTHOR_NAME"] = "测试"
+        env["GIT_AUTHOR_EMAIL"] = "t@example.com"
+        env["GIT_COMMITTER_NAME"] = "测试"
+        env["GIT_COMMITTER_EMAIL"] = "t@example.com"
+        p.environment = env
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        try p.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let out = String(data: data, encoding: .utf8) ?? ""
+        if p.terminationStatus != 0 {
+            throw NSError(domain: "git", code: Int(p.terminationStatus), userInfo: [NSLocalizedDescriptionKey: out])
+        }
+        return out
+    }
+
+    private func makeBareRepo() throws -> URL {
+        let url = vault.url.appendingPathComponent("remote.git", isDirectory: true)
+        try git(at: vault.url, ["init", "--bare", "-q", "-b", "main", url.path])
+        return url
+    }
+
+    private func makeDevice(_ name: String, remote: URL, syncClips: Bool) throws -> (repo: GRDBNoteRepository, sync: VaultSync) {
+        let dir = vault.url.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let deviceRepo = GRDBNoteRepository(db: try AppDatabase.makeInMemory(), vaultURL: dir)
+        var settings = SyncSettings()
+        settings.vaultPath = dir.path
+        settings.remoteURL = remote.path
+        settings.authorName = name
+        settings.authorEmail = "\(name)@example.com"
+        settings.syncClips = syncClips
+        return (deviceRepo, VaultSync(repo: deviceRepo, settings: settings))
+    }
+
     private func makeClipAndNote() throws -> (clip: Note, note: Note) {
         let note = try repo.create(title: "间隔重复对抗遗忘")
         var withBody = note
@@ -178,6 +223,67 @@ final class ClipSyncTests: XCTestCase {
         service.resetAll(alsoAppearance: true)
 
         XCTAssertTrue(ClipSettings.load().autoSummarize, "全局恢复要清剪藏设置")
+    }
+
+    @MainActor
+    func testDeletingClipRemovesVaultFileAndDoesNotResurrect() throws {
+        let clip = try repo.createClip(ClipDraft(
+            url: "https://example.com/delete-me",
+            title: "要删掉的剪藏",
+            body: "正文。"
+        ))
+        let file = vault.url
+            .appendingPathComponent(VaultFormat.noteDir(for: NoteTypes.clipID), isDirectory: true)
+            .appendingPathComponent(VaultFormat.fileName(for: clip.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+
+        let app = AppState(repo: repo)
+        app.deleteClip(id: clip.id)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "删除剪藏要同步删 vault 文件")
+        XCTAssertNil(try repo.clip(id: clip.id))
+        _ = try VaultSync(repo: repo, settings: settings(syncClips: true)).importAll()
+        XCTAssertNil(try repo.clip(id: clip.id), "从 vault 恢复不能把删掉的剪藏拉回来")
+    }
+
+    func testVerifyRightAfterDisablingClipsDoesNotReportCountMismatch() throws {
+        try makeClipAndNote()
+        // 先在开启状态导出一次，manifest 里含剪藏。
+        _ = try VaultSync(repo: repo, settings: settings(syncClips: true)).exportAll()
+
+        // 直接关掉开关，不重新导出，立刻校验。
+        let disabled = VaultSync(repo: repo, settings: settings(syncClips: false))
+        let result = try disabled.verify()
+        XCTAssertFalse(
+            result.problems.contains { $0.contains("篇，vault 里") },
+            "关闭同步剪藏后不应因 manifest 里还留着剪藏而报篇数不一致：\(result.problems)"
+        )
+    }
+
+    func testBehindMergeNeverCommitsClipsWhenDisabled() throws {
+        let remote = try makeBareRepo()
+        let a = try makeDevice("device-a", remote: remote, syncClips: true)
+        let b = try makeDevice("device-b", remote: remote, syncClips: false)
+
+        _ = try a.repo.create(title: "第一篇来自 A 的笔记")
+        _ = try a.sync.sync()
+        _ = try b.sync.sync()
+
+        // A 再推一篇，让 B 处于落后状态，进入合并分支。
+        _ = try a.repo.create(title: "第二篇来自 A 的笔记")
+        _ = try a.sync.sync()
+
+        // B 本地有一篇剪藏（关闭同步后仍然会写 clips/）。
+        _ = try b.repo.createClip(ClipDraft(
+            url: "https://example.com/local-only",
+            title: "只应留在本机的剪藏",
+            body: "这段正文不该被推到远端。"
+        ))
+        _ = try b.sync.sync()
+
+        let tree = try git(at: remote, ["ls-tree", "-r", "--name-only", "main"])
+        XCTAssertFalse(tree.contains("clips/"), "关闭同步剪藏时，落后合并也不能把 clips/ 提交推送。实际：\(tree)")
+        XCTAssertEqual(try b.repo.clipSummaries().count, 1, "剪藏要留在本机")
     }
 
     func testExportAllWritesOneFilePerClip() throws {
