@@ -237,3 +237,30 @@ extension GRDBNoteRepository {
         )
     }
 }
+
+// MARK: - 标签候选
+
+extension GRDBNoteRepository {
+
+    /// 标签候选：剪藏标签 ∪ 概念笔记标签，按使用次数降序。
+    ///
+    /// 只做建议：模型从这里挑，或用新标签。数量上限由调用方控制。
+    func clipTagCandidates(limit: Int = 80) throws -> [String] {
+        let clipTags = try allTags(types: [NoteTypes.clipID])
+        let noteTags = try allTags(types: [NoteTypes.noteID])
+        var counts: [String: Int] = [:]
+        var spelling: [String: String] = [:]
+        for tag in clipTags + noteTags {
+            let key = ClipTagPolicy.key(tag.name)
+            counts[key, default: 0] += tag.count
+            if spelling[key] == nil { spelling[key] = tag.name }
+        }
+        return counts.keys
+            .sorted { lhs, rhs in
+                if counts[lhs] != counts[rhs] { return (counts[lhs] ?? 0) > (counts[rhs] ?? 0) }
+                return lhs < rhs
+            }
+            .prefix(limit)
+            .compactMap { spelling[$0] }
+    }
+}
