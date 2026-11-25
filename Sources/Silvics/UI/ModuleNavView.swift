@@ -2,11 +2,71 @@ import SwiftUI
 
 /// 第一栏：模块导航 + 当前模块的二级导航。
 ///
+/// 收起后只留一列图标，范围与标签藏起来，把宽度让给内容。
 /// 设置是独立窗口，不在这里。
 struct ModuleNavView: View {
     @EnvironmentObject private var app: AppState
 
     var body: some View {
+        Group {
+            if app.isNavCollapsed {
+                iconRail
+            } else {
+                fullList
+            }
+        }
+        .navigationTitle("Silvics")
+    }
+
+    // MARK: - 收起后的一列图标
+
+    private var iconRail: some View {
+        VStack(spacing: 8) {
+            ForEach(AppModule.allCases) { module in
+                Button {
+                    app.selectModule(module)
+                } label: {
+                    Text(module.icon)
+                        .font(.system(size: 15))
+                        .frame(width: 30, height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(app.nav.active == module ? Color.accentColor.opacity(0.16) : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(
+                                    app.nav.active == module ? Color.accentColor.opacity(0.35) : Color.clear,
+                                    lineWidth: 1
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("\(module.title)（⌘\(AppModule.allCases.firstIndex(of: module)! + 1)）")
+            }
+
+            Button {
+                app.toggleNavPane()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(0.55))
+                    .symbolRenderingMode(.monochrome)
+                    .frame(width: 26, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("展开模块栏 ⌘⌥S")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - 展开态
+
+    private var fullList: some View {
         List {
             Section {
                 ForEach(AppModule.allCases) { module in
@@ -41,7 +101,6 @@ struct ModuleNavView: View {
         }
         .listStyle(.sidebar)
         .environment(\.defaultMinListRowHeight, 30)
-        .navigationTitle("Silvics")
     }
 
     // MARK: - 行
@@ -52,9 +111,9 @@ struct ModuleNavView: View {
             app.selectModule(module)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: module.systemImage)
-                    .font(.system(size: 10))
-                    .foregroundStyle(active ? Color.accentColor : Color.secondary)
+                Text(module.icon)
+                    .font(.system(size: 12))
+                    .frame(width: 16)
                 Text(module.title)
                     .font(.system(size: 11.5, weight: active ? .medium : .regular))
                     .foregroundStyle(.primary)

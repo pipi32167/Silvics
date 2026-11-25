@@ -243,6 +243,14 @@ final class AppState: ObservableObject {
     static let narrowWidth: CGFloat = 1000
     /// 列表栏宽度，可拖可记。范围见 `ListPaneSettings.width`。
     @Published private(set) var listPaneWidth = ListPaneSettings.width
+    /// 模块导航是否收成一列图标。
+    @Published private(set) var isNavCollapsed = ListPaneSettings.navCollapsed
+
+    /// 收起或展开模块导航。收起后只留一列图标，范围与标签藏起来。
+    func toggleNavPane() {
+        isNavCollapsed.toggle()
+        ListPaneSettings.navCollapsed = isNavCollapsed
+    }
 
     var isNarrowWindow: Bool { windowWidth < Self.narrowWidth }
 

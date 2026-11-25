@@ -87,6 +87,11 @@ struct SilvicsApp: App {
 
                 Divider()
 
+                Button(app.isNavCollapsed ? "展开模块栏" : "收起模块栏") {
+                    app.toggleNavPane()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+
                 Button(app.isListPaneVisible ? "隐藏列表栏" : "显示列表栏") {
                     app.toggleListPane()
                 }
