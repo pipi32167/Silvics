@@ -172,7 +172,13 @@ enum MarkdownStyler {
 
         for markers in scanLineMarkers(in: text) {
             if let heading = markers.heading { out.append(heading) }
-            if let todo = markers.todo { out.append(todo) }
+            if let todo = markers.todo {
+                out.append(todo)
+            } else if let list = markers.list {
+                // 待办标记整段包含项目符号，此时不再单独出一条（S34）。
+                out.append(list.visibleRange)
+            }
+            if let quote = markers.quote { out.append(quote) }
             if let fence = markers.fence { out.append(fence) }
         }
 
@@ -198,6 +204,37 @@ enum MarkdownStyler {
     /// 待办标记：`- [ ] ` / `* [x] `，从缩进后的项目符号到 `]` 后的空格（S06–S10）。
     static func todoMarkerRanges(in text: String) -> [NSRange] {
         scanLineMarkers(in: text).compactMap(\.todo)
+    }
+
+    /// 全部列表行（无序 / 有序 / 待办），按位置升序（S28–S38）。
+    ///
+    /// 代码块内的 `- 甲` 不算列表（S33）：围栏状态在 `scanLineMarkers` 里维护。
+    /// 待办优先于无序列表（S34）：`- [ ] 甲` 只产出 `.todo`，不产出 `.unordered`。
+    static func listMarkers(in text: String) -> [ListMarker] {
+        scanLineMarkers(in: text).compactMap(\.list)
+    }
+
+    /// 引用行前缀（`>` 加其后空格），S20 的渲染用。
+    static func quoteMarkerRanges(in text: String) -> [NSRange] {
+        scanLineMarkers(in: text).compactMap(\.quote)
+    }
+
+    /// 某处所在行里 `[ ]` / `[x]` 中间那个字符的区间（勾选切换用，S39）。
+    ///
+    /// 只认行首待办：先找到该行，再用同一条 `todoRegex` 匹配。`]` 后无空格不算（S09）。
+    static func todoCheckRange(in text: String, at location: Int) -> NSRange? {
+        let ns = text as NSString
+        guard ns.length > 0 else { return nil }
+        let clamped = min(max(0, location), ns.length - 1)
+        let paragraph = ns.paragraphRange(for: NSRange(location: clamped, length: 0))
+        let line = ns.substring(with: paragraph)
+        guard let match = todoRegex.firstMatch(
+            in: line,
+            range: NSRange(location: 0, length: (line as NSString).length)
+        ) else { return nil }
+        let box = match.range(at: 4)
+        guard box.location != NSNotFound else { return nil }
+        return NSRange(location: paragraph.location + box.location, length: 1)
     }
 
     /// 围栏行的反引号（` ``` ` / ` ```swift ` / `~~~`），S17 / S23 / S24 / S26 / S27。
@@ -327,11 +364,13 @@ enum MarkdownStyler {
         block(in: ns, span: span).regions
     }
 
-    /// 一行上可能出现的三种行首标记。
+    /// 一行上可能出现的行首标记。
     private struct LineMarkers {
         var heading: NSRange?
         var todo: NSRange?
         var fence: NSRange?
+        var list: ListMarker?
+        var quote: NSRange?
     }
 
     /// 逐行一次扫描，同时维护围栏状态。
@@ -388,17 +427,56 @@ enum MarkdownStyler {
                 }
             }
 
-            // 3. 待办前缀：`]` 后必须跟空格或行尾（S09）
+            // 3. 行首前缀：待办 > 无序列表 > 有序列表 > 引用
             let raw = String(line)
-            if let match = todoRegex.firstMatch(
-                in: raw,
-                range: NSRange(location: 0, length: (raw as NSString).length)
-            ) {
+            let ns = raw as NSString
+            let whole = NSRange(location: 0, length: ns.length)
+            let indentChars = line.prefix { $0 == " " || $0 == "\t" }
+            let indentWidth = indentChars.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+
+            if let match = todoRegex.firstMatch(in: raw, range: whole) {
                 let bullet = match.range(at: 2)
                 let end = match.range.location + match.range.length
                 if bullet.location != NSNotFound, end > bullet.location {
                     markers.todo = NSRange(location: offset + bullet.location, length: end - bullet.location)
+                    let box = match.range(at: 4)
+                    let mark = box.location == NSNotFound ? " " : ns.substring(with: box)
+                    markers.list = ListMarker(
+                        kind: .todo(checked: mark == "x" || mark == "X"),
+                        indent: indentWidth,
+                        markerRange: NSRange(location: offset, length: end)
+                    )
                 }
+            } else if let match = unorderedListRegex.firstMatch(in: raw, range: whole),
+                      !startsWithBrokenTodo(raw, from: match.range.location + match.range.length) {
+                let end = match.range.location + match.range.length
+                markers.list = ListMarker(
+                    kind: .unordered,
+                    indent: indentWidth,
+                    markerRange: NSRange(location: offset, length: end)
+                )
+            } else if let match = orderedListRegex.firstMatch(in: raw, range: whole),
+                      !startsWithBrokenTodo(raw, from: match.range.location + match.range.length) {
+                let end = match.range.location + match.range.length
+                let digits = match.range(at: 2)
+                let number = digits.location == NSNotFound
+                    ? 1
+                    : (Int(ns.substring(with: digits)) ?? 1)
+                markers.list = ListMarker(
+                    kind: .ordered(number),
+                    indent: indentWidth,
+                    markerRange: NSRange(location: offset, length: end)
+                )
+            }
+
+            // 4. 引用前缀：`>` 后允许一个空格
+            let afterIndent = raw.dropFirst(indentChars.count)
+            if afterIndent.first == ">" {
+                let quotes = afterIndent.prefix { $0 == ">" }.count
+                var length = indentChars.count + quotes
+                let rest = Array(afterIndent.dropFirst(quotes))
+                if rest.first == " " { length += 1 }
+                markers.quote = NSRange(location: offset, length: length)
             }
 
             out.append(markers)
@@ -416,6 +494,34 @@ enum MarkdownStyler {
     private static let todoRegex = try! NSRegularExpression(
         pattern: "^([ \\t]*)([-*+])([ \\t]+)\\[([ xX])\\]([ \\t]+|$)"
     )
+
+    /// 无序列表：`-` / `*` / `+` 后必须有空格（S28 / S29）。
+    private static let unorderedListRegex = try! NSRegularExpression(
+        pattern: "^([ \\t]*)([-*+])([ \\t]+)"
+    )
+
+    /// 有序列表：任意位数数字 + `.` 或 `)` + 空格（S30 / S31 / S32）。
+    private static let orderedListRegex = try! NSRegularExpression(
+        pattern: "^([ \\t]*)([0-9]{1,9})([.)])([ \\t]+)"
+    )
+
+    /// 无序 / 有序列表后面紧跟一个写坏的勾选框（`- [ ]a`、`- []`）时，不降级成列表。
+    ///
+    /// 理由：S09 规定 `]` 后无空格不算待办。若此时还按列表渲染，
+    /// 用户会看到一个项目符号加上一串原文 `[ ]a`，比直接露原文更难读。
+    private static func startsWithBrokenTodo(_ line: String, from index: Int) -> Bool {
+        guard index < line.count else { return false }
+        let rest = String(line.dropFirst(index))
+        guard rest.hasPrefix("[") else { return false }
+        let ns = rest as NSString
+        return brokenTodoRegex.firstMatch(
+            in: rest,
+            range: NSRange(location: 0, length: ns.length)
+        ) != nil
+    }
+
+    /// `[` + 可选空白或 x/X + `]`：写坏的勾选框形状。
+    private static let brokenTodoRegex = try! NSRegularExpression(pattern: "^\\[[ xX]?\\]")
 
     /// 区间首尾的定界符串（`**`、`` ` ``、`*`）。
     private static func delimiterRanges(
