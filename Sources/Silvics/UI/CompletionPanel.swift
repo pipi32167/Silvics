@@ -147,7 +147,7 @@ private struct CompletionList: View {
 
     private func row(_ item: CompletionItem, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: item.isCreate ? "plus.circle" : item.status.symbolName)
+            Image(systemName: item.isCreate ? "plus.circle" : (item.isClip ? "bookmark" : item.status.symbolName))
                 .font(.system(size: CompletionMetrics.iconSize))
                 .foregroundStyle(item.isCreate ? Color.accentColor : Color.secondary)
                 .frame(width: 16)
@@ -165,9 +165,19 @@ private struct CompletionList: View {
                         .font(.system(size: CompletionMetrics.metaSize).monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
-                Text(item.status.label)
-                    .font(.system(size: CompletionMetrics.captionSize))
-                    .foregroundStyle(.tertiary)
+                if item.isClip {
+                    // 徽标：剪藏只是被引用的一份资料，不是概念笔记。
+                    Text("剪藏")
+                        .font(.system(size: CompletionMetrics.captionSize))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                        .foregroundStyle(.orange)
+                } else {
+                    Text(item.status.label)
+                        .font(.system(size: CompletionMetrics.captionSize))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, 8)
