@@ -14,12 +14,13 @@ enum MentionIndex {
 
     /// 全库标题与别名。扫描时再按 `targetId` 排除笔记自身。
     ///
-    /// `linkable = false` 的类型（日记）不当候选：日期标题不该在正文里被当成提及。
+    /// 候选由 `isMentionTarget` 决定：日记与剪藏都不当候选。
+    /// 日记是日期标题，剪藏是文章来源，进提及只会制造噪音。
     static func patterns(in db: Database) throws -> [MentionPattern] {
         var patterns: [MentionPattern] = []
         for row in try Row.fetchAll(db, sql: "SELECT id, title, type FROM note") {
             let type: String = row["type"] ?? NoteTypes.noteID
-            guard NoteTypes.descriptor(for: type).linkable else { continue }
+            guard NoteTypes.descriptor(for: type).isMentionTarget else { continue }
             patterns.append(MentionPattern(
                 targetId: row["id"],
                 displayName: row["title"],

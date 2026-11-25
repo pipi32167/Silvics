@@ -16,6 +16,8 @@ import Foundation
 enum VaultFormat {
 
     static let schema = 1
+    /// manifest 的版本。2 起哈希覆盖整篇（frontmatter + 正文），不只是正文。
+    static let manifestSchema = 2
     static let notesDir = "notes"
     static let templatesDir = "templates"
     static let baseDir = ".base"
@@ -44,6 +46,8 @@ enum VaultFormat {
         var aliases: [String]
         /// 已忽略的提及，存目标笔记 id（不是标题）。标题会改，id 不会。
         var dismissed: [String]
+        /// 标签。只有标签不在正文里的类型（剪藏）会写；其他类型留空。
+        var tags: [String] = []
         var body: String
         /// 笔记类型。省略时按 `note` 处理。
         var type: String = NoteTypes.noteID
@@ -206,6 +210,10 @@ enum VaultFormat {
         lines.append("updated: \(dateString(note.updatedAt))")
         appendList(&lines, key: "aliases", values: note.aliases.sorted())
         appendList(&lines, key: "dismissed", values: note.dismissed.sorted())
+        // 标签只在标签不进正文的类型里写。概念笔记与日记的标签从正文扫，写出来会变成两份真相。
+        if !NoteTypes.descriptor(for: note.type).tagsInBody {
+            appendList(&lines, key: "tags", values: note.tags)
+        }
 
         // 类型层。当前类型没有命名空间（未注册类型、或就是 note）时，
         // 类型段字段并进未知段写出 —— 宁可写成普通段，也不能凭空丢掉。
@@ -397,6 +405,11 @@ enum VaultFormat {
         guard let created = parseDate(scalars["created"]) else { throw ParseError.badDate(scalars["created"] ?? "") }
         guard let updated = parseDate(scalars["updated"]) else { throw ParseError.badDate(scalars["updated"] ?? "") }
 
+        // 标签只在标签不进正文的类型里是已知字段。其他类型若文件里有 `tags:`，
+        // 原样留在未知层，避免下次写回时丢掉。
+        var tags: [String] = []
+        var extraLists: [String: [String]] = [:]
+
         // 已知键摘出来，剩下的按未知保留
         var meta: [String: String] = [:]
         if let namespace = NoteTypes.descriptor(for: type).metaNamespace, let section = sections.removeValue(forKey: namespace) {
@@ -409,6 +422,12 @@ enum VaultFormat {
         for key in lists.keys where !knownListKeys.contains(key) {
             extra.lists[key] = lists[key]
         }
+        if NoteTypes.descriptor(for: type).tagsInBody {
+            if let list = lists["tags"] { extraLists["tags"] = list }
+        } else {
+            tags = lists["tags"] ?? []
+        }
+        extra.lists.merge(extraLists) { $1 }
         // 除当前类型的命名空间之外，**所有**段都按未知保留。
         // 不再维护「已注册 namespace」白名单：版本不同的两台机器会互相删数据。
         let consumed = knownScalarKeys.union(knownListKeys)
@@ -427,6 +446,7 @@ enum VaultFormat {
             updatedAt: updated,
             aliases: lists["aliases"] ?? [],
             dismissed: lists["dismissed"] ?? [],
+            tags: tags,
             body: frontmatter.body,
             type: type,
             meta: meta,
@@ -436,7 +456,7 @@ enum VaultFormat {
 
     /// 本版本认识的键。不在表里的键一律按未知原样保留。
     private static let knownScalarKeys: Set<String> = ["schema", "id", "type", "title", "status", "created", "updated"]
-    private static let knownListKeys: Set<String> = ["aliases", "dismissed"]
+    private static let knownListKeys: Set<String> = ["aliases", "dismissed", "tags"]
 
     /// 一个空值键下面的块解析结果。
     private enum Block {
@@ -556,13 +576,13 @@ enum VaultFormat {
 
     static func makeManifest(_ notes: [Note]) -> Manifest {
         Manifest(
-            schema: schema,
+            schema: manifestSchema,
             count: notes.count,
             notes: notes
                 .map {
                     Manifest.Entry(
                         id: $0.id,
-                        hash: hash($0.body),
+                        hash: contentHash($0),
                         title: $0.title,
                         updated: $0.updatedAt,
                         dir: noteDir(for: $0.type),
@@ -571,6 +591,13 @@ enum VaultFormat {
                 }
                 .sorted { $0.id < $1.id }
         )
+    }
+
+    /// 整篇哈希：frontmatter + 正文。摘要、标签、已读状态变了也要能查出来。
+    ///
+    /// 用稳定序列化后的字节算，同样的值必得同样的哈希。
+    static func contentHash(_ note: Note) -> String {
+        hash(encode(note))
     }
 
     static func encodeManifest(_ manifest: Manifest) -> Data {

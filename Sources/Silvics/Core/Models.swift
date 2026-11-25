@@ -116,6 +116,8 @@ struct Note: Identifiable, Equatable, Hashable, Codable {
     var meta: String
     /// 未识别的 frontmatter 键的 JSON 镜像。必须原样写回，否则新旧版本互相踩数据。
     var extra: String
+    /// 标签的 JSON 镜像。只有 `tagsInBody = false` 的类型（剪藏）用它；其他类型仍从正文扫。
+    var tags: String = "[]"
 
     static func makeId() -> String {
         let ms = Int64(Date().timeIntervalSince1970 * 1000)
@@ -137,13 +139,37 @@ struct Note: Identifiable, Equatable, Hashable, Codable {
             bodyHash: TextNormalizer.bodyHash(""),
             type: NoteTypes.noteID,
             meta: "{}",
-            extra: "{}"
+            extra: "{}",
+            tags: "[]"
         )
     }
 }
 
 extension Note {
     var noteType: NoteType { NoteTypes.descriptor(for: type) }
+
+    /// 标签名（解析 `tags`）。顺序保持写入时的顺序，去重。
+    var tagNames: [String] {
+        guard let data = tags.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    mutating func setTagNames(_ names: [String]) {
+        var seen = Set<String>()
+        let cleaned = names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert(TextNormalizer.key($0)).inserted }
+        guard let data = try? JSONEncoder().encode(cleaned),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            tags = "[]"
+            return
+        }
+        tags = text
+    }
 
     /// 类型段字段（解析 `meta`）。解析失败返回空字典，不抛错。
     var metaFields: [String: String] {
@@ -384,4 +410,8 @@ struct CompletionItem: Identifiable, Equatable, Hashable {
     var backlinkCount: Int
     /// 为 true 表示「新建这条笔记」。
     var isCreate: Bool
+    /// 目标类型。剪藏项在补全面板里带徽标。
+    var type: String = NoteTypes.noteID
+
+    var isClip: Bool { type == NoteTypes.clipID }
 }

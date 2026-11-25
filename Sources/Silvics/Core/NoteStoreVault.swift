@@ -218,6 +218,7 @@ extension GRDBNoteRepository {
                     updatedAt: note.updatedAt,
                     aliases: aliases[note.id] ?? [],
                     dismissed: dismissed[note.id] ?? [],
+                    tags: note.tagNames,
                     body: note.body,
                     type: note.type,
                     meta: note.metaFields,
@@ -254,7 +255,9 @@ extension GRDBNoteRepository {
                 }
 
                 let existing = try Note.fetchOne(conn, key: item.id)
-                if let existing, existing.bodyHash == TextNormalizer.bodyHash(item.body), existing.title == item.title {
+                if let existing,
+                   VaultFormat.contentHash(try Self.vaultSnapshot(of: existing, in: conn))
+                    == VaultFormat.contentHash(item) {
                     report.unchanged += 1
                 } else if existing == nil {
                     report.inserted += 1
@@ -277,6 +280,7 @@ extension GRDBNoteRepository {
                 )
                 note.setMetaFields(item.meta)
                 note.setFrontmatterExtra(item.extra)
+                note.setTagNames(item.tags)
                 // 创建时间取更早的那个，避免同步把「什么时候写的」改晚。
                 if let existing, existing.createdAt < note.createdAt {
                     note.createdAt = existing.createdAt
@@ -316,5 +320,33 @@ extension GRDBNoteRepository {
         }
 
         return report
+    }
+
+    /// 一篇笔记的 vault 快照（含别名、忽略项、标签）。导入判定与元数据比较用。
+    static func vaultSnapshot(of note: Note, in conn: Database) throws -> VaultFormat.Note {
+        let aliases = try String.fetchAll(
+            conn,
+            sql: "SELECT name FROM alias WHERE noteId = ? ORDER BY name",
+            arguments: [note.id]
+        )
+        let dismissed = try String.fetchAll(
+            conn,
+            sql: "SELECT targetId FROM mention WHERE noteId = ? AND dismissed = 1 ORDER BY targetId",
+            arguments: [note.id]
+        )
+        return VaultFormat.Note(
+            id: note.id,
+            title: note.title,
+            status: note.status,
+            createdAt: note.createdAt,
+            updatedAt: note.updatedAt,
+            aliases: aliases,
+            dismissed: dismissed,
+            tags: note.tagNames,
+            body: note.body,
+            type: note.type,
+            meta: note.metaFields,
+            extra: note.frontmatterExtra
+        )
     }
 }

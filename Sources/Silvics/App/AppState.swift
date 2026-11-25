@@ -205,7 +205,7 @@ final class AppState: ObservableObject {
             orphanCount = try repo.orphanCount()
             noteCount = try repo.noteCount()
             journalEntries = try repo.journalEntries()
-            tags = try repo.allTags()
+            tags = try repo.allTags(types: repo.mainListTypes)
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
             if case .tag(let name) = sidebarScope, !tags.contains(where: { $0.name == name }) {
                 sidebarScope = .all
@@ -286,7 +286,7 @@ final class AppState: ObservableObject {
 
     /// 普通笔记（不含日记）。所有「全部 / 孤儿 / 标签」列表都从这里过滤。
     var noteSummaries: [NoteSummary] {
-        summaries.filter { $0.type != NoteTypes.journalID }
+        summaries.filter { NoteTypes.descriptor(for: $0.type).inMainList }
     }
 
     /// 搜索结果里的日记命中。侧栏把日记单独渲染成日期行。
@@ -300,7 +300,7 @@ final class AppState: ObservableObject {
     func visibleCount() -> Int { visibleSummaries().count }
 
     private func occurrenceSummaryIds(tagged name: String) -> [String] {
-        (try? repo.summaries(tagged: name))?.map(\.id) ?? []
+        (try? repo.summaries(tagged: name, types: repo.mainListTypes))?.map(\.id) ?? []
     }
 
     func selectScope(_ scope: SidebarScope) {
@@ -927,7 +927,7 @@ final class AppState: ObservableObject {
         let target = Self.bigrams(TextNormalizer.key(title))
         guard !target.isEmpty else { return [] }
         var scored: [(NoteSummary, Double)] = []
-        for note in summaries {
+        for note in summaries where note.type == NoteTypes.noteID {
             let other = Self.bigrams(TextNormalizer.key(note.title))
             guard !other.isEmpty else { continue }
             let inter = target.intersection(other).count

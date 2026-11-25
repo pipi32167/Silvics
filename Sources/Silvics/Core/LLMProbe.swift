@@ -34,12 +34,12 @@ enum ProviderProbe {
 
         switch config.kind {
         case .openAICompatible:
-            let path = role == .chat ? "/chat/completions" : "/embeddings"
-            let model = role == .chat ? config.chatModel : config.embeddingModel
+            let path = role.usesChatEndpoint ? "/chat/completions" : "/embeddings"
+            let model = role.usesChatEndpoint ? config.chatModel : config.embeddingModel
             guard !model.isEmpty else { return .failure(.missingModel) }
             guard let url = URL(string: base.absoluteString + path) else { return .failure(.badURL) }
 
-            let body: [String: Any] = role == .chat
+            let body: [String: Any] = role.usesChatEndpoint
                 ? ["model": model, "messages": [["role": "user", "content": "ping"]], "max_tokens": 1]
                 : ["model": model, "input": "ping"]
             guard let data = try? JSONSerialization.data(withJSONObject: body) else {
@@ -55,7 +55,7 @@ enum ProviderProbe {
             ))
 
         case .anthropic:
-            guard role == .chat else { return .failure(.embeddingUnsupported) }
+            guard role.usesChatEndpoint else { return .failure(.embeddingUnsupported) }
             guard !config.chatModel.isEmpty else { return .failure(.missingModel) }
             guard let url = URL(string: base.absoluteString + "/v1/messages") else { return .failure(.badURL) }
             let body: [String: Any] = [
@@ -80,14 +80,14 @@ enum ProviderProbe {
             ))
 
         case .gemini:
-            let model = role == .chat ? config.chatModel : config.embeddingModel
+            let model = role.usesChatEndpoint ? config.chatModel : config.embeddingModel
             guard !model.isEmpty else { return .failure(.missingModel) }
-            let action = role == .chat ? "generateContent" : "embedContent"
+            let action = role.usesChatEndpoint ? "generateContent" : "embedContent"
             let encodedKey = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
             guard let url = URL(string: base.absoluteString + "/v1beta/models/\(model):\(action)?key=\(encodedKey)") else {
                 return .failure(.badURL)
             }
-            let body: [String: Any] = role == .chat
+            let body: [String: Any] = role.usesChatEndpoint
                 ? ["contents": [["parts": [["text": "ping"]]]]]
                 : ["content": ["parts": [["text": "ping"]]]]
             guard let data = try? JSONSerialization.data(withJSONObject: body) else {
@@ -143,7 +143,7 @@ enum ProviderProbe {
                 )
             }
 
-            let model = modelName(from: snippet) ?? (role == .chat ? config.chatModel : config.embeddingModel)
+            let model = modelName(from: snippet) ?? (role.usesChatEndpoint ? config.chatModel : config.embeddingModel)
             return ProbeResult(ok: true, message: "连接成功", latencyMs: latency, detail: "模型 \(model)")
 
         } catch let error as URLError where error.code == .timedOut {

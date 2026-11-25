@@ -218,6 +218,7 @@ enum NoteWriter {
             updatedAt: note.updatedAt,
             aliases: metadata.aliases,
             dismissed: metadata.dismissed,
+            tags: note.tagNames,
             body: note.body,
             type: note.type,
             meta: note.metaFields,

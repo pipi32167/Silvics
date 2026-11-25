@@ -160,6 +160,13 @@ final class AppDatabase {
             try db.execute(sql: "CREATE INDEX idx_note_type ON note(type)")
         }
 
+        // v3：标签独立存储。剪藏的标签来自 AI，不写进正文，所以需要单独一列。
+        // 其他类型的标签仍从正文扫，这一列留空。
+        m.registerMigration("v3") { db in
+            try db.execute(sql: "ALTER TABLE note ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+            try db.execute(sql: "CREATE INDEX idx_note_tags ON note(tags)")
+        }
+
         return m
     }
 }

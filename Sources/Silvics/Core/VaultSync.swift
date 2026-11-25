@@ -170,22 +170,26 @@ final class VaultSync {
             problems.append("manifest.count 与条目数不符")
         }
 
-        var hashMismatch = 0
-        for entry in manifest.notes {
-            let dir = entry.dir ?? VaultFormat.notesDir
-            let file = entry.file ?? VaultFormat.fileName(for: entry.id)
-            let url = noteDirURL(dir).appendingPathComponent(file)
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                hashMismatch += 1
-                continue
+        if manifest.schema < VaultFormat.manifestSchema {
+            problems.append("manifest 是旧版本（schema \(manifest.schema)），下次同步会按整篇重写")
+        } else {
+            var hashMismatch = 0
+            for entry in manifest.notes {
+                let dir = entry.dir ?? VaultFormat.notesDir
+                let file = entry.file ?? VaultFormat.fileName(for: entry.id)
+                let url = noteDirURL(dir).appendingPathComponent(file)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                    hashMismatch += 1
+                    continue
+                }
+                guard let note = try? VaultFormat.decode(text) else {
+                    problems.append("\(entry.id) 解析失败")
+                    continue
+                }
+                if VaultFormat.contentHash(note) != entry.hash { hashMismatch += 1 }
             }
-            guard let note = try? VaultFormat.decode(text) else {
-                problems.append("\(entry.id) 解析失败")
-                continue
-            }
-            if VaultFormat.hash(note.body) != entry.hash { hashMismatch += 1 }
+            if hashMismatch > 0 { problems.append("\(hashMismatch) 篇整篇哈希与 manifest 不一致") }
         }
-        if hashMismatch > 0 { problems.append("\(hashMismatch) 篇正文哈希与 manifest 不一致") }
 
         let local = try repo.vaultNotes()
         if local.count != manifest.count {
@@ -503,8 +507,12 @@ final class VaultSync {
 
         merged.createdAt = min(local.createdAt, remote.createdAt)
         merged.updatedAt = max(local.updatedAt, remote.updatedAt)
-        merged.aliases = Array(Set(local.aliases).union(remote.aliases)).sorted()
-        merged.dismissed = Array(Set(local.dismissed).union(remote.dismissed)).sorted()
+        // 集合字段用三方合并：本地删掉的别名、标签、忽略项不会被远端复活。
+        merged.aliases = Self.mergeSet(base: base?.aliases ?? [], local: local.aliases, remote: remote.aliases)
+        merged.dismissed = Self.mergeSet(
+            base: base?.dismissed ?? [], local: local.dismissed, remote: remote.dismissed
+        )
+        merged.tags = Self.mergeSet(base: base?.tags ?? [], local: local.tags, remote: remote.tags)
 
         if local.type != remote.type {
             conflicts.append(
@@ -583,6 +591,19 @@ final class VaultSync {
         merged.extra = extra
 
         return MetadataMerge(note: merged, conflicts: conflicts)
+    }
+
+    /// 集合字段的三方合并：`base + (local − base) + (remote − base)`。
+    ///
+    /// 本地删掉的项不会被远端复活；一边删一边加时保留新增。输出排序，保证字节稳定。
+    static func mergeSet(base: [String], local: [String], remote: [String]) -> [String] {
+        let baseSet = Set(base)
+        var out = Set(local)
+        for item in remote where !out.contains(item) {
+            // 只有远端新增（base 里没有）才补回来。远端没改的项不复活本地的删除。
+            if !baseSet.contains(item) { out.insert(item) }
+        }
+        return out.sorted()
     }
 
     /// 键并集 + 同键值不同的三方判定。未改的一侧让位，两边都改就记下来交给人。

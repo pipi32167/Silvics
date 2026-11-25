@@ -84,6 +84,7 @@ final class ProviderService {
         try? secrets.delete(account: provider.keyAccount)
         settings.providers.removeAll { $0.id == id }
         if settings.chatProviderId == id { settings.chatProviderId = nil }
+        if settings.clipProviderId == id { settings.clipProviderId = nil }
         if settings.embeddingProviderId == id { settings.embeddingProviderId = nil }
         persist()
     }
@@ -121,6 +122,7 @@ final class ProviderService {
     func bind(_ role: ProviderRole, to id: UUID?) {
         switch role {
         case .chat: settings.chatProviderId = id
+        case .clip: settings.clipProviderId = id
         case .embedding: settings.embeddingProviderId = id
         }
         persist()
@@ -130,7 +132,7 @@ final class ProviderService {
     func effective(_ role: ProviderRole) -> (config: ProviderConfig, key: String)? {
         guard let config = settings.bound(role) else { return nil }
         switch role {
-        case .chat:
+        case .chat, .clip:
             guard config.providesChat else { return nil }
         case .embedding:
             guard config.providesEmbedding else { return nil }
@@ -146,11 +148,10 @@ final class ProviderService {
     func unavailableReason(_ role: ProviderRole) -> String? {
         guard let config = settings.bound(role) else { return "未选择服务商" }
         switch role {
-        case .chat where !config.providesChat:
-            return "《\(config.name)》没有填对话模型"
-        case .embedding where !config.providesEmbedding:
-            return "《\(config.name)》没有可用的向量模型"
-        default: break
+        case .chat, .clip:
+            if !config.providesChat { return "《\(config.name)》没有填对话模型" }
+        case .embedding:
+            if !config.providesEmbedding { return "《\(config.name)》没有可用的向量模型" }
         }
         if config.requiresKey && !hasSecret(for: config.id) {
             return "《\(config.name)》还没填密钥"
@@ -185,6 +186,7 @@ final class ProviderService {
             merged.providers.append(config)
         }
         if merged.chatProviderId == nil { merged.chatProviderId = incoming.chatProviderId }
+        if merged.clipProviderId == nil { merged.clipProviderId = incoming.clipProviderId }
         if merged.embeddingProviderId == nil { merged.embeddingProviderId = incoming.embeddingProviderId }
         settings = merged.repaired()
         persist()

@@ -4,17 +4,25 @@ import GRDB
 /// 标签、孤儿、Quick Open 这些「列表类」查询。
 extension GRDBNoteRepository {
 
-    func allTags() throws -> [TagCount] {
+    /// 默认范围：主列表类型（概念笔记）。剪藏范围显式传类型。
+    func allTags() throws -> [TagCount] { try allTags(types: mainListTypes) }
+
+    /// 默认范围：主列表类型。
+    func summaries(tagged name: String) throws -> [NoteSummary] {
+        try summaries(tagged: name, types: mainListTypes)
+    }
+
+    func allTags(types: [String]) throws -> [TagCount] {
         try db.reader.read { conn in
-            try TagIndex.allTags(in: conn)
+            try TagIndex.allTags(in: conn, types: types)
         }
     }
 
-    /// 带某个标签的笔记。
-    func summaries(tagged name: String) throws -> [NoteSummary] {
-        let all = try summaries()
+    /// 带某个标签的笔记，限定类型范围。
+    func summaries(tagged name: String, types: [String]) throws -> [NoteSummary] {
+        let all = try summaries().filter { types.contains($0.type) }
         let ids = try db.reader.read { conn in
-            Set(try TagIndex.noteIds(tagged: name, in: conn))
+            Set(try TagIndex.noteIds(tagged: name, in: conn, types: types))
         }
         return all.filter { ids.contains($0.id) }
     }
@@ -29,13 +37,13 @@ extension GRDBNoteRepository {
         }
     }
 
-    /// 侧栏「全部」的条数：普通笔记数，不含日记。
+    /// 侧栏「全部」的条数：只算 `inMainList = true` 的类型。
     func noteCount() throws -> Int {
         try db.reader.read { conn in
             try Int.fetchOne(
                 conn,
-                sql: "SELECT COUNT(*) FROM note WHERE type <> ?",
-                arguments: [NoteTypes.journalID]
+                sql: "SELECT COUNT(*) FROM note WHERE type IN (\(Self.typePlaceholders(count: mainListTypes.count)))",
+                arguments: StatementArguments(mainListTypes)
             ) ?? 0
         }
     }
@@ -154,5 +162,21 @@ extension GRDBNoteRepository {
             out.insert(String(chars[i...(i + 1)]))
         }
         return out
+    }
+}
+
+
+// MARK: - 类型范围
+
+extension GRDBNoteRepository {
+
+    /// 「全部」列表包含的类型。描述符是唯一真相，不要在查询里写类型字符串。
+    var mainListTypes: [String] {
+        NoteTypes.all.values.filter(\.inMainList).map(\.id).sorted()
+    }
+
+    /// 生成 SQL 占位符。值仍走绑定参数，不拼字符串。
+    static func typePlaceholders(count: Int) -> String {
+        Array(repeating: "?", count: max(count, 1)).joined(separator: ", ")
     }
 }

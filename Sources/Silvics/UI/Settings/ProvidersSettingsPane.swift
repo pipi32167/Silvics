@@ -125,6 +125,7 @@ struct ProvidersSettingsPane: View {
             get: {
                 switch role {
                 case .chat: return app.providerSettings.chatProviderId
+                case .clip: return app.providerSettings.clipProviderId
                 case .embedding: return app.providerSettings.embeddingProviderId
                 }
             },
@@ -133,7 +134,7 @@ struct ProvidersSettingsPane: View {
     }
 
     private func candidates(for role: ProviderRole) -> [ProviderConfig] {
-        providers.filter { role == .chat ? $0.providesChat : $0.providesEmbedding }
+        providers.filter { role.usesChatEndpoint ? $0.providesChat : $0.providesEmbedding }
     }
 
     // MARK: - 列表

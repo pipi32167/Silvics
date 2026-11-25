@@ -104,7 +104,10 @@ extension GRDBNoteRepository {
     func rename(noteId: String, newTitle: String) throws -> Int {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let newKey = TextNormalizer.key(trimmed)
-        if let message = TextNormalizer.validateTitle(trimmed) {
+        // 概念笔记套断言校验；剪藏与日记不套（文章标题、日期都不是断言）。
+        let targetType = (try? note(id: noteId))??.type ?? NoteTypes.noteID
+        if NoteTypes.descriptor(for: targetType).validatesTitle,
+           let message = TextNormalizer.validateTitle(trimmed) {
             throw RenameError.invalidTitle(message)
         }
 
@@ -132,8 +135,9 @@ extension GRDBNoteRepository {
         in conn: Database
     ) throws -> [String] {
         // 1. 全库改写 `[[旧标题]]`、`[[旧标题|x]]`、`[[旧标题#a]]`。
+        // 只改会解析 `[[ ]]` 的类型。剪藏原文里的字面 `[[ ]]` 不是引用，不能动。
         var rewritten: [Note] = []
-        for var candidate in try Note.fetchAll(conn) {
+        for var candidate in try Note.fetchAll(conn) where candidate.noteType.emitsLinks {
             let replacements = WikiScanner.scan(candidate.body).filter {
                 TextNormalizer.key($0.target) == oldKey
             }

@@ -175,6 +175,7 @@ enum ProviderPresets {
 /// 用途绑定。
 enum ProviderRole: String, CaseIterable, Identifiable {
     case chat
+    case clip
     case embedding
 
     var id: Self { self }
@@ -182,6 +183,7 @@ enum ProviderRole: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chat: return "概念线索（L3）"
+        case .clip: return "剪藏整理"
         case .embedding: return "相关笔记（L4）"
         }
     }
@@ -189,9 +191,13 @@ enum ProviderRole: String, CaseIterable, Identifiable {
     var hint: String {
         switch self {
         case .chat: return "从正文里抽概念，建议新建或建立引用。"
+        case .clip: return "给剪藏生成标题、摘要与标签。不绑定就跟随对话模型。"
         case .embedding: return "按语义找相近笔记，只给建议。"
         }
     }
+
+    /// 走对话端点。剪藏整理用对话模型，不要在每个 switch 里复制一份判断。
+    var usesChatEndpoint: Bool { self != .embedding }
 }
 
 /// 全部模型服务设置。存 UserDefaults，密钥在 Keychain。
@@ -199,6 +205,8 @@ struct ProviderSettings: Codable, Equatable {
     var schemaVersion: Int = 1
     var providers: [ProviderConfig] = []
     var chatProviderId: UUID?
+    /// 剪藏整理用途。为空表示跟随对话模型。
+    var clipProviderId: UUID?
     var embeddingProviderId: UUID?
 
     static let defaultsKey = "silvics.providers.settings"
@@ -211,6 +219,7 @@ struct ProviderSettings: Codable, Equatable {
     func bound(_ role: ProviderRole) -> ProviderConfig? {
         switch role {
         case .chat: return provider(id: chatProviderId)
+        case .clip: return provider(id: clipProviderId) ?? provider(id: chatProviderId)
         case .embedding: return provider(id: embeddingProviderId)
         }
     }
@@ -237,6 +246,7 @@ struct ProviderSettings: Codable, Equatable {
     func repaired() -> ProviderSettings {
         var copy = self
         if copy.provider(id: chatProviderId) == nil { copy.chatProviderId = nil }
+        if copy.provider(id: clipProviderId) == nil { copy.clipProviderId = nil }
         if copy.provider(id: embeddingProviderId) == nil { copy.embeddingProviderId = nil }
         return copy
     }

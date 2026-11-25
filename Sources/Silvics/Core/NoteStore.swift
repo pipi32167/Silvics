@@ -38,8 +38,8 @@ protocol NoteRepository {
     func rename(noteId: String, newTitle: String) throws -> Int
 
     // 标签与列表
-    func allTags() throws -> [TagCount]
-    func summaries(tagged name: String) throws -> [NoteSummary]
+    func allTags(types: [String]) throws -> [TagCount]
+    func summaries(tagged name: String, types: [String]) throws -> [NoteSummary]
     func orphans() throws -> [NoteSummary]
     func quickOpen(query: String, limit: Int) throws -> [QuickOpenItem]
 }
@@ -102,14 +102,15 @@ struct GRDBNoteRepository: NoteRepository {
     }
 
     func orphanCount() throws -> Int {
-        try db.reader.read { conn in
-            // 日记不算孤儿：它不能被 `[[ ]]` 指向，也不会有人链它。
+        let types = NoteTypes.all.values.filter(\.countsAsOrphan).map(\.id).sorted()
+        return try db.reader.read { conn in
+            // 是否算孤儿由描述符决定：日记与剪藏都不算。
             try Int.fetchOne(conn, sql: """
                 SELECT COUNT(*) FROM note n
-                WHERE n.type <> '\(NoteTypes.journalID)'
+                WHERE n.type IN (\(Self.typePlaceholders(count: types.count)))
                   AND NOT EXISTS (SELECT 1 FROM link l WHERE l.toId = n.id)
                   AND NOT EXISTS (SELECT 1 FROM link l WHERE l.fromId = n.id)
-                """) ?? 0
+                """, arguments: StatementArguments(types)) ?? 0
         }
     }
 
@@ -189,9 +190,15 @@ struct GRDBNoteRepository: NoteRepository {
                     LIMIT 40
                     """, arguments: ["%\(Self.likeEscaped(key))%"])
 
-                // 排序：前缀命中优先，其次被引用次数多。
+                // 只列能被 `[[ ]]` 指向的类型。日记不在此列，否则选了就是悬空。
+                let linkable = notes.filter { $0.noteType.linkable }
+
+                // 排序：概念笔记优先，其次前缀命中，再次被引用次数。
                 let counts = try Self.backlinkCounts(conn)
-                let sorted = notes.sorted { a, b in
+                let sorted = linkable.sorted { a, b in
+                    let aClip = a.noteType.id == NoteTypes.clipID
+                    let bClip = b.noteType.id == NoteTypes.clipID
+                    if aClip != bClip { return !aClip }
                     let aPrefix = a.titleKey.hasPrefix(key)
                     let bPrefix = b.titleKey.hasPrefix(key)
                     if aPrefix != bPrefix { return aPrefix }
@@ -203,7 +210,8 @@ struct GRDBNoteRepository: NoteRepository {
                         title: $0.title,
                         status: $0.status,
                         backlinkCount: counts[$0.id] ?? 0,
-                        isCreate: false
+                        isCreate: false,
+                        type: $0.type
                     )
                 }
             }
@@ -321,6 +329,9 @@ struct GRDBNoteRepository: NoteRepository {
     static func reindex(note: Note, in db: Database) throws {
         try db.execute(sql: "DELETE FROM link WHERE fromId = ?", arguments: [note.id])
 
+        // 单向引用：剪藏的正文不解析 `[[ ]]`，不产出边。
+        guard note.noteType.emitsLinks else { return }
+
         let links = WikiScanner.scan(note.body)
         guard !links.isEmpty else { return }
 
@@ -389,9 +400,15 @@ struct GRDBNoteRepository: NoteRepository {
         let rowid = try Int64.fetchOne(db, sql: "SELECT rowid FROM note WHERE id = ?", arguments: [note.id])
         guard let rowid else { return }
         try db.execute(sql: "DELETE FROM note_fts WHERE rowid = ?", arguments: [rowid])
+        // 剪藏的标签不在正文里，补进全文索引，否则按标签搜不到。
+        var indexedBody = note.body
+        if !note.noteType.tagsInBody {
+            let tagText = note.tagNames.joined(separator: " ")
+            if !tagText.isEmpty { indexedBody += "\n" + tagText }
+        }
         try db.execute(
             sql: "INSERT INTO note_fts(rowid, title, body) VALUES (?, ?, ?)",
-            arguments: [rowid, note.title, note.body]
+            arguments: [rowid, note.title, indexedBody]
         )
     }
 
@@ -399,27 +416,33 @@ struct GRDBNoteRepository: NoteRepository {
 
     func search(_ query: String, limit: Int = 50, includeJournal: Bool = false) throws -> [NoteSummary] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return try summaries() }
-        // 默认只搜普通笔记。日记正文要先在侧栏切到「含日记」才返回。
-        // 类型串是代码里的常量，不是用户输入。
-        let typeFilter = includeJournal ? "" : "AND n.type <> '\(NoteTypes.journalID)'"
+        guard !q.isEmpty else { return try summaries().filter { searchTypes(includeJournal: includeJournal).contains($0.type) } }
+        // 默认只搜主列表类型（概念笔记）。日记要手动含进来；剪藏有自己的范围，不混入。
+        let types = searchTypes(includeJournal: includeJournal)
+        let typeFilter = "AND n.type IN (\(Self.typePlaceholders(count: types.count)))"
         return try db.reader.read { conn in
             // trigram 分词器要求查询串至少 3 个字符；短查询退回 LIKE。
             let rows: [Row]
             if q.count >= 3 {
+                var arguments: [any DatabaseValueConvertible] = [Self.ftsQuery(q)]
+                arguments.append(contentsOf: types)
+                arguments.append(limit)
                 rows = try Row.fetchAll(conn, sql: """
                     SELECT n.id AS id, n.title AS title, n.status AS status, n.body AS body,
                            n.updatedAt AS updatedAt, n.type AS type
                     FROM note_fts f JOIN note n ON n.rowid = f.rowid
                     WHERE note_fts MATCH ? \(typeFilter)
                     ORDER BY n.updatedAt DESC LIMIT ?
-                    """, arguments: [Self.ftsQuery(q), limit])
+                    """, arguments: StatementArguments(arguments))
             } else {
+                var arguments: [any DatabaseValueConvertible] = ["%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%"]
+                arguments.append(contentsOf: types)
+                arguments.append(limit)
                 rows = try Row.fetchAll(conn, sql: """
                     SELECT id, title, status, body, updatedAt, type FROM note n
                     WHERE (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\') \(typeFilter)
                     ORDER BY updatedAt DESC LIMIT ?
-                    """, arguments: ["%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%", limit])
+                    """, arguments: StatementArguments(arguments))
             }
             let counts = try Self.backlinkCounts(conn)
             return rows.map { row in
@@ -437,6 +460,14 @@ struct GRDBNoteRepository: NoteRepository {
                 )
             }
         }
+    }
+
+    /// 搜索范围对应的类型。主列表类型默认包含；日记可选。
+    func searchTypes(includeJournal: Bool) -> [String] {
+        NoteTypes.all.values
+            .filter { $0.inMainList || (includeJournal && $0.id == NoteTypes.journalID) }
+            .map(\.id)
+            .sorted()
     }
 
     /// trigram 分词器的 MATCH 串。整体加双引号当短语，避免特殊字符干扰。
