@@ -405,19 +405,6 @@ enum SidebarScope: Equatable, Hashable {
     }
 }
 
-/// 侧栏搜索范围。默认只搜普通笔记，日记正文要手动含进来。
-enum SearchScope: Equatable, Hashable, CaseIterable {
-    case notes
-    case includingJournal
-
-    var title: String {
-        switch self {
-        case .notes: return "只搜笔记"
-        case .includingJournal: return "含日记"
-        }
-    }
-}
-
 /// `[[` 补全的一项。
 struct CompletionItem: Identifiable, Equatable, Hashable {
     var id: String

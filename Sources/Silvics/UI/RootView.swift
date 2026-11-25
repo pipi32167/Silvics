@@ -69,7 +69,7 @@ struct RootView: View {
         } detail: {
             HSplitView {
                 if app.isListPaneVisible {
-                    SidebarView()
+                    ListPaneView()
                         .frame(minWidth: 200, idealWidth: 232, maxWidth: 340)
                 }
                 EditorPane()

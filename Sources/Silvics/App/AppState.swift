@@ -27,6 +27,10 @@ final class AppState: ObservableObject {
     @Published private(set) var journalEntries: [JournalEntry] = []
     /// 待办总览，跨全部日记聚合。
     @Published private(set) var todoOverview: [JournalTodo] = []
+    /// 未完成待办条数。模块导航的「待办总览」用。
+    @Published private(set) var journalOpenTodoCount: Int = 0
+    /// 模板个数。模块导航的「模板」用。
+    @Published private(set) var journalTemplateCount: Int = 0
     @Published var isShowingTodoOverview: Bool = false
     /// 「模板…」面板：勾选下一次新建日记要用的模板。
     @Published var isShowingJournalTemplateSheet: Bool = false
@@ -35,8 +39,6 @@ final class AppState: ObservableObject {
         get { nav.query }
         set { nav.setQuery(newValue) }
     }
-    /// 概念笔记模块的搜索范围：只搜笔记 / 含日记。导航收尾时随开关一起删。
-    @Published var searchScope: SearchScope = .notes
     /// 日记是否参与未链接提及扫描。设置入口在右侧面板，值落 UserDefaults。
     @Published private(set) var journalScanMentions: Bool = JournalMentionSettings.scanMentions
     /// 旧侧栏范围的投影，供过渡期侧栏渲染。只读，改写走 `selectScope`。
@@ -54,6 +56,9 @@ final class AppState: ObservableObject {
     @Published var clipUnreadCount: Int = 0
     @Published var clipTotalCount: Int = 0
     @Published var clipArchivedCount: Int = 0
+
+    /// 待整理：正文已存、模型还没整理完。
+    var clipPendingCount: Int { clipSummaries.filter { $0.aiState != .done }.count }
     @Published var isShowingNewClip: Bool = false
     /// 哪些 provider 已经存了密钥。列表里显示「已配置」用。
     @Published private(set) var providersWithKey: Set<UUID> = []
@@ -274,6 +279,15 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// 换范围：清搜索词，选中落到新范围的第一条。
+    func applyScope(_ scope: ModuleScope) {
+        guard scope.module == nav.active else { return }
+        flushPendingSave()
+        nav.setScope(scope)
+        searchQuery = ""
+        restoreSelectionForActiveModule()
+    }
+
     /// 切模块。记住的目标模块范围与选中都还原，不清搜索词。
     func selectModule(_ module: AppModule) {
         guard nav.active != module else { return }
@@ -289,7 +303,14 @@ final class AppState: ObservableObject {
             let ids = visibleSummaries().map(\.id)
             restoreSelection(from: ids)
         case .journal:
-            let ids = journalEntries.map(\.id)
+            // 总览与模板没有列表，选中保持不动。
+            if case .todos = nav.journalScope { return }
+            if case .templates = nav.journalScope { return }
+            var ids = journalEntries.map(\.id)
+            if case .today = nav.journalScope {
+                let today = JournalDate.today()
+                ids = journalEntries.filter { $0.date == today }.map(\.id)
+            }
             restoreSelection(from: ids)
         case .clips:
             refreshClips()
@@ -329,6 +350,8 @@ final class AppState: ObservableObject {
             orphanCount = try repo.orphanCount()
             noteCount = try repo.noteCount()
             journalEntries = try repo.journalEntries()
+            journalOpenTodoCount = (try? repo.todoOverview())?.count ?? 0
+            journalTemplateCount = JournalTemplates.load(in: repo.vaultURL).count
             tags = try repo.allTags(types: repo.mainListTypes)
             refreshClips()
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
@@ -429,9 +452,7 @@ final class AppState: ObservableObject {
         case .journal:
             return [NoteTypes.journalID]
         case .notes:
-            var types = Set(repo.mainListTypes)
-            if searchScope == .includingJournal { types.insert(NoteTypes.journalID) }
-            return types
+            return Set(repo.mainListTypes)
         }
     }
 

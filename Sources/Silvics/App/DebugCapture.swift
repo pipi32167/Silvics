@@ -103,11 +103,8 @@ enum DebugCapture {
             applyPanelFlag(app, panel: showPanel)
         }
 
-        // `SILVICS_SEARCH=<词>` + `SILVICS_SEARCH_SCOPE=all`：取证时预置搜索。
-        // 必须放在范围切换之后：`selectScope` 会清空搜索词。
-        if let raw = ProcessInfo.processInfo.environment["SILVICS_SEARCH_SCOPE"], raw == "all" {
-            app.searchScope = .includingJournal
-        }
+        // `SILVICS_SEARCH=<词>`：取证时在当前模块里预置搜索。
+        // 必须放在范围切换之后：换范围会清空搜索词。
         if let q = ProcessInfo.processInfo.environment["SILVICS_SEARCH"], !q.isEmpty {
             app.searchQuery = q
         }
@@ -139,13 +136,20 @@ enum DebugCapture {
             case "module-notes": app.selectModule(.notes)
             case "module-journal": app.selectModule(.journal)
             case "module-clips": app.selectModule(.clips)
-            case "journal": app.selectScope(.journal)
-            case "clips", "clip-unread": app.selectClipScope(.clipUnread)
-            case "clips-all": app.selectClipScope(.clipAll)
-            case "clips-archived": app.selectClipScope(.clipArchived)
+            case "journal": app.selectModule(.journal); app.applyScope(.journal(.all))
+            case "clips", "clip-unread": app.selectModule(.clips); app.applyScope(.clip(.unread))
+            case "clips-all": app.selectModule(.clips); app.applyScope(.clip(.all))
+            case "clips-archived": app.selectModule(.clips); app.applyScope(.clip(.archived))
+            case "clips-pending": app.selectModule(.clips); app.applyScope(.clip(.pending))
+            case "journal-todos", "journal-todo": app.selectModule(.journal); app.applyScope(.journal(.todos))
+            case "journal-templates-nav": app.selectModule(.journal); app.applyScope(.journal(.templates))
+            case "note-tag":
+                if let tag = ProcessInfo.processInfo.environment["SILVICS_NOTE_TAG"], !tag.isEmpty {
+                    app.selectModule(.notes); app.applyScope(.note(.tag(tag)))
+                }
             case "clip-tag":
                 if let tag = ProcessInfo.processInfo.environment["SILVICS_CLIP_TAG"], !tag.isEmpty {
-                    app.selectClipScope(.clipTag(tag))
+                    app.selectModule(.clips); app.applyScope(.clip(.tag(tag)))
                 }
             case "new-clip": app.selectClipScope(.clipUnread); app.isShowingNewClip = true
             case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
