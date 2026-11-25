@@ -20,6 +20,67 @@ final class EditorTextView: NSTextView {
     /// `⌘⇧K`：把光标所在提及转成引用。返回 true 表示已处理。
     var onConvertMention: (() -> Bool)?
 
+    /// 代码块区间（含首尾围栏行）。块底色由 `drawBackground(in:)` 整块画。
+    var codeBlockRanges: [NSRange] = [] {
+        didSet {
+            if oldValue != codeBlockRanges { needsDisplay = true }
+        }
+    }
+
+    /// 代码块整块底色。
+    ///
+    /// 为什么不用 `.backgroundColor`：本视图是 TextKit 2（`usingTextLayoutManager: true`），
+    /// 段落属性里的背景只按字形游程上色，于是每行只得到一条与文字等宽的浅灰条，
+    /// 行首缩进与不可见的反引号变成一个个短灰块，行与行之间断开（H01 视觉判据不通过）。
+    /// 这里按块自绘：横向铺满整个文本列，纵向从首行顶到最后一行底，中间不留缝。
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawCodeBlockBackgrounds()
+    }
+
+    private func drawCodeBlockBackgrounds() {
+        guard !codeBlockRanges.isEmpty,
+              let manager = textLayoutManager,
+              let container = textContainer,
+              let storage = textStorage, storage.length > 0 else { return }
+
+        let origin = textContainerOrigin
+        let left = origin.x
+        let width = container.size.width
+        guard width > 0 else { return }
+
+        let document = manager.documentRange
+        var paths: [NSBezierPath] = []
+        for range in codeBlockRanges {
+            guard range.length > 0,
+                  let start = manager.location(document.location, offsetBy: range.location),
+                  let end = manager.location(start, offsetBy: range.length),
+                  let textRange = NSTextRange(location: start, end: end) else { continue }
+            manager.ensureLayout(for: textRange)
+
+            var top = CGFloat.greatestFiniteMagnitude
+            var bottom = -CGFloat.greatestFiniteMagnitude
+            manager.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+                top = min(top, frame.minY)
+                bottom = max(bottom, frame.maxY)
+                return true
+            }
+            guard bottom > top else { continue }
+
+            // 上下各留 4pt 呼吸，左右铺满整列。上下边距不加到相邻块之间，直接贴块边界算。
+            let box = NSRect(
+                x: left,
+                y: top + origin.y - 4,
+                width: width,
+                height: (bottom - top) + 8
+            )
+            paths.append(NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6))
+        }
+        guard !paths.isEmpty else { return }
+        Theme.codeBackground.setFill()
+        for path in paths { path.fill() }
+    }
+
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command),
            let target = wikiTarget(at: event) {
@@ -312,6 +373,8 @@ struct NoteEditorView: NSViewRepresentable {
 
             lastSyntaxMarkers = marks.all
             lastCaretParagraph = caretParagraph
+            // 块底色由视图自绘，区间变了要重画。
+            textView.codeBlockRanges = spans.codeBlocks
 
             textView.typingAttributes = Theme.typingAttributes()
             textView.selectedRanges = selection
@@ -427,11 +490,17 @@ struct NoteEditorView: NSViewRepresentable {
         ) {
             for range in spans.codeBlocks {
                 guard let r = clamp(range, storage.length) else { continue }
+                // 只给字体与段落样式；底色交给 `EditorTextView.drawBackground(in:)`
+                // （`.backgroundColor` 在 TextKit 2 下只按字形游程上色，会写成一条条短灰块）。
                 storage.addAttributes([
                     .font: Theme.codeFont,
-                    .backgroundColor: Theme.codeBackground,
                     .paragraphStyle: Theme.codeParagraph(),
                 ], range: r)
+            }
+            // 围栏行只淡化：整行次级色，不加底色、不改字重。
+            for range in MarkdownStyler.codeFenceLineRanges(in: text, spans: spans) {
+                guard let r = clamp(range, storage.length) else { continue }
+                storage.addAttribute(.foregroundColor, value: Theme.secondaryText, range: r)
             }
             applyCodeTokens(spans, in: text, storage)
             for range in spans.blockQuotes {

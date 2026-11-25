@@ -223,6 +223,21 @@ enum MarkdownStyler {
         return out
     }
 
+    /// 围栏行整行区间（开围栏一行 + 闭围栏一行），末尾不含换行。
+    ///
+    /// 给渲染层「围栏行只淡化、不加色块」用（H11）。缩进代码块没有围栏，不产生区间。
+    static func codeFenceLineRanges(in text: String, spans: EditorSpans) -> [NSRange] {
+        guard !text.isEmpty, !spans.codeBlocks.isEmpty else { return [] }
+        let ns = text as NSString
+        var out: [NSRange] = []
+        for span in spans.codeBlocks {
+            guard span.length > 0, span.location >= 0,
+                  span.location + span.length <= ns.length else { continue }
+            out += block(in: ns, span: span).fences
+        }
+        return out
+    }
+
     /// 围栏行识别：行首（允许缩进）连缀 ≥3 个反引号或波浪号。
     /// 返回围栏字符、长度、以及围栏后面的语言标记。
     private static func fenceLine(_ line: String) -> (character: Character, count: Int, language: String)? {
@@ -236,8 +251,11 @@ enum MarkdownStyler {
         return (first, count, language)
     }
 
-    /// 一个代码块：切出行，去掉首尾围栏，返回内容行区间。
-    private static func regions(in ns: NSString, span: NSRange) -> [CodeBlockRegion] {
+    /// 一个代码块：内容行区间 + 首尾围栏行区间。
+    private static func block(
+        in ns: NSString,
+        span: NSRange
+    ) -> (regions: [CodeBlockRegion], fences: [NSRange]) {
         let end = span.location + span.length
         var lines: [NSRange] = []
         var index = span.location
@@ -247,7 +265,7 @@ enum MarkdownStyler {
             lines.append(lineRange)
             index = lineRange.location + lineRange.length
         }
-        guard let first = lines.first else { return [] }
+        guard let first = lines.first else { return ([], []) }
 
         /// 行文本，去掉行尾换行（`\n` / `\r\n`）。
         func lineText(_ range: NSRange) -> String {
@@ -273,8 +291,10 @@ enum MarkdownStyler {
 
         guard let open = fenceLine(lineText(first)) else {
             // 缩进代码块（四个空格）：没有围栏，整段按通用词法上色
-            guard let range = contentRange(from: span.location, to: lines[lines.count - 1]) else { return [] }
-            return [CodeBlockRegion(contentRange: range, language: "")]
+            guard let range = contentRange(from: span.location, to: lines[lines.count - 1]) else {
+                return ([], [])
+            }
+            return ([CodeBlockRegion(contentRange: range, language: "")], [])
         }
 
         var last = lines.count
@@ -285,9 +305,26 @@ enum MarkdownStyler {
                 break
             }
         }
-        guard last > 1 else { return [] }
-        guard let range = contentRange(from: lines[1].location, to: lines[last - 1]) else { return [] }
-        return [CodeBlockRegion(contentRange: range, language: open.language)]
+        guard last > 1 else { return ([], []) }
+        guard let range = contentRange(from: lines[1].location, to: lines[last - 1]) else {
+            return ([], [])
+        }
+        // 首行一定是开围栏；`last < lines.count` 时才找到闭围栏。行尾换行不算进去。
+        let fenceLines = last < lines.count ? [first, lines[last]] : [first]
+        let fences = fenceLines.map { line -> NSRange in
+            var r = line
+            while r.length > 0 {
+                let ch = ns.character(at: r.location + r.length - 1)
+                if ch == 0x0A || ch == 0x0D { r.length -= 1 } else { break }
+            }
+            return r
+        }
+        return ([CodeBlockRegion(contentRange: range, language: open.language)], fences)
+    }
+
+    /// 只取内容行区间。
+    private static func regions(in ns: NSString, span: NSRange) -> [CodeBlockRegion] {
+        block(in: ns, span: span).regions
     }
 
     /// 一行上可能出现的三种行首标记。

@@ -396,6 +396,45 @@ final class CodeLexerTests: XCTestCase {
         XCTAssertEqual(regions.map { ns.substring(with: $0.contentRange) }, ["const a = 1;", "echo \"x\""])
     }
 
+    /// 围栏行整行区间：首尾各一行，内容行不在里面。
+    /// 渲染层靠这个只淡化围栏行，不再给它们加底色（灰块回归）。
+    func testFenceLineRangesCoverOnlyFenceLines() {
+        let doc = """
+        正文
+        ```swift
+        let a = 1
+        ```
+        尾巴
+        """
+        let spans = MarkdownStyler.analyze(doc)
+        let ns = doc as NSString
+        let fences = MarkdownStyler.codeFenceLineRanges(in: doc, spans: spans)
+        XCTAssertEqual(fences.count, 2)
+        XCTAssertEqual(fences.map { ns.substring(with: $0) }, ["```swift", "```"])
+
+        let regions = MarkdownStyler.codeBlockRegions(in: doc, spans: spans)
+        XCTAssertEqual(regions.count, 1)
+        for fence in fences {
+            XCTAssertEqual(
+                NSIntersectionRange(fence, regions[0].contentRange).length, 0,
+                "围栏行不能与内容行重叠"
+            )
+        }
+    }
+
+    func testIndentedCodeBlockHasNoFenceLine() {
+        let doc = """
+        正文
+
+            缩进代码
+            第二行
+        """
+        let spans = MarkdownStyler.analyze(doc)
+        XCTAssertEqual(spans.codeBlocks.count, 1)
+        XCTAssertTrue(MarkdownStyler.codeFenceLineRanges(in: doc, spans: spans).isEmpty)
+        XCTAssertEqual(MarkdownStyler.codeBlockRegions(in: doc, spans: spans).count, 1)
+    }
+
     // MARK: - L01 / L02 公式块
 
     func testL01LatexCommandsAreKeywords() {
