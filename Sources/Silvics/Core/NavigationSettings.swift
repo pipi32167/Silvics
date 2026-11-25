@@ -13,6 +13,14 @@ enum ListPaneSettings {
         set { store.set(newValue, forKey: key) }
     }
 
+    private static let navKey = "silvics.nav.collapsed"
+
+    /// 模块导航是否收成一列图标。默认展开。
+    static var navCollapsed: Bool {
+        get { store.object(forKey: navKey) as? Bool ?? false }
+        set { store.set(newValue, forKey: navKey) }
+    }
+
     private static let widthKey = "silvics.nav.listWidth"
     static let defaultWidth: CGFloat = 232
 

@@ -104,6 +104,11 @@ enum DebugCapture {
             applyPanelFlag(app, panel: showPanel)
         }
 
+        // `SILVICS_NAV_COLLAPSED=1`：取证时把模块栏收成一列图标。
+        if ProcessInfo.processInfo.environment["SILVICS_NAV_COLLAPSED"] == "1", !app.isNavCollapsed {
+            app.toggleNavPane()
+        }
+
         // `SILVICS_LIST_WIDTH=300`：取证时把列表栏拉到指定宽度。
         if let raw = ProcessInfo.processInfo.environment["SILVICS_LIST_WIDTH"], let width = Double(raw) {
             app.setListPaneWidth(CGFloat(width))

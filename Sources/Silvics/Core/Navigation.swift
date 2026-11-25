@@ -16,11 +16,12 @@ enum AppModule: String, CaseIterable, Identifiable, Equatable {
         }
     }
 
-    var systemImage: String {
+    /// 模块图标用 emoji：免费、跨平台、不引第三方图标库。
+    var icon: String {
         switch self {
-        case .notes: return "square.stack"
-        case .journal: return "calendar"
-        case .clips: return "bookmark"
+        case .notes: return "📝"
+        case .journal: return "📅"
+        case .clips: return "🔖"
         }
     }
 }

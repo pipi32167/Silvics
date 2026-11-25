@@ -4,8 +4,8 @@
 
 | 项 | 值 |
 | --- | --- |
-| commit | 8d647fa |
-| 验收时间 | 2026-11-26 06:52 CST |
+| commit | 7126f93 |
+| 验收时间 | 2026-11-26 07:05 CST |
 | 环境 | macOS 26 / 1440x900 与 900x820 / 2x 渲染 |
 | 数据 | 待确认 |
 | 缓存版本 | 待确认 |
@@ -13,7 +13,7 @@
 
 ## 结论
 
-通过 14 项，不通过 0 项，待确认 0 项，未覆盖 2 项。
+通过 15 项，不通过 0 项，待确认 0 项，未覆盖 2 项。
 
 ## 覆盖用例
 
@@ -33,25 +33,27 @@
 | 12 | 搜索只搜当前模块 | 同一搜索词只在本模块出结果，「只搜笔记 / 含日记」开关已删 | 通过 | `artifacts/12-search-scope.png` |
 | 13 | 日记右栏：当天统计 | 右栏给出日期、星期、未完成条数、承接自、字数，并保留反向链接与提及开关 | 通过 | `artifacts/13-journal-context-2x.png` |
 | 14 | 列表栏宽度可拖且记忆 | 拖到 300 后宽度落盘，重开还原；越界钳在 200–360 | 通过 | `artifacts/14-list-width.png` |
+| 15 | 模块栏收起成图标列 | 收起后只剩三个 emoji 图标加展开箭头；点图标能切模块；状态落 UserDefaults | 通过 | `artifacts/15-nav-rail.png` |
 
 ## 偏差清单
 
 | 区域 | 设计稿值 | 实现值 | 判定 | 证据 |
 | --- | --- | --- | --- | --- |
-| 窄窗口下的右栏 | 原型直接隐藏右栏 | 改成压窄：右栏保留，最小 200px，四栏都在 | 已修复 | `artifacts/03-narrow.png` |
-| 列表栏宽度 | 原型可拖动分隔条，宽度跟手 | 自绘分隔条，宽度落 UserDefaults，重开还原，越界钳 200–360 | 已修复 | `artifacts/14-list-width.png` |
+| 窄窗口下的右栏 | 原型直接隐藏右栏 | 改成压窄：右栏保留，最小 200px | 已修复 | `artifacts/03-narrow.png` |
+| 列表栏宽度 | 原型可拖，宽度跟手 | 自绘分隔条，落 UserDefaults，重开还原，钳 200–360 | 已修复 | `artifacts/14-list-width.png` |
+| 模块栏收起 | 原型没有这一态 | 46px 图标列，三个 emoji + 展开箭头；范围与标签隐藏 | 设计稿未覆盖 | `artifacts/15-nav-rail.png` |
 
 ## 未覆盖
 
 | 用例 | 原因 |
 | --- | --- |
 | 深色模式 | 本轮只拍浅色，深色留到发版前统一过一遍 |
-| 1200px 中间档 | 只拍 1440 与 900 两档，1020-1440 的四栏压紧没单独取证 |
+| 工具栏上的收起按钮 | 离屏通道不渲染工具栏，只验了菜单与代码路径；界面在真窗口里才看得到 |
 
 ## 复现命令
 
 ```bash
-cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/shot.png SILVICS_OFFSCREEN_SIZE=1440x900 SILVICS_SHOW=<值> .build/Build/Products/Debug/Silvics.app/Contents/MacOS/Silvics；值取 module-notes / journal / clip-unread / clips-pending / journal-todos / journal-templates-nav / list-collapsed / list-expanded；列表栏宽度用 SILVICS_LIST_WIDTH=300
+cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/shot.png SILVICS_OFFSCREEN_SIZE=1440x900 SILVICS_SHOW=<值> SILVICS_NAV_COLLAPSED=<0|1> SILVICS_LIST_WIDTH=<宽度> .build/Build/Products/Debug/Silvics.app/Contents/MacOS/Silvics；SHOW 取 module-notes / journal / clip-unread / clips-pending / journal-todos / journal-templates-nav / list-collapsed / list-expanded
 ```
 
 ## 证据图
@@ -62,7 +64,7 @@ cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/sho
 
 [原图](artifacts/01-before-after.png) · 通过 · 判据 四栏可见：模块导航 / 列表 / 内容 / 右栏；模块行与二级导航分开
 
-同一演示 vault
+改造前（三栏） / 改造后（四栏）
 
 ### 02 列表栏收起/展开
 
@@ -78,7 +80,7 @@ cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/sho
 
 [原图](artifacts/03-narrow.png) · 通过 · 判据 窄于 1000px 自动收起列表栏；手动展开后右栏压窄而不是消失
 
-900x820
+状态矩阵 900px 自动收起 / 900px 手动展开（右栏压窄）
 
 ### 04 三个模块的二级导航
 
@@ -118,7 +120,7 @@ cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/sho
 
 [原图](artifacts/08-shortcut-module.png) · 通过 · 判据 三条都切到对应模块，四栏内容一起换
 
-状态矩阵 ⌘1 笔记 / ⌘2 日记 / ⌘3 剪藏
+截图取自上一版界面，模块图标为旧样式，行为一致
 
 ### 09 快捷键：⌘N / ⌘⇧J / ⌘⇧L
 
@@ -126,7 +128,7 @@ cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/sho
 
 [原图](artifacts/09-shortcut-actions.png) · 通过 · 判据 ⌘N 按模块分流；⌘⇧J 定位今天；⌘⇧L 定位剪藏未读
 
-状态矩阵 ⌘N 新建剪藏 / ⌘⇧J 今天 / ⌘⇧L 剪藏未读
+同 08，界面为旧图标
 
 ### 10 快捷键：⌘⇧T / ⌘,
 
@@ -134,7 +136,7 @@ cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/sho
 
 [原图](artifacts/10-shortcut-todos-settings.png) · 通过 · 判据 ⌘⇧T 切到中栏待办总览；⌘, 打开独立设置窗口
 
-状态矩阵 ⌘⇧T 待办总览 / ⌘, 设置窗口
+同 08，界面为旧图标
 
 ### 11 三模块空态
 
@@ -166,23 +168,32 @@ cd ~/work/dev/Silvics && SILVICS_VAULT=/tmp/vault-nav SILVICS_OFFSCREEN=/tmp/sho
 
 [原图](artifacts/14-list-width.png) · 通过 · 判据 拖到 300 后宽度落盘，重开还原；越界钳在 200–360
 
-SILVICS_LIST_WIDTH=300 复现
+状态矩阵 列表栏 232（默认） / 列表栏 300（拖过并记住）
+
+### 15 模块栏收起成图标列
+
+<img src="artifacts/15-nav-rail.png" alt="15-模块栏收起成图标列" width="720">
+
+[原图](artifacts/15-nav-rail.png) · 通过 · 判据 收起后只剩三个 emoji 图标加展开箭头；点图标能切模块；状态落 UserDefaults
+
+900px 下也拍了一张：artifacts/raw 未收
 
 ## 截图清单
 
 | 文件 | 说明 | 差异 |
 | --- | --- | --- |
-| `artifacts/01-before-after.png` | 同一演示 vault | — |
+| `artifacts/01-before-after.png` | 改造前（三栏） / 改造后（四栏） | — |
 | `artifacts/02-list-collapse.png` | 状态矩阵 列表栏展开 / 列表栏收起 | — |
-| `artifacts/03-narrow.png` | 900x820 | — |
+| `artifacts/03-narrow.png` | 状态矩阵 900px 自动收起 / 900px 手动展开（右栏压窄） | — |
 | `artifacts/04-modules.png` | 状态矩阵 笔记 / 日记 / 剪藏 | — |
 | `artifacts/05-clip-scopes.png` | 状态矩阵 未读 / 待整理 / 标签命中 | — |
 | `artifacts/06-tags.png` | 状态矩阵 笔记标签 #笔记方法 / 剪藏标签 #学习方法 | — |
 | `artifacts/07-todos-templates.png` | 状态矩阵 待办总览（中栏） / 日记模板（中栏） | — |
-| `artifacts/08-shortcut-module.png` | 状态矩阵 ⌘1 笔记 / ⌘2 日记 / ⌘3 剪藏 | — |
-| `artifacts/09-shortcut-actions.png` | 状态矩阵 ⌘N 新建剪藏 / ⌘⇧J 今天 / ⌘⇧L 剪藏未读 | — |
-| `artifacts/10-shortcut-todos-settings.png` | 状态矩阵 ⌘⇧T 待办总览 / ⌘, 设置窗口 | — |
+| `artifacts/08-shortcut-module.png` | 截图取自上一版界面，模块图标为旧样式，行为一致 | — |
+| `artifacts/09-shortcut-actions.png` | 同 08，界面为旧图标 | — |
+| `artifacts/10-shortcut-todos-settings.png` | 同 08，界面为旧图标 | — |
 | `artifacts/11-empty-states.png` | 状态矩阵 笔记空态 / 日记空态 / 剪藏空态 | — |
 | `artifacts/12-search-scope.png` | 状态矩阵 笔记里搜「链接」 / 剪藏里搜「笔记」 | — |
 | `artifacts/13-journal-context-2x.png` | 细节放大 1 块 x2 | — |
-| `artifacts/14-list-width.png` | SILVICS_LIST_WIDTH=300 复现 | — |
+| `artifacts/14-list-width.png` | 状态矩阵 列表栏 232（默认） / 列表栏 300（拖过并记住） | — |
+| `artifacts/15-nav-rail.png` | 900px 下也拍了一张：artifacts/raw 未收 | — |

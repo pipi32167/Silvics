@@ -22,6 +22,7 @@ final class NavigationTests: XCTestCase {
 
     override func tearDown() {
         ListPaneSettings.isVisible = true
+        ListPaneSettings.navCollapsed = false
         repo = nil
         db = nil
         vault = nil
@@ -182,6 +183,22 @@ final class NavigationTests: XCTestCase {
         // 模拟重启：新 AppState 读同一个 store
         let relaunched = AppState(repo: repo)
         XCTAssertEqual(relaunched.listPaneWidth, 360, accuracy: 0.5)
+    }
+
+    func testNavPaneCollapsePersists() {
+        let app = AppState(repo: repo)
+        XCTAssertFalse(app.isNavCollapsed)
+
+        app.toggleNavPane()
+        XCTAssertTrue(app.isNavCollapsed)
+        XCTAssertTrue(ListPaneSettings.navCollapsed)
+
+        // 模拟重启：新 AppState 读同一个 store
+        let relaunched = AppState(repo: repo)
+        XCTAssertTrue(relaunched.isNavCollapsed)
+
+        relaunched.toggleNavPane()
+        XCTAssertFalse(relaunched.isNavCollapsed)
     }
 
     // MARK: - AppState 集成

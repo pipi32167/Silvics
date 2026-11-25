@@ -57,7 +57,11 @@ struct RootView: View {
     private var split: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             ModuleNavView()
-                .navigationSplitViewColumnWidth(min: 132, ideal: 152, max: 200)
+                .navigationSplitViewColumnWidth(
+                    min: app.isNavCollapsed ? 46 : 132,
+                    ideal: app.isNavCollapsed ? 46 : 152,
+                    max: app.isNavCollapsed ? 46 : 200
+                )
         } detail: {
             HStack(spacing: 0) {
                 if app.isListPaneVisible {
@@ -74,6 +78,14 @@ struct RootView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    app.toggleNavPane()
+                } label: {
+                    Image(systemName: app.isNavCollapsed ? "sidebar.right" : "sidebar.left")
+                }
+                .help(app.isNavCollapsed ? "展开模块栏 ⌘⌥S" : "收成图标栏 ⌘⌥S")
+            }
             ToolbarItem(placement: .navigation) {
                 Button {
                     app.toggleListPane()
