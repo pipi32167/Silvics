@@ -101,6 +101,7 @@ enum DebugCapture {
             }
         case "journal": app.selectScope(.journal)
         case "lists", "lists-demo": seedListsDemo(app)
+        case "tables", "tables-demo": seedTablesDemo(app)
         case "journal-today": app.goToToday()
         case "settings":
             SettingsWindowController.show(app: app, tab: .appearance)
@@ -230,6 +231,64 @@ enum DebugCapture {
         }
     }
 
+    /// 仅取证：`SILVICS_SHOW=tables` 建两篇表格演示笔记。
+    ///
+    /// 第一篇里放两个一模一样的表：上面一块是渲染态，下面一块在围栏代码块里（不识别），
+    /// 并排就能看出「渲染」与「原始 pipe」的差别。第二篇是 4 列表格，用来验多列。
+    @MainActor
+    private static func seedTablesDemo(_ app: AppState) {
+        let demos: [(title: String, body: String)] = [
+            ("表格渲染演示", """
+            ## 三列表格
+
+            | 项目 | 状态 | 备注 |
+            | --- | :---: | --- |
+            | 排版 | 未实现 | 三列 |
+            | 对齐 | 待验证 | 等宽 |
+
+            上面这块是渲染态：表头加粗、下面一条淡线、pipe 按显示宽度对齐。
+            光标停在下面这些普通段落时，上面四行保持对齐。
+
+            ## 原始 pipe（代码块里不识别）
+
+            ```text
+            | 项目 | 状态 | 备注 |
+            | --- | --- | --- |
+            | 排版 | 未实现 | 三列 |
+            | 对齐 | 待验证 | 等宽 |
+            ```
+            """),
+            ("表格四列演示", """
+            | 类型 | 数据 | 位置 | 备注 |
+            | --- | --- | --- | --- |
+            | 笔记 | 纯文本 | vault/notes | 唯一真相 |
+            | 索引 | sqlite | 可重建 | 从正文重算 |
+            | 引用 | 双链 | 悬空可恢复 | 后建目标能接上 |
+
+            光标停在这一行时，上面五行仍然保持渲染态。
+            """),
+        ]
+
+        for demo in demos {
+            if let existing = app.summaries.first(where: { $0.title == demo.title }) {
+                app.select(existing.id)
+                app.bodyDidChange(demo.body)
+                app.flushPendingSave()
+                continue
+            }
+            guard let note = app.createNote(title: demo.title) else { continue }
+            app.bodyDidChange(demo.body)
+            app.flushPendingSave()
+            app.select(note.id)
+        }
+
+        if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
+           let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
+            app.selectScope(.all)
+            app.select(match.id)
+        }
+    }
+
     /// 仅取证：`SILVICS_TEMPLATES=1` 往 vault 的 `templates/` 写三份演示模板（order 1/2/3）。
     /// `SILVICS_TEMPLATE_MEMORY=工作,复盘` 再预置记忆，便于截到「部分勾选」的状态。
     ///
@@ -341,13 +400,78 @@ enum DebugCapture {
         return rep.representation(using: .png, properties: [:])
     }
 
+    /// `SILVICS_SELFTEST=convert|tables`：走真实链路跑一次自检。
+    ///
+    /// - `convert`：把光标放进第一条提及，合成一次 `⌘⇧K`。
+    /// - `tables`：量出每个表格每行 pipe 的 x，打印列偏差（验收需要具体数字）。
+    @MainActor
+    static func runSelfTest(_ app: AppState) {
+        switch ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] {
+        case "convert": runConvertSelfTest(app)
+        case "tables": runTableSelfTest()
+        default: return
+        }
+    }
+
+    /// `SILVICS_SELFTEST=tables`：把每行 pipe 的 x 量出来，打印列偏差。
+    ///
+    /// 用 `firstRect(forCharacterRange:)` 量真实排版结果，不看属性表推算。
+    @MainActor
+    private static func runTableSelfTest(after delay: TimeInterval = 2.8) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findTextView(in: window.contentView!) else {
+                print("[tables] 找不到编辑区")
+                return
+            }
+            let text = textView.string
+            let blocks = TableLayout.blocks(in: text)
+            print("[tables] 识别到表格块 \(blocks.count) 个")
+            if let manager = textView.textLayoutManager {
+                manager.ensureLayout(for: manager.documentRange)
+            }
+            window.layoutIfNeeded()
+            textView.layoutSubtreeIfNeeded()
+            let origin = textView.textContainerOrigin
+
+            func x(_ location: Int) -> CGFloat {
+                var actual = NSRange()
+                let rect = textView.firstRect(
+                    forCharacterRange: NSRange(location: location, length: 1),
+                    actualRange: &actual
+                )
+                let inView = textView.convert(window.convertFromScreen(rect), from: nil)
+                return inView.minX - origin.x
+            }
+
+            for (index, block) in blocks.enumerated() {
+                print("[tables] 块 \(index + 1)：\(block.columnCount) 列 / \(block.rows.count) 行")
+                let rows = block.rows.map { row in row.pipes.map { x($0.location) } }
+                for (r, row) in rows.enumerated() {
+                    print("[tables]   第 \(r + 1) 行："
+                        + row.map { String(format: "%.2f", $0) }.joined(separator: " / "))
+                }
+                var worst: CGFloat = 0
+                for column in 1...block.columnCount {
+                    let xs = rows.compactMap { $0.count > column ? $0[column] : nil }
+                    guard let lo = xs.min(), let hi = xs.max() else { continue }
+                    worst = max(worst, hi - lo)
+                    print(String(
+                        format: "[tables]   第 %d 个 | 偏差 %.2f pt（x∈[%.2f, %.2f]）",
+                        column + 1, hi - lo, lo, hi
+                    ))
+                }
+                print(String(format: "[tables]   最大列偏差 %.2f pt", worst))
+            }
+        }
+    }
+
     /// `SILVICS_SELFTEST=convert`：把光标放进第一条提及，合成一次 `⌘⇧K`。
     ///
     /// 走的是真实的 `keyDown` → `shouldChangeText` → 正文改写 → 防抖保存链路，
     /// 只是绕开系统键盘事件（自动化按键要「辅助功能」授权）。
     @MainActor
-    static func runSelfTest(_ app: AppState) {
-        guard ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] == "convert" else { return }
+    private static func runConvertSelfTest(_ app: AppState) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   let textView = findTextView(in: window.contentView!) else {
@@ -565,8 +689,11 @@ enum DebugCapture {
                 let range = (textView.string as NSString).range(of: keyword)
                 guard range.location != NSNotFound else { continue }
                 textView.window?.makeFirstResponder(textView)
-                textView.setSelectedRange(NSRange(location: range.location, length: 0))
-                print("[caret] \"\(keyword)\" -> location=\(range.location)")
+                // `SILVICS_CARET_SELECT=1` 时选中关键字：截图里能看出是哪一行「露源码」。
+                let length = ProcessInfo.processInfo.environment["SILVICS_CARET_SELECT"] == "1"
+                    ? range.length : 0
+                textView.setSelectedRange(NSRange(location: range.location, length: length))
+                print("[caret] \"\(keyword)\" -> location=\(range.location) length=\(length)")
                 return
             }
             print("[caret] 可见文本视图里找不到「\(keyword)」")

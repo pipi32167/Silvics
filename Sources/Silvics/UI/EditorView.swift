@@ -550,6 +550,8 @@ struct NoteEditorView: NSViewRepresentable {
         private var lastListMarkers: [ListMarker] = []
         /// 上一次算出来的引用前缀。
         private var lastQuoteMarkers: [NSRange] = []
+        /// 上一次算出来的表格块。光标换行时要在「露源码 / 渲染」之间切换。
+        private var lastTableBlocks: [TableBlock] = []
         /// 上一次的分桶依据，避免同段落内的每次光标移动都重设属性。
         private var lastCaretParagraph: NSRange?
 
@@ -638,6 +640,7 @@ struct NoteEditorView: NSViewRepresentable {
             let wikis = WikiScanner.scan(text)
             let listMarkers = MarkdownStyler.listMarkers(in: text)
             let quoteMarkers = MarkdownStyler.quoteMarkerRanges(in: text)
+            let tableBlocks = TableLayout.blocks(in: text)
             let fullRange = NSRange(location: 0, length: storage.length)
             let caretParagraph = paragraphRange(at: textView.selectedRange().location)
             let marks = MarkdownStyler.syntaxMarkerRanges(
@@ -655,6 +658,8 @@ struct NoteEditorView: NSViewRepresentable {
             storage.setAttributes(Theme.baseAttributes(), range: fullRange)
 
             applyHeadings(spans, storage, fullRange)
+            // 表格先写等宽 + kern，`applyInline` 的加粗 / 斜体再叠在它上面。
+            applyTables(tableBlocks, in: text, caretParagraph: caretParagraph, storage: storage)
             applyInline(spans, storage, fullRange)
             applyBlocks(spans, in: text, storage, fullRange)
             applyLists(listMarkers, quotes: quoteMarkers, caretParagraph: caretParagraph, storage: storage)
@@ -668,6 +673,7 @@ struct NoteEditorView: NSViewRepresentable {
             lastSyntaxMarkers = marks.all
             lastListMarkers = listMarkers
             lastQuoteMarkers = quoteMarkers
+            lastTableBlocks = tableBlocks
             lastCaretParagraph = caretParagraph
             // 块底色由视图自绘，区间变了要重画。
             textView.codeBlockRanges = spans.codeBlocks
@@ -712,7 +718,8 @@ struct NoteEditorView: NSViewRepresentable {
         private func refreshSyntaxMarksForCaret() {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles, !textView.hasMarkedText() else { return }
-            guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarkers.isEmpty else {
+            guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarkers.isEmpty
+                    || !lastTableBlocks.isEmpty else {
                 return
             }
             let caretParagraph = paragraphRange(at: textView.selectedRange().location)
@@ -725,6 +732,8 @@ struct NoteEditorView: NSViewRepresentable {
             applySyntaxMarks(marks, storage)
             // 标记宽度随光标段落切换：新段落恢复可读宽度，旧段落重新压到 ∹0。
             applyLists(lastListMarkers, quotes: lastQuoteMarkers, caretParagraph: caretParagraph, storage: storage)
+            // 表格同理：光标行撤 kern 露源码，其他行恢复对齐。
+            applyTables(lastTableBlocks, in: storage.string, caretParagraph: caretParagraph, storage: storage)
             storage.endEditing()
             undoManager?.enableUndoRegistration()
             lastCaretParagraph = caretParagraph
@@ -764,6 +773,25 @@ struct NoteEditorView: NSViewRepresentable {
                     range.location < caret.location + caret.length && caret.location < range.location + range.length
                 } ?? false
                 setMarkerWidth(range, compressed: !inCaret, storage: storage)
+            }
+        }
+
+        /// 表格：整块等宽 13pt，按显示宽度给每格末字符补 kern，pipe 与分隔行淡化。
+        ///
+        /// 光标所在行不补 kern，pipe 回到等宽字体的自然位置 —— 那一行就是源码。
+        /// 属性全部由 `TableLayout.attributes` 算（纯函数，有单测），这里只负责写进存储。
+        private func applyTables(
+            _ blocks: [TableBlock],
+            in text: String,
+            caretParagraph: NSRange?,
+            storage: NSTextStorage
+        ) {
+            guard !blocks.isEmpty else { return }
+            for block in blocks {
+                for item in TableLayout.attributes(for: block, in: text, caretParagraph: caretParagraph) {
+                    guard let r = clamp(item.range, storage.length) else { continue }
+                    storage.addAttributes(item.attributes, range: r)
+                }
             }
         }
 

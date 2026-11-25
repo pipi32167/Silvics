@@ -96,6 +96,46 @@ enum Theme {
             : NSColor(white: 0, alpha: 0.12)
     }
 
+    // MARK: - 表格
+
+    /// 表格字号固定 13pt：列宽与 kern 都按这个字号的字宽度量，跟正文 / 代码字号脱钩。
+    static let tableFontSize: CGFloat = 13
+
+    static var tableFont: NSFont { NSFont.monospacedSystemFont(ofSize: tableFontSize, weight: .regular) }
+    static var tableHeaderFont: NSFont { NSFont.monospacedSystemFont(ofSize: tableFontSize, weight: .bold) }
+
+    /// pipe 的淡色。对齐验收要靠截图里的 pipe，所以不能设成 `.clear`。
+    static let tablePipe = NSColor(name: "tablePipe") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.38)
+            : NSColor(white: 0, alpha: 0.32)
+    }
+
+    /// 分隔行 `| --- |`：淡化到 40%，光标行恢复 `labelColor`。
+    static let tableDelimiter = NSColor(name: "tableDelimiter") { appearance in
+        NSColor.labelColor.withAlphaComponent(0.4)
+    }
+
+    /// 表头行下方的淡分隔线（下划线）。
+    static let tableHeaderRule = NSColor(name: "tableHeaderRule") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.30)
+            : NSColor(white: 0, alpha: 0.22)
+    }
+
+    /// 表格行的段落样式。
+    ///
+    /// `lineBreakMode = .byClipping`：表格行一旦软换行，后面半行会掉到下一视觉行，
+    /// pipe 就永远对不齐。宁可横向裁掉，也不让列错位。
+    static func tableParagraph(first: Bool, last: Bool) -> NSParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = 1
+        p.paragraphSpacingBefore = first ? 8 : 0
+        p.paragraphSpacing = last ? 8 : 0
+        p.lineBreakMode = .byClipping
+        return p
+    }
+
     // MARK: - 代码高亮
     //
     // 只改字色，不改字符。深色模式下一律抬高亮度、降饱和，避免浅底配色在暗底上刺眼。
