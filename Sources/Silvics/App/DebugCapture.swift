@@ -92,6 +92,13 @@ enum DebugCapture {
             app.refreshMentionGroups()
             app.isShowingMentionsSheet = true
         case "todos", "todo-overview": app.openTodoOverview()
+        case "todo-jump":
+            // 取证用：打开总览并按文本跳转，走的是面板里点击的同一路径。
+            app.openTodoOverview()
+            if let text = ProcessInfo.processInfo.environment["SILVICS_TODO_TEXT"],
+               let todo = app.todoOverview.first(where: { $0.text.contains(text) }) {
+                app.jumpToTodo(todo)
+            }
         case "journal": app.selectScope(.journal)
         case "journal-today": app.goToToday()
         case "settings":
