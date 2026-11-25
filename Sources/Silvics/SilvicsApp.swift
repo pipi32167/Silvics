@@ -87,8 +87,9 @@ struct SilvicsApp: App {
                 }
                 .disabled(app.current?.type != NoteTypes.journalID)
 
-                Button("日记模板…") {
-                    app.isShowingJournalTemplateSheet = true
+                Button("日记模板") {
+                    app.selectModule(.journal)
+                    app.applyScope(.journal(.templates))
                 }
 
                 Divider()

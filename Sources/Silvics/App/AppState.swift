@@ -31,9 +31,6 @@ final class AppState: ObservableObject {
     @Published private(set) var journalOpenTodoCount: Int = 0
     /// 模板个数。模块导航的「模板」用。
     @Published private(set) var journalTemplateCount: Int = 0
-    @Published var isShowingTodoOverview: Bool = false
-    /// 「模板…」面板：勾选下一次新建日记要用的模板。
-    @Published var isShowingJournalTemplateSheet: Bool = false
     /// 当前模块的搜索词。各模块各存各的，切走不丢。
     var searchQuery: String {
         get { nav.query }
@@ -285,6 +282,10 @@ final class AppState: ObservableObject {
         flushPendingSave()
         nav.setScope(scope)
         searchQuery = ""
+        // 待办总览的数据只在打开时算，切到这一页就刷新一次。
+        if case .journal(.todos) = nav.scope {
+            todoOverview = (try? repo.todoOverview()) ?? []
+        }
         restoreSelectionForActiveModule()
     }
 
@@ -696,15 +697,15 @@ final class AppState: ObservableObject {
     }
 
     /// `⌘⇧T`：刷新待办总览并打开面板。只聚合已经存在的日记，不代为新建。
+    /// `⌘⇧T`：切到日记模块的「待办总览」，占中栏。
     func openTodoOverview() {
         flushPendingSave()
         todoOverview = (try? repo.todoOverview()) ?? []
-        isShowingTodoOverview = true
+        nav.enter(.journal, scope: .journal(.todos))
     }
 
     /// 从待办总览跳到「最近出现」那天，并把那一行滚到可见。
     func jumpToTodo(_ todo: JournalTodo) {
-        isShowingTodoOverview = false
         guard let note = try? repo.journal(on: todo.lastDate) else {
             statusMessage = "找不到 \(todo.lastDate) 的日记"
             return

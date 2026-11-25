@@ -167,7 +167,8 @@ enum DebugCapture {
                 SettingsWindowController.show(app: app, tab: .about)
             case "journal-templates", "journal-template", "templates":
                 seedDemoTemplates(app)
-                app.isShowingJournalTemplateSheet = true
+                app.selectModule(.journal)
+                app.applyScope(.journal(.templates))
             case "templates-result":
                 // 取证：先落盘 3 份演示模板，再用面板保存时的同一个 `saveJournalTemplate` 新建一份，
                 // 然后走 `⌘⇧J` 的同一条链路建今天这篇，截的是真实保存 + 真实新建的结果。
