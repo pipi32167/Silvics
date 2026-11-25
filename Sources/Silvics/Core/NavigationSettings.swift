@@ -12,4 +12,16 @@ enum ListPaneSettings {
         get { store.object(forKey: key) as? Bool ?? true }
         set { store.set(newValue, forKey: key) }
     }
+
+    private static let widthKey = "silvics.nav.listWidth"
+    static let defaultWidth: CGFloat = 232
+
+    /// 列表栏宽度。拖过分隔条就记住，下次打开还原。
+    static var width: CGFloat {
+        get {
+            let raw = store.object(forKey: widthKey) as? Double
+            return CGFloat(raw.map { min(max($0, 200), 360) } ?? Double(defaultWidth))
+        }
+        set { store.set(Double(newValue), forKey: widthKey) }
+    }
 }
