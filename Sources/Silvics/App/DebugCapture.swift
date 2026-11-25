@@ -9,7 +9,7 @@ import SwiftUI
 ///
 /// 两个环境变量：
 /// - `SILVICS_CAPTURE=/tmp/reports/x.png`：图片路径前缀。有多个可见窗口时追加 `-1`、`-2`。
-/// - `SILVICS_SHOW=quickopen|mentions|alias|rename|journal-templates`：启动后直接打开对应面板，便于截取。
+/// - `SILVICS_SHOW=quickopen|mentions|alias|rename|templates|templates-result`：启动后直接打开对应面板，便于截取。
 /// - `SILVICS_CARET=<文本>`：把光标放到含该文本的段落（验收「光标行露源码」必须能指定光标）。
 enum DebugCapture {
 
@@ -110,9 +110,21 @@ enum DebugCapture {
             SettingsWindowController.show(app: app, tab: .providers)
         case "settings-about":
             SettingsWindowController.show(app: app, tab: .about)
-        case "journal-templates", "journal-template":
+        case "journal-templates", "journal-template", "templates":
             seedDemoTemplates(app)
             app.isShowingJournalTemplateSheet = true
+        case "templates-result":
+            // 取证：先落盘 3 份演示模板，再用面板保存时的同一个 `saveJournalTemplate` 新建一份，
+            // 然后走 `⌘⇧J` 的同一条链路建今天这篇，截的是真实保存 + 真实新建的结果。
+            seedDemoTemplates(app)
+            _ = try? app.saveJournalTemplate(
+                nil,
+                name: "早间",
+                order: "4",
+                body: "- [ ] 写今天的三件事\n- [ ] 读 15 分钟"
+            )
+            app.setJournalTemplateNames(["工作", "生活"])
+            app.goToToday()
         case "alias": app.isShowingAliasSheet = true
         case "rename": app.isShowingRenameSheet = true
         case "sync": SettingsWindowController.show(app: app, tab: .sync)
@@ -161,19 +173,29 @@ enum DebugCapture {
 
     /// 仅取证：`SILVICS_TEMPLATES=1` 往 vault 的 `templates/` 写三份演示模板（order 1/2/3）。
     /// `SILVICS_TEMPLATE_MEMORY=工作,复盘` 再预置记忆，便于截到「部分勾选」的状态。
+    ///
+    /// 走的是面板保存时的同一个 `JournalTemplates.create`，所以截出来的文件格式就是 App 写出来的格式。
     @MainActor
     private static func seedDemoTemplates(_ app: AppState) {
         let env = ProcessInfo.processInfo.environment
         if env["SILVICS_TEMPLATES"] == "1" {
-            let dir = app.debugVaultURL.appendingPathComponent(VaultFormat.templatesDir, isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            for (name, order) in [("工作", 1), ("生活", 2), ("复盘", 3)] {
-                let text = "---\ntemplate:\n  name: \(name)\n  order: \(order)\n---\n"
-                try? text.write(
-                    to: dir.appendingPathComponent("\(name).md"),
-                    atomically: true,
-                    encoding: .utf8
-                )
+            let demo: [(name: String, order: String, body: String)] = [
+                ("工作", "1", "- [ ] 写批次 7 的模板测试\n- [ ] 更新 docs/笔记类型与元数据.md"),
+                ("生活", "2", "- [ ] 跑步 20 分钟\n- [ ] 买咖啡豆"),
+                ("复盘", "3", "今天做完的三件事；明天只留一件。"),
+            ]
+            for item in demo {
+                do {
+                    try JournalTemplates.create(
+                        name: item.name,
+                        order: item.order,
+                        body: item.body,
+                        in: app.debugVaultURL
+                    )
+                } catch {
+                    // 重跑取证时文件已存在：留着已有的那份，不用报错。
+                    print("[Silvics] seed template \(item.name) skipped: \(error.localizedDescription)")
+                }
             }
         }
         if let raw = env["SILVICS_TEMPLATE_MEMORY"] {
