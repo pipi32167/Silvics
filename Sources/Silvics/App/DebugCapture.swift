@@ -134,6 +134,11 @@ enum DebugCapture {
                    let todo = app.todoOverview.first(where: { $0.text.contains(text) }) {
                     app.jumpToTodo(todo)
                 }
+            case "list-collapsed": if app.isListPaneVisible { app.toggleListPane() }
+            case "list-expanded": if !app.isListPaneVisible { app.toggleListPane() }
+            case "module-notes": app.selectModule(.notes)
+            case "module-journal": app.selectModule(.journal)
+            case "module-clips": app.selectModule(.clips)
             case "journal": app.selectScope(.journal)
             case "clips", "clip-unread": app.selectClipScope(.clipUnread)
             case "clips-all": app.selectClipScope(.clipAll)

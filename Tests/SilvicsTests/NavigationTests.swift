@@ -21,6 +21,7 @@ final class NavigationTests: XCTestCase {
     }
 
     override func tearDown() {
+        ListPaneSettings.isVisible = true
         repo = nil
         db = nil
         vault = nil
@@ -130,6 +131,59 @@ final class NavigationTests: XCTestCase {
         _ = try repo.save(note)
 
         XCTAssertTrue(try repo.search("类型集", types: []).isEmpty)
+    }
+
+    // MARK: - 列表栏
+
+    override func setUp() {
+        super.setUp()
+        // 列表栏偏好写独立 suite，不碰真实 UserDefaults。
+        let suite = UserDefaults(suiteName: "silvics-nav-tests-\(UUID().uuidString)")!
+        ListPaneSettings.store = suite
+        ListPaneSettings.isVisible = true
+    }
+
+    func testNarrowWindowCollapsesListPane() {
+        let app = AppState(repo: repo)
+        XCTAssertTrue(app.isListPaneVisible)
+
+        app.setWindowWidth(900)
+        XCTAssertTrue(app.isNarrowWindow)
+        XCTAssertFalse(app.isListPaneVisible)
+
+        app.setWindowWidth(1440)
+        XCTAssertTrue(app.isListPaneVisible, "拉宽后回到手动状态")
+    }
+
+    func testNarrowWindowManualExpand() {
+        let app = AppState(repo: repo)
+        app.setWindowWidth(900)
+        app.toggleListPane()
+        XCTAssertTrue(app.isListPaneVisible)
+
+        app.setWindowWidth(1440)
+        XCTAssertTrue(app.isListPaneVisible, "窄窗口的临时展开不该改手动状态")
+    }
+
+    func testWideTogglePersistsAndRestores() {
+        let app = AppState(repo: repo)
+        app.setWindowWidth(1440)
+        app.toggleListPane()
+        XCTAssertFalse(app.isListPaneVisible)
+        XCTAssertFalse(ListPaneSettings.isVisible)
+
+        // 模拟重启：新 AppState 读同一个 store。
+        let relaunched = AppState(repo: repo)
+        XCTAssertFalse(relaunched.isListPaneVisible)
+    }
+
+    func testContextPaneYieldsWhenTooNarrowForFourColumns() {
+        let app = AppState(repo: repo)
+        app.setWindowWidth(1440)
+        XCTAssertTrue(app.isContextPaneVisible)
+
+        app.setWindowWidth(900)
+        XCTAssertFalse(app.isContextPaneVisible)
     }
 
     // MARK: - AppState 集成

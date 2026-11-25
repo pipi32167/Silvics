@@ -5,15 +5,17 @@ struct RootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
-        } content: {
-            EditorPane()
-                .navigationSplitViewColumnWidth(min: 420, ideal: 680)
-        } detail: {
-            ContextPanelView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
+        GeometryReader { geo in
+            split
+                .onAppear {
+                    app.setWindowWidth(geo.size.width)
+                    #if DEBUG
+                    runDebugHooks()
+                    #endif
+                }
+                .onChange(of: geo.size.width) { _, width in
+                    app.setWindowWidth(width)
+                }
         }
         .sheet(isPresented: $app.isShowingNewNote) {
             NewNoteSheet()
@@ -54,21 +56,57 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             StatusBanner()
         }
-        .onAppear {
-            #if DEBUG
-            if DemoSeeder.isRequested {
-                let n = DemoSeeder.seedIfEmpty(app)
-                if n > 0 { print("[Silvics] seeded \(n) notes") }
+    }
+
+    /// 四栏骨架：模块导航 | 列表 | 内容 | 右栏。
+    ///
+    /// 系统 `NavigationSplitView` 只支持三列，所以第一列交给它管，
+    /// 后三列放进 `HSplitView`，列表栏收起只是把那一列拿掉。
+    private var split: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            ModuleNavView()
+                .navigationSplitViewColumnWidth(min: 132, ideal: 152, max: 200)
+        } detail: {
+            HSplitView {
+                if app.isListPaneVisible {
+                    SidebarView()
+                        .frame(minWidth: 200, idealWidth: 232, maxWidth: 340)
+                }
+                EditorPane()
+                    .frame(minWidth: 380, idealWidth: 680, maxWidth: .infinity)
+                if app.isContextPaneVisible {
+                    ContextPanelView()
+                        .frame(minWidth: 240, idealWidth: 292, maxWidth: 380)
+                }
             }
-            DebugCapture.applyShowFlag(app)
-            DebugCapture.runSelfTest(app)
-            DebugCapture.runConflictDrill(app)
-            DebugCapture.seedConflictDemo(app)
-            DebugCapture.applyCaretProbe()
-            DebugCapture.schedule()
-            #endif
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    app.toggleListPane()
+                } label: {
+                    Image(systemName: app.isListPaneVisible ? "sidebar.left" : "sidebar.right")
+                }
+                .help(app.isListPaneVisible ? "隐藏列表栏 ⌘⌥L" : "显示列表栏 ⌘⌥L")
+            }
         }
     }
+
+    #if DEBUG
+    /// 仅 DEBUG：演示数据与取证钩子。放在 onAppear 里跑，顺序保持不变。
+    private func runDebugHooks() {
+        if DemoSeeder.isRequested {
+            let n = DemoSeeder.seedIfEmpty(app)
+            if n > 0 { print("[Silvics] seeded \(n) notes") }
+        }
+        DebugCapture.applyShowFlag(app)
+        DebugCapture.runSelfTest(app)
+        DebugCapture.runConflictDrill(app)
+        DebugCapture.seedConflictDemo(app)
+        DebugCapture.applyCaretProbe()
+        DebugCapture.schedule()
+    }
+    #endif
 }
 
 // MARK: - 状态条

@@ -230,6 +230,97 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - 布局
+
+    /// 窗口内容宽度。窄于 `narrowWidth` 时列表栏自动收起。
+    @Published private(set) var windowWidth: CGFloat = 1400
+    /// 列表栏是否展开。用户手动改，落 UserDefaults。
+    @Published private(set) var listPaneExpanded = ListPaneSettings.isVisible
+    /// 窄窗口下手动展开过列表栏。拉宽后清掉，回到手动状态。
+    @Published private(set) var narrowListOverride: Bool?
+
+    /// 窄窗口门槛。低于这个宽度让列表栏让位给内容区。
+    static let narrowWidth: CGFloat = 1000
+    /// 四栏同时放得下的宽度。低于它就收起右栏，否则列表栏一展开就把内容挤没。
+    static let fourColumnWidth: CGFloat = 1020
+
+    /// 右栏在窄窗口下让位。拉宽自动回来。
+    var isContextPaneVisible: Bool { windowWidth >= Self.fourColumnWidth }
+
+    var isNarrowWindow: Bool { windowWidth < Self.narrowWidth }
+
+    /// 列表栏现在是否可见。窄窗口默认收起，手动展开后按手动值。
+    var isListPaneVisible: Bool {
+        isNarrowWindow ? (narrowListOverride ?? false) : listPaneExpanded
+    }
+
+    func setWindowWidth(_ width: CGFloat) {
+        guard abs(width - windowWidth) > 0.5 else { return }
+        let wasNarrow = isNarrowWindow
+        windowWidth = width
+        // 从窄拉宽：丢掉窄窗口下的临时展开，回到上次手动状态。
+        if wasNarrow && !isNarrowWindow {
+            narrowListOverride = nil
+        }
+    }
+
+    /// 收起或展开列表栏。宽窗口记进 UserDefaults，窄窗口只记临时展开。
+    func toggleListPane() {
+        if isNarrowWindow {
+            narrowListOverride = !(narrowListOverride ?? false)
+        } else {
+            listPaneExpanded.toggle()
+            ListPaneSettings.isVisible = listPaneExpanded
+        }
+    }
+
+    /// 切模块。记住的目标模块范围与选中都还原，不清搜索词。
+    func selectModule(_ module: AppModule) {
+        guard nav.active != module else { return }
+        flushPendingSave()
+        nav.enter(module)
+        restoreSelectionForActiveModule()
+    }
+
+    /// 切到模块后把选中落到它记住的那条；没有就选当前范围的第一条。
+    func restoreSelectionForActiveModule() {
+        switch nav.active {
+        case .notes:
+            let ids = visibleSummaries().map(\.id)
+            restoreSelection(from: ids)
+        case .journal:
+            let ids = journalEntries.map(\.id)
+            restoreSelection(from: ids)
+        case .clips:
+            refreshClips()
+            let ids = visibleClips.map(\.id)
+            if let id = nav.selection, ids.contains(id) {
+                loadNote(id: id)
+                return
+            }
+            if let first = ids.first {
+                select(first)
+            } else {
+                selection = nil
+                current = nil
+            }
+        }
+    }
+
+    private func restoreSelection(from ids: [String]) {
+        if let id = nav.selection, ids.contains(id) {
+            loadNote(id: id)
+            return
+        }
+        if let first = ids.first {
+            selection = first
+            loadNote(id: first)
+        } else {
+            selection = nil
+            current = nil
+        }
+    }
+
     // MARK: - 载入
 
     func loadAll(selectFirst: Bool = false) {

@@ -50,6 +50,13 @@ struct SilvicsApp: App {
                 .keyboardShortcut("v", modifiers: [.command, .shift])
             }
             CommandGroup(after: .saveItem) {
+                Button(app.isListPaneVisible ? "隐藏列表栏" : "显示列表栏") {
+                    app.toggleListPane()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .option])
+
+                Divider()
+
                 Button("打开笔记…") {
                     app.isShowingQuickOpen = true
                 }
