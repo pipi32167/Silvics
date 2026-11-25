@@ -126,7 +126,8 @@ final class VaultSync {
     /// 从 vault 全量恢复（新机器、或库被清空）。返回报告。
     @discardableResult
     func importAll() throws -> VaultImportReport {
-        let notes = try readVaultNotes()
+        // 关闭「同步剪藏」时，从 vault 恢复也不能把剪藏拉回库。
+        let notes = try readVaultNotes().filter { shouldSync(type: $0.type) }
         return try repo.importVaultNotes(notes)
     }
 
@@ -160,10 +161,14 @@ final class VaultSync {
                 guard let text = try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8),
                       let note = try? VaultFormat.decode(text)
                 else { continue }
+                guard shouldSync(type: note.type) else { continue }
                 fileIds.insert(note.id)
             }
         }
-        let manifestIds = Set(manifest.notes.map(\.id))
+        let enabledDirs = Set(VaultFormat.noteDirs.filter { settings.syncClips || $0 != VaultFormat.noteDir(for: NoteTypes.clipID) })
+        let manifestIds = Set(manifest.notes
+            .filter { enabledDirs.contains($0.dir ?? VaultFormat.notesDir) }
+            .map(\.id))
 
         if fileIds != manifestIds {
             let missing = manifestIds.subtracting(fileIds)
@@ -179,7 +184,7 @@ final class VaultSync {
             problems.append("manifest 是旧版本（schema \(manifest.schema)），下次同步会按整篇重写")
         } else {
             var hashMismatch = 0
-            for entry in manifest.notes {
+            for entry in manifest.notes where enabledDirs.contains(entry.dir ?? VaultFormat.notesDir) {
                 let dir = entry.dir ?? VaultFormat.notesDir
                 let file = entry.file ?? VaultFormat.fileName(for: entry.id)
                 let url = noteDirURL(dir).appendingPathComponent(file)
@@ -260,8 +265,11 @@ final class VaultSync {
             try git.setRemote(settings.remoteURL)
         }
 
-        if git.hasLocalChanges() {
-            try git.stageAll()
+        // 关闭「同步剪藏」时，clips/ 既不进暂存，也不参与「有没有改动」的判断。
+        let excludes: [String] = settings.syncClips ? [] : [VaultFormat.noteDir(for: NoteTypes.clipID)]
+        if !excludes.isEmpty { git.unstage(excludes) }
+        if git.hasLocalChanges(excluding: excludes) {
+            try git.stageAll(excluding: excludes)
             if git.stagedChangesExist() {
                 try git.commit(commitMessage())
             }

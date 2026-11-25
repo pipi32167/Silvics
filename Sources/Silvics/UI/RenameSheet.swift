@@ -17,9 +17,19 @@ struct RenameSheet: View {
 
     private var occurrenceCount: Int { impact.reduce(0) { $0 + $1.occurrences } }
 
+    /// 概念笔记套断言校验；剪藏按剪藏的规则（4–60 字，允许日期式标题）。
+    private var titleProblem: String? {
+        guard !trimmed.isEmpty else { return "标题不能为空" }
+        if app.current?.noteType.validatesTitle == false {
+            if trimmed.count < 4 { return "标题至少 4 个字" }
+            if trimmed.count > ClipTitle.maxLength { return "标题不超过 \(ClipTitle.maxLength) 个字" }
+            return nil
+        }
+        return TextNormalizer.validateTitle(trimmed)
+    }
+
     private var canSubmit: Bool {
-        !trimmed.isEmpty
-            && TextNormalizer.validateTitle(trimmed) == nil
+        titleProblem == nil
             && trimmed != (app.current?.title ?? "")
             && !app.duplicateTitleExists(trimmed)
     }
@@ -100,12 +110,17 @@ struct RenameSheet: View {
     private var messageLine: some View {
         if app.duplicateTitleExists(trimmed), trimmed != (app.current?.title ?? "") {
             label("已有同名笔记，不能改成这个标题。", warning: true)
-        } else if let validation = TextNormalizer.validateTitle(trimmed), !trimmed.isEmpty {
+        } else if let validation = titleProblem {
             label(validation, warning: true)
         } else if let errorMessage {
             label(errorMessage, warning: true)
         } else {
-            label("标题变了，正文里的旧引用会一起改写。", warning: false)
+            label(
+                app.current?.type == NoteTypes.clipID
+                    ? "剪藏标题变了，引用它的笔记会一起改写。"
+                    : "标题变了，正文里的旧引用会一起改写。",
+                warning: false
+            )
         }
     }
 
@@ -124,7 +139,8 @@ struct RenameSheet: View {
 
     private func commit() {
         guard canSubmit else { return }
-        errorMessage = app.rename(newTitle: trimmed)
+        let target = app.current?.type == NoteTypes.clipID ? ClipTitle.clean(trimmed) : trimmed
+        errorMessage = app.rename(newTitle: target)
         if errorMessage == nil { dismiss() }
     }
 }

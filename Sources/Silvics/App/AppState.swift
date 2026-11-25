@@ -815,6 +815,7 @@ final class AppState: ObservableObject {
         providerService.resetAll(alsoAppearance: true)
         appearance = AppearanceSettings()
         Theme.apply(appearance)
+        clipSettings = ClipSettings()
         refreshProviders()
     }
 

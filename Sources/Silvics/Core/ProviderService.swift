@@ -218,6 +218,8 @@ final class ProviderService {
         if alsoAppearance {
             AppearanceSettings.clear(from: defaults)
         }
+        // 全局「恢复全部设置」要连剪藏设置一起清，否则留一半默认值。
+        ClipSettings.clear()
     }
 
     private func persist() {

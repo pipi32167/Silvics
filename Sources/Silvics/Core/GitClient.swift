@@ -112,14 +112,32 @@ struct GitClient {
         return name.isEmpty || name == "HEAD" ? "main" : name
     }
 
-    /// 工作区里有改动吗（含未跟踪文件）。
-    func hasLocalChanges() -> Bool {
-        let out = succeed(["status", "--porcelain"]) ?? ""
+    /// 工作区里有改动吗（含未跟踪文件）。`excluding` 传 vault 内相对目录，用于跳过不参与同步的类型。
+    func hasLocalChanges(excluding: [String] = []) -> Bool {
+        var args = ["status", "--porcelain"]
+        if !excluding.isEmpty {
+            args.append("--")
+            args.append(".")
+            args.append(contentsOf: excluding.map { ":(exclude)\($0)" })
+        }
+        let out = succeed(args) ?? ""
         return !out.isEmpty
     }
 
-    func stageAll() throws {
-        try run(["add", "-A"])
+    func stageAll(excluding: [String] = []) throws {
+        var args = ["add", "-A"]
+        if !excluding.isEmpty {
+            args.append("--")
+            args.append(".")
+            args.append(contentsOf: excluding.map { ":(exclude)\($0)" })
+        }
+        try run(args)
+    }
+
+    /// 把某些路径撤出暂存区。关闭「同步剪藏」时清掉可能残留的暂存。
+    func unstage(_ paths: [String]) {
+        guard !paths.isEmpty else { return }
+        _ = succeed(["reset", "-q", "--"] + paths)
     }
 
     func stagedChangesExist() -> Bool {
