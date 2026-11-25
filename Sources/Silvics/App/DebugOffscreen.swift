@@ -104,7 +104,14 @@ enum OffscreenCapture {
         log("画布 \(Int(parsed.size.width))x\(Int(parsed.size.height)) pt，按 \(pixelScale)× 像素渲染")
 
         // 离屏用自己的 AppState：它不经过 WindowGroup，拿不到 RootView 里那个。
+        applyVaultIfRequested()
         let app = AppState()
+        log("vaultPath=\(app.syncSettings.vaultPath) 实际=\(app.repo.vaultURL.path)")
+        log("标题=\(app.summaries.map { $0.title }.joined(separator: " | "))")
+        if DemoSeeder.isRequested {
+            let seeded = DemoSeeder.seedIfEmpty(app)
+            if seeded > 0 { log("已播种演示数据：\(seeded) 篇") }
+        }
         state = app
         log("库已加载：\(app.summaries.count) 篇（含日记 \(app.journalEntries.count) 篇）")
 
@@ -116,6 +123,16 @@ enum OffscreenCapture {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             build(app: app, size: parsed.size, path: path)
         }
+    }
+
+
+    /// 离屏通道跑在 AppState 之外，`SILVICS_VAULT` 要在建库前写进同步设置，
+    /// 否则播种会落到真实 vault。只用于取证。
+    private static func applyVaultIfRequested() {
+        guard let vault = ProcessInfo.processInfo.environment["SILVICS_VAULT"], !vault.isEmpty else { return }
+        var settings = SyncSettings.load()
+        settings.vaultPath = vault
+        settings.save()
     }
 
     /// `SILVICS_OFFSCREEN_NOTE`：选中目标笔记。找不到就取第一篇，并写日志。

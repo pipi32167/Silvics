@@ -114,7 +114,7 @@ struct ProvidersSettingsPane: View {
         } header: {
             Text("用途")
         } footer: {
-            Text("未配置的服务对应功能保持不可用：L4 需要向量模型，L3 需要对话模型。")
+            Text("剪藏整理不绑定就跟随对话模型。L3 需要对话模型，L4 需要向量模型。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

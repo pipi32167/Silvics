@@ -50,6 +50,11 @@ final class VaultSync {
         try VaultFormat.writeAtomic(Data(VaultFormat.gitignore.utf8), to: ignore)
     }
 
+    /// 某类型是否纳入同步。剪藏可以单独关掉，避免把长正文推上 git。
+    private func shouldSync(type: String) -> Bool {
+        settings.syncClips || type != NoteTypes.clipID
+    }
+
     // MARK: - 导出
 
     /// 把库写成 vault。返回真正改动的文件数（幂等：内容没变一个字节都不碰）。
@@ -59,7 +64,7 @@ final class VaultSync {
     @discardableResult
     func exportAll() throws -> Int {
         try prepareDirectories()
-        let snapshot = try repo.vaultNotes()
+        let snapshot = try repo.vaultNotes().filter { shouldSync(type: $0.type) }
         var written = 0
         var live = Set<String>()
 
@@ -191,7 +196,7 @@ final class VaultSync {
             if hashMismatch > 0 { problems.append("\(hashMismatch) 篇整篇哈希与 manifest 不一致") }
         }
 
-        let local = try repo.vaultNotes()
+        let local = try repo.vaultNotes().filter { shouldSync(type: $0.type) }
         if local.count != manifest.count {
             problems.append("库里 \(local.count) 篇，vault 里 \(manifest.count) 篇")
         }
@@ -341,7 +346,7 @@ final class VaultSync {
         let disk = try readVaultNotes()
         guard !disk.isEmpty else { return 0 }
         let known = Set(try repo.vaultNotes().map(\.id))
-        let missing = disk.filter { !known.contains($0.id) }
+        let missing = disk.filter { !known.contains($0.id) && shouldSync(type: $0.type) }
         guard !missing.isEmpty else { return 0 }
         let report = try repo.importVaultNotes(missing)
         return report.inserted + report.updated
@@ -370,6 +375,10 @@ final class VaultSync {
 
         for path in changed {
             guard VaultFormat.isNotePath(path) else { continue }
+            // 关闭「同步剪藏」时，clips/ 的变化一律不处理。文件留在 vault 里，不删。
+            if !settings.syncClips, path.hasPrefix(VaultFormat.noteDir(for: NoteTypes.clipID) + "/") {
+                continue
+            }
             guard let id = VaultFormat.noteID(fromFileName: (path as NSString).lastPathComponent) else { continue }
 
             let remoteText = git.fileContent(path: path, ref: "origin/\(branch)")

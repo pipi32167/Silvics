@@ -18,8 +18,20 @@ struct AboutSettingsPane: View {
         try? AppDatabase.defaultDirectory()
     }
 
+    private var clipStats: (count: Int, chars: Int) {
+        let clips = app.clipSummaries
+        return (clips.count, clips.reduce(0) { $0 + $1.charCount })
+    }
+
     var body: some View {
         Form {
+            Section {
+                LabeledContent("剪藏") {
+                    Text("\(clipStats.count) 条 · \(clipStats.chars) 字")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section {
                 HStack(alignment: .center, spacing: 16) {
                     Image(nsImage: NSApp.applicationIconImage)

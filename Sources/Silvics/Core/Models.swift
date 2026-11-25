@@ -375,7 +375,11 @@ enum SidebarScope: Equatable, Hashable {
     case all
     case orphans
     case journal
+    case clipUnread
+    case clipAll
+    case clipArchived
     case tag(String)
+    case clipTag(String)
     case search
 
     var title: String {
@@ -383,8 +387,20 @@ enum SidebarScope: Equatable, Hashable {
         case .all: return "全部"
         case .orphans: return "孤儿笔记"
         case .journal: return "日记"
+        case .clipUnread: return "剪藏未读"
+        case .clipAll: return "全部剪藏"
+        case .clipArchived: return "已归档剪藏"
         case .tag(let name): return "#\(name)"
+        case .clipTag(let name): return "#\(name)"
         case .search: return "搜索结果"
+        }
+    }
+
+    /// 剪藏范围。中间栏换成剪藏阅读视图，列表用 ClipSummary。
+    var isClipScope: Bool {
+        switch self {
+        case .clipUnread, .clipAll, .clipArchived, .clipTag: return true
+        default: return false
         }
     }
 }

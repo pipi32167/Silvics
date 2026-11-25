@@ -146,7 +146,12 @@ final class ProviderService {
 
     /// 用途不可用的原因，直接显示在界面上。
     func unavailableReason(_ role: ProviderRole) -> String? {
-        guard let config = settings.bound(role) else { return "未选择服务商" }
+        guard let config = settings.bound(role) else {
+            if role == .clip {
+                return "未绑定，会跟随对话模型；当前还没有对话服务商"
+            }
+            return "未选择服务商"
+        }
         switch role {
         case .chat, .clip:
             if !config.providesChat { return "《\(config.name)》没有填对话模型" }

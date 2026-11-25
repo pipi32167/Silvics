@@ -4,7 +4,7 @@
 
 - 交接时间：2026-11-22
 - 项目路径：`~/work/dev/Silvics`
-- 当前阶段：P1、P2、P3 完成；备份与同步（git）完成，未合并主分支；P4 未开始
+- 当前阶段：P1、P2、P3 完成；备份与同步（git）、日记、设置、剪藏已合并；P5 未开始
 - 设计文档：[设计文档.md](设计文档.md)（先读它，共 13 章）
 
 ---
@@ -437,17 +437,25 @@ open -a .build/Build/Products/Debug/Silvics.app \
 | 日记文件仍在 `notes/` | `NoteType.fileDir` 已定义 `journal/`，但 vault 读、导出、保存都还只认 `notes/`。类型目录留到批次 3 一起做 |
 | 改 vault 目录不需要重启 | `AppState.saveSyncSettings` 会把新目录同步给仓库。但已经写过旧目录的文件不会自动搬过去 |
 
-## 9. 下一步：P4
+### 剪藏（issue #6，分支 feat/clips）
 
-按设计文档第 9 章。
+- 类型层：`NoteTypes.clip`，`clips/<id>.md`。描述符新增 `emitsLinks` / `isMentionTarget` / `inMainList` / `tagsInBody`。
+- 数据：迁移 `v3` 加 `note.tags`（JSON 数组）。frontmatter 顶层 `tags:` 只对剪藏写；`clip:` 段存 url/site/author/published/sourceTitle/summary/clipStatus/aiState/aiModel。
+- 单向：`reindex` 跳过 `emitsLinks=false`；改名只重写会解析引用的类型；提及自动机只收 `isMentionTarget=true`。
+- 同步：列表字段（aliases / dismissed / tags）改三方集合合并；manifest 与导入判定改整篇哈希（manifest schema 2）。
+- 设置：模型服务加「剪藏整理」用途（未绑定跟随对话模型）；新增「剪藏」页；同步页加「同步剪藏」开关；关于页显示剪藏统计。
+- 界面：侧栏剪藏范围（未读 / 全部 / 已归档 / 标签），中间栏复用 Typora 式编辑器只读渲染，右栏来源 / 摘要 / 标签 / 被引用 / 操作。`⌘⇧V` 新建，`⌘⇧L` 切范围。
+- 未做：PDF 导入（issue #30）、批量 URL、浏览器扩展。
 
-1. **BYOK 设置**：服务商预设、Keychain 存 key、「测试连接」按钮。模型与预设见设计文档 8.6。
-2. **L3 概念线索**：`NLTokenizer` 分词 + 停用词 + 词频，与库内标题模糊匹配，给「建立引用 / 新建笔记 / 忽略」三个动作。永不改正文。
-3. **L4 相关笔记**：云端 embedding（`text-embedding-3-large` / `bge-m3` 等），阈值 0.82，标注「推测」。`NLEmbedding` 只做默认关闭的离线降级。
-4. **未配 key 时的优雅降级**：L4 灰显并提示，L3 走纯本地路径。
+## 9. 下一步：P5
+
+1. **P5 图**：局部图（当前笔记 2 跳内）与全局图。剪藏默认不进图。
+2. **L3 概念线索**：分词 + 停用词 + 词频，与库内标题模糊匹配，给「建立引用 / 新建笔记 / 忽略」。永不改正文。
+3. **L4 相关笔记**：云端 embedding，阈值 0.82，标注「推测」。
+4. **PDF 剪藏**：issue #30。
 5. 补测中文输入法（见第 8 节第一项）。
 
-P4 验收标准：三个服务商各测通一次；未配 key 时功能不报错。
+P5 验收标准：1000 条笔记下局部图 60 fps。
 
 ## 10. 不要做的事
 

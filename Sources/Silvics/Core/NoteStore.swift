@@ -402,11 +402,14 @@ struct GRDBNoteRepository: NoteRepository {
         let rowid = try Int64.fetchOne(db, sql: "SELECT rowid FROM note WHERE id = ?", arguments: [note.id])
         guard let rowid else { return }
         try db.execute(sql: "DELETE FROM note_fts WHERE rowid = ?", arguments: [rowid])
-        // 剪藏的标签不在正文里，补进全文索引，否则按标签搜不到。
+        // 剪藏的摘要与标签不在正文里，补进全文索引，否则按摘要或标签搜不到。
         var indexedBody = note.body
         if !note.noteType.tagsInBody {
-            let tagText = note.tagNames.joined(separator: " ")
-            if !tagText.isEmpty { indexedBody += "\n" + tagText }
+            let meta = note.metaFields
+            var extras: [String] = []
+            if let summary = meta[ClipFields.summary], !summary.isEmpty { extras.append(summary) }
+            extras.append(contentsOf: note.tagNames)
+            if !extras.isEmpty { indexedBody += "\n" + extras.joined(separator: "\n") }
         }
         try db.execute(
             sql: "INSERT INTO note_fts(rowid, title, body) VALUES (?, ?, ?)",

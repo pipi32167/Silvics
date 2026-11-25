@@ -18,6 +18,7 @@ struct SyncSettingsPane: View {
             statusSection
             vaultSection
             remoteSection
+            clipSection
             timingSection
             authorSection
             actionSection
@@ -186,6 +187,25 @@ struct SyncSettingsPane: View {
     }
 
     // MARK: - 时机
+
+    private var clipSection: some View {
+        Section {
+            Toggle(isOn: $draft.syncClips) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("同步剪藏")
+                    Text("关掉后导出跳过 clips/，导入也不拉剪藏。已有文件保留在 vault 里。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            LabeledContent("剪藏") {
+                Text("\(app.clipTotalCount) 条，\(draft.syncClips ? "已纳入同步" : "未纳入同步")")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("剪藏")
+        }
+    }
 
     private var timingSection: some View {
         Section {

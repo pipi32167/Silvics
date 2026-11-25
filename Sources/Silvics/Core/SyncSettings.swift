@@ -14,6 +14,8 @@ struct SyncSettings: Codable, Equatable {
     var backgroundSync: Bool = true
     /// 定时同步间隔（分钟）。只允许 5 / 10 / 15 / 30 / 60。
     var syncIntervalMinutes: Int = 15
+    /// 是否把剪藏一起同步。关掉时导出跳过 clips/，导入也不拉剪藏。
+    var syncClips: Bool = true
 
     var lastSyncedAt: Int64 = 0
     var lastMessage: String = ""
@@ -48,7 +50,7 @@ struct SyncSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case vaultPath, remoteURL, branch, authorName, authorEmail, sshKeyPath
-        case backgroundSync, syncIntervalMinutes, lastSyncedAt, lastMessage
+        case backgroundSync, syncIntervalMinutes, syncClips, lastSyncedAt, lastMessage
     }
 
     init() {}
@@ -65,6 +67,7 @@ struct SyncSettings: Codable, Equatable {
         backgroundSync = try c.decodeIfPresent(Bool.self, forKey: .backgroundSync) ?? fallback.backgroundSync
         syncIntervalMinutes = try c.decodeIfPresent(Int.self, forKey: .syncIntervalMinutes)
             ?? fallback.syncIntervalMinutes
+        syncClips = try c.decodeIfPresent(Bool.self, forKey: .syncClips) ?? fallback.syncClips
         lastSyncedAt = try c.decodeIfPresent(Int64.self, forKey: .lastSyncedAt) ?? 0
         lastMessage = try c.decodeIfPresent(String.self, forKey: .lastMessage) ?? ""
         if !Self.allowedIntervals.contains(syncIntervalMinutes) {

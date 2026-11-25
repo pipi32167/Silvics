@@ -277,8 +277,73 @@ enum DemoSeeder {
         }
         app.loadAll(selectFirst: true)
         seedJournals(app)
+        seedClips(app)
         app.loadAll(selectFirst: true)
         return count
+    }
+
+    /// 演示剪藏：三篇，覆盖已整理、待整理、已归档三种状态。
+    /// 正文里故意写了 `[[...]]`，用来验证剪藏不产出引用边。
+    @MainActor
+    private static func seedClips(_ app: AppState) {
+        let drafts: [ClipDraft] = [
+            ClipDraft(
+                url: "https://sspai.com/post/example-spacing",
+                title: "间隔重复为什么有效",
+                sourceTitle: "间隔重复为什么有效",
+                site: "少数派",
+                author: "张三",
+                published: "2026-11-18",
+                body: """
+                间隔重复的核心不是「重复」，而是「在快忘记的时候复习」。
+                集中突击能在短时间内堆出熟悉感，但熟悉感不等于可提取。
+
+                文章提到 [[稀疏重复优于集中突击]]，但剪藏正文不解析引用。
+
+                作者给出的实验数据：同样的总时长，分散到 8 天比集中在 1 天，
+                30 天后的留存率高出约 20 个百分点。
+                """,
+                summary: "间隔重复的关键在复习时机，不在重复次数。相同总时长下，分散到多天的长期留存明显高于集中突击。文章用一组 30 天对照实验说明差异。",
+                tags: ["学习方法", "记忆"],
+                status: .read,
+                aiState: .done,
+                aiModel: "gpt-4o-mini"
+            ),
+            ClipDraft(
+                url: "https://example.com/writing-tools",
+                title: "写作工具如何影响写作频率",
+                sourceTitle: "写作工具如何影响写作频率",
+                site: "少数派",
+                body: """
+                工具的手感决定写作频率。启动慢、光标跳、预览延迟，都会让人少写一段。
+                反过来，输入即渲染、没有保存按钮的工具，会让人更愿意随手记。
+
+                这不是审美问题，是摩擦成本问题。
+                """,
+                summary: "",
+                tags: [],
+                status: .unread,
+                aiState: .pending
+            ),
+            ClipDraft(
+                url: "https://example.com/note-graph",
+                title: "双向链接笔记的真实使用率",
+                sourceTitle: "双向链接笔记的真实使用率",
+                site: "少数派",
+                body: """
+                对 200 个双向链接笔记库的抽样显示，超过一半的链接只被创建过一次，
+                从未在写作时被回看。链接数量不是目标，被回看才是。
+                """,
+                summary: "抽样 200 个双向链接笔记库，过半链接创建后从未被回看。链接数量本身没有价值，能在写作时被调用才有。",
+                tags: ["笔记方法", "学习方法"],
+                status: .archived,
+                aiState: .done,
+                aiModel: "gpt-4o-mini"
+            ),
+        ]
+        for draft in drafts {
+            _ = try? app.repo.createClip(draft)
+        }
     }
 
     /// 演示日记：前两天 + 今天，含承接段、未完成 / 已完成待办、以及一处可触发提及的概念标题。

@@ -113,6 +113,14 @@ scripts/release.sh --check-upload    # 验证上传通道
 - `link` 与 `mention` 表的位置列名是 `location`，不要用 SQLite 保留字 `offset`。
 - `resolveAllLinks` 必须把 `alias` 表算进去，唯一入口是 `linkTargets(in:)`。
 - 提及扫描不得在按键时重建自动机，用 `MentionIndex.scanner(in:)`（按标题集合指纹缓存）。
+- 新增笔记类型 = 加一个 `NoteType` 描述符 + 注册进 `NoteTypes.all`。列表、计数、搜索、提及、补全全部读描述符，不要写 `type == "..."`。
+- 剪藏（`type=clip`）是单向引用：`emitsLinks=false`（正文不产边）、`isMentionTarget=false`（不进提及）、`inMainList=false`（不进「全部」与孤儿）、`tagsInBody=false`（标签读 `note.tags`）。
+- `completionItems` 必须过滤 `linkable`；`rename` / `renameImpact` 只重写 `emitsLinks=true` 的正文。
+- 剪藏标题不走 `validateTitle`，走 `ClipTitle`：去 Markdown 标记、换掉 `[ ] ( )`、日期式标题追加来源、重名追加来源或序号。日记标题是日期，撞上会建不出当天日记。
+- `note.tags` 只给 `tagsInBody=false` 的类型用；其他类型文件里的 `tags:` 原样留在未知层，不能丢。
+- 标签列表与计数必须带类型范围：概念侧栏不显示剪藏标签，剪藏范围不显示概念标签。
+- manifest 哈希是整篇（frontmatter + 正文），`VaultFormat.manifestSchema = 2`。改哈希算法要同时改 `verify()` 与导入判定。
+- 「同步剪藏」开关只在 `VaultSync.shouldSync(type:)` 判断；不要在导出、导入各写一份。
 - 索引重算只能走 `reindexAll(note:in:)`，顺序：引用 → 引用解析 → FTS → 提及 → 标签。
 - L3（概念抽取）与 L4（语义近邻）的建议永不改写用户正文。
 - 模型服务的密钥只进 Keychain（`service=com.silvics.app.provider`，`account=provider-<uuid>`）。UserDefaults 与导出 JSON 里只有 `keyAccount` 引用，任何日志不得写明文。

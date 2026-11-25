@@ -264,3 +264,49 @@ extension GRDBNoteRepository {
             .compactMap { spelling[$0] }
     }
 }
+
+// MARK: - 搜索
+
+extension GRDBNoteRepository {
+
+    /// 剪藏范围内搜索：标题、摘要、正文、标签。
+    ///
+    /// 摘要与标签已写进 FTS（见 `updateFTS`），这里只用 FTS + LIKE 兜底短查询。
+    func clipSummaries(query: String, status: ClipStatus? = nil) throws -> [ClipSummary] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return try clipSummaries(status: status) }
+
+        let matched: [Note] = try db.reader.read { conn in
+            let rows: [Row]
+            if q.count >= 3 {
+                rows = try Row.fetchAll(conn, sql: """
+                    SELECT n.* FROM note_fts f JOIN note n ON n.rowid = f.rowid
+                    WHERE note_fts MATCH ? AND n.type = ?
+                    ORDER BY n.createdAt DESC LIMIT 100
+                    """, arguments: [Self.ftsQuery(q), NoteTypes.clipID])
+            } else {
+                rows = try Row.fetchAll(conn, sql: """
+                    SELECT * FROM note
+                    WHERE type = ?
+                      AND (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')
+                    ORDER BY createdAt DESC LIMIT 100
+                    """, arguments: [NoteTypes.clipID, "%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%"])
+            }
+            return rows.compactMap { try? Note(row: $0) }
+        }
+
+        let list = matched.map(Self.clipSummary)
+        guard let status else { return list }
+        return list.filter { $0.status == status }
+    }
+
+    /// 剪藏各状态计数。侧栏与设置页用。
+    func clipCounts() throws -> (unread: Int, total: Int, archived: Int) {
+        let all = try clipSummaries()
+        return (
+            unread: all.filter { $0.status == .unread }.count,
+            total: all.count,
+            archived: all.filter { $0.status == .archived }.count
+        )
+    }
+}
