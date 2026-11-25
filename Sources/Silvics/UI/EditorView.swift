@@ -640,7 +640,7 @@ struct NoteEditorView: NSViewRepresentable {
             let wikis = WikiScanner.scan(text)
             let listMarkers = MarkdownStyler.listMarkers(in: text)
             let quoteMarkers = MarkdownStyler.quoteMarkerRanges(in: text)
-            let tableBlocks = TableLayout.blocks(in: text)
+            let tableBlocks = MarkdownStyler.tableBlocks(in: text)
             let fullRange = NSRange(location: 0, length: storage.length)
             let caretParagraph = paragraphRange(at: textView.selectedRange().location)
             let marks = MarkdownStyler.syntaxMarkerRanges(
