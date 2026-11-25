@@ -419,11 +419,12 @@ struct GRDBNoteRepository: NoteRepository {
 
     // MARK: - 搜索
 
-    func search(_ query: String, limit: Int = 50, includeJournal: Bool = false) throws -> [NoteSummary] {
+    /// 按类型集合搜索。每个模块只查自己的类型，不会串。
+    func search(_ query: String, types: Set<String>, limit: Int = 50) throws -> [NoteSummary] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return try summaries().filter { searchTypes(includeJournal: includeJournal).contains($0.type) } }
-        // 默认只搜主列表类型（概念笔记）。日记要手动含进来；剪藏有自己的范围，不混入。
-        let types = searchTypes(includeJournal: includeJournal)
+        let types = types.sorted()
+        guard !types.isEmpty else { return [] }
+        guard !q.isEmpty else { return try summaries().filter { types.contains($0.type) } }
         let typeFilter = "AND n.type IN (\(Self.typePlaceholders(count: types.count)))"
         return try db.reader.read { conn in
             // trigram 分词器要求查询串至少 3 个字符；短查询退回 LIKE。
@@ -465,6 +466,11 @@ struct GRDBNoteRepository: NoteRepository {
                 )
             }
         }
+    }
+
+    /// 旧签名：只分「含不含日记」。等导航改造收尾时删掉。
+    func search(_ query: String, limit: Int = 50, includeJournal: Bool = false) throws -> [NoteSummary] {
+        try search(query, types: Set(searchTypes(includeJournal: includeJournal)), limit: limit)
     }
 
     /// 搜索范围对应的类型。主列表类型默认包含；日记可选。

@@ -9,7 +9,13 @@ final class AppState: ObservableObject {
     // MARK: - 发布状态
 
     @Published private(set) var summaries: [NoteSummary] = []
-    @Published var selection: String?          // 选中的笔记 id
+    /// 导航状态：当前模块、每模块的范围、选中与搜索词。
+    @Published private(set) var nav = NavigationState()
+    /// 当前模块选中的条目 id。读写都落到 `nav`，只留一个真相。
+    var selection: String? {
+        get { nav.selection }
+        set { nav.setSelection(newValue) }
+    }
     @Published var current: Note?
     @Published private(set) var backlinks: [Backlink] = []
     @Published private(set) var outgoing: [NoteLink] = []
@@ -24,13 +30,17 @@ final class AppState: ObservableObject {
     @Published var isShowingTodoOverview: Bool = false
     /// 「模板…」面板：勾选下一次新建日记要用的模板。
     @Published var isShowingJournalTemplateSheet: Bool = false
-    @Published var searchQuery: String = ""
-    /// 搜索范围：只搜笔记 / 含日记。
+    /// 当前模块的搜索词。各模块各存各的，切走不丢。
+    var searchQuery: String {
+        get { nav.query }
+        set { nav.setQuery(newValue) }
+    }
+    /// 概念笔记模块的搜索范围：只搜笔记 / 含日记。导航收尾时随开关一起删。
     @Published var searchScope: SearchScope = .notes
     /// 日记是否参与未链接提及扫描。设置入口在右侧面板，值落 UserDefaults。
     @Published private(set) var journalScanMentions: Bool = JournalMentionSettings.scanMentions
-    /// 侧栏当前范围：全部 / 孤儿 / 日记 / 某个标签。
-    @Published var sidebarScope: SidebarScope = .all
+    /// 旧侧栏范围的投影，供过渡期侧栏渲染。只读，改写走 `selectScope`。
+    var sidebarScope: SidebarScope { nav.scope.legacy }
     /// 外观设置。改动即时生效并落 UserDefaults。
     @Published private(set) var appearance: AppearanceSettings = .init()
     /// 模型服务设置。密钥在 Keychain，这里只有非敏感部分。
@@ -231,8 +241,8 @@ final class AppState: ObservableObject {
             tags = try repo.allTags(types: repo.mainListTypes)
             refreshClips()
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
-            if case .tag(let name) = sidebarScope, !tags.contains(where: { $0.name == name }) {
-                sidebarScope = .all
+            if case .tag(let name) = nav.noteScope, !tags.contains(where: { $0.name == name }) {
+                nav.setScope(.note(.all))
             }
 
             if let id = selection, summaries.contains(where: { $0.id == id }) {
@@ -304,21 +314,33 @@ final class AppState: ObservableObject {
     /// 搜索命中在「含日记」时会带上日记。
     func visibleSummaries() -> [NoteSummary] {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.isEmpty else {
-            return (try? repo.search(q, includeJournal: searchScope == .includingJournal)) ?? []
+        if nav.active == .clips { return [] }
+        if !q.isEmpty {
+            return (try? repo.search(q, types: searchTypes)) ?? []
         }
-        switch sidebarScope {
-        case .all, .search:
+        guard nav.active == .notes else { return [] }
+        switch nav.noteScope {
+        case .all:
             return noteSummaries
         case .orphans:
             return noteSummaries.filter { $0.backlinkCount == 0 && $0.outgoingCount == 0 }
-        case .journal:
-            return []
         case .tag(let name):
             let ids = Set(occurrenceSummaryIds(tagged: name))
             return noteSummaries.filter { ids.contains($0.id) }
-        case .clipUnread, .clipAll, .clipArchived, .clipTag:
-            return []
+        }
+    }
+
+    /// 当前模块搜索要查哪些类型。每个模块只查自己的，互不串。
+    var searchTypes: Set<String> {
+        switch nav.active {
+        case .clips:
+            return [NoteTypes.clipID]
+        case .journal:
+            return [NoteTypes.journalID]
+        case .notes:
+            var types = Set(repo.mainListTypes)
+            if searchScope == .includingJournal { types.insert(NoteTypes.journalID) }
+            return types
         }
     }
 
@@ -341,13 +363,28 @@ final class AppState: ObservableObject {
         (try? repo.summaries(tagged: name, types: repo.mainListTypes))?.map(\.id) ?? []
     }
 
+    /// 切模块并指定范围。范围与模块不匹配时只切模块。
+    func enterModule(_ module: AppModule, scope: ModuleScope) {
+        nav.enter(module, scope: scope)
+    }
+
+    /// 只改当前模块的范围。
+    func setModuleScope(_ moduleScope: ModuleScope) {
+        nav.setScope(moduleScope)
+    }
+
+    /// 旧侧栏范围 → 模块 + 范围。过渡用。
+    func applyLegacyScope(_ scope: SidebarScope) {
+        nav.apply(legacy: scope)
+    }
+
     func selectScope(_ scope: SidebarScope) {
         if scope.isClipScope {
             selectClipScope(scope)
             return
         }
         flushPendingSave()
-        sidebarScope = scope
+        nav.apply(legacy: scope)
         searchQuery = ""
         // 从剪藏范围回来时，当前选中的是剪藏，换回一条普通笔记。
         if current?.type == NoteTypes.clipID {
@@ -369,7 +406,7 @@ final class AppState: ObservableObject {
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return summaries }
         do {
-            return try repo.search(q, includeJournal: searchScope == .includingJournal)
+            return try repo.search(q, types: searchTypes)
         } catch {
             return summaries
         }
@@ -387,7 +424,7 @@ final class AppState: ObservableObject {
             let names = templates ?? JournalTemplates.newJournalNames(in: repo.vaultURL)
             let note = try repo.journalNote(on: date, using: names)
             loadAll()
-            sidebarScope = .journal
+            nav.enter(.journal, scope: .journal(.all))
             searchQuery = ""
             selection = note.id
             loadNote(id: note.id)
@@ -450,7 +487,7 @@ final class AppState: ObservableObject {
         do {
             let saved = try repo.save(updated)
             loadAll()
-            sidebarScope = .journal
+            nav.enter(.journal, scope: .journal(.all))
             searchQuery = ""
             selection = saved.id
             loadNote(id: saved.id)
@@ -561,7 +598,7 @@ final class AppState: ObservableObject {
             return
         }
         flushPendingSave()
-        sidebarScope = .journal
+        nav.enter(.journal, scope: .journal(.all))
         searchQuery = ""
         selection = note.id
         loadNote(id: note.id)
@@ -967,7 +1004,7 @@ final class AppState: ObservableObject {
     }
 
     func search(query: String) -> [NoteSummary] {
-        (try? repo.search(query, includeJournal: searchScope == .includingJournal)) ?? []
+        (try? repo.search(query, types: searchTypes)) ?? []
     }
 
     func duplicateTitleExists(_ title: String) -> Bool {

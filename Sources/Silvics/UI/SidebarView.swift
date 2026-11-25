@@ -262,7 +262,7 @@ struct SidebarView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
-            TextField("搜索标题与正文", text: $app.searchQuery)
+            TextField("搜索标题与正文", text: Binding(get: { app.searchQuery }, set: { app.searchQuery = $0 }))
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
             if !app.searchQuery.isEmpty {
