@@ -24,6 +24,24 @@ enum DebugCapture {
     /// 启动时按环境变量打开面板。
     @MainActor
     static func applyShowFlag(_ app: AppState) {
+        // `SILVICS_DARK=1`：取证时切深色外观，用于「同一篇的深浅色对比」。
+        if ProcessInfo.processInfo.environment["SILVICS_DARK"] == "1" {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+        // `SILVICS_WINDOW=1360x1560`：取证时把窗口撑到足够装下整篇（内容更高也不截断）。
+        // 延迟再设一次：SwiftUI 在 onAppear 之后还会按初始尺寸重新布局一遍。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_WINDOW"] {
+            let parts = raw.lowercased().split(separator: "x").compactMap { Double($0) }
+            if parts.count == 2 {
+                let size = NSSize(width: parts[0], height: parts[1])
+                func resize() {
+                    guard let window = NSApp.windows.first(where: { $0.contentView != nil }) else { return }
+                    window.setContentSize(size)
+                }
+                resize()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: resize)
+            }
+        }
         // SILVICS_APPEARANCE="body=18,code=14,spacing=7,family=serif"：取证时预置外观。
         if let raw = ProcessInfo.processInfo.environment["SILVICS_APPEARANCE"] {
             var settings = app.appearance
@@ -47,6 +65,8 @@ enum DebugCapture {
         }
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
+            // 演示数据最后停在日记上，先把范围切回「全部」，否则选中的普通笔记不在列表里。
+            app.selectScope(.all)
             app.select(match.id)
         }
         switch showPanel {
