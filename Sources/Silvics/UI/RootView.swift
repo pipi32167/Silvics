@@ -19,6 +19,10 @@ struct RootView: View {
             NewNoteSheet()
                 .environmentObject(app)
         }
+        .sheet(isPresented: $app.isShowingNewClip) {
+            NewClipSheet()
+                .environmentObject(app)
+        }
         .sheet(isPresented: $app.isShowingMentionsSheet) {
             MentionSheet()
                 .environmentObject(app)
@@ -117,19 +121,24 @@ private struct EditorPane: View {
             header
             Divider()
             if let note = app.current {
-                NoteEditorView(
-                    initialText: note.body,
-                    text: note.body,
-                    resolvedKeys: app.resolvedKeys,
-                    mentions: app.mentionDecorations(),
-                    appearance: app.appearance,
-                    onChange: { text in app.bodyDidChange(text) },
-                    completionProvider: { query, limit in app.completionItems(query: query, limit: limit) },
-                    onCreateNote: { title in app.createIfNeeded(title: title) },
-                    onOpenLink: { title in app.openTitle(title) },
-                    onCompletionVisibilityChange: { visible in app.setCompletionVisible(visible) }
-                )
-                .id(note.id)
+                if note.type == NoteTypes.clipID {
+                    ClipReaderView(note: note)
+                        .id(note.id)
+                } else {
+                    NoteEditorView(
+                        initialText: note.body,
+                        text: note.body,
+                        resolvedKeys: app.resolvedKeys,
+                        mentions: app.mentionDecorations(),
+                        appearance: app.appearance,
+                        onChange: { text in app.bodyDidChange(text) },
+                        completionProvider: { query, limit in app.completionItems(query: query, limit: limit) },
+                        onCreateNote: { title in app.createIfNeeded(title: title) },
+                        onOpenLink: { title in app.openTitle(title) },
+                        onCompletionVisibilityChange: { visible in app.setCompletionVisible(visible) }
+                    )
+                    .id(note.id)
+                }
             } else {
                 emptyState
             }
@@ -161,7 +170,11 @@ private struct EditorPane: View {
                       ? "重命名。正文里的旧引用会跟着改。"
                       : "日记的标题就是日期，不能改。")
 
-                statusPicker
+                if note.type == NoteTypes.clipID {
+                    clipStatusLabel(note)
+                } else {
+                    statusPicker
+                }
 
                 if note.type == NoteTypes.journalID {
                     journalActions
@@ -219,6 +232,26 @@ private struct EditorPane: View {
         .controlSize(.small)
     }
 
+    /// 剪藏用阅读状态，不用成熟度。
+    private func clipStatusLabel(_ note: Note) -> some View {
+        let status = ClipStatus(rawValue: note.metaFields[ClipFields.status] ?? "") ?? .unread
+        return Menu {
+            ForEach(ClipStatus.allCases, id: \.self) { value in
+                Button {
+                    app.setClipStatus(id: note.id, status: value)
+                } label: {
+                    Text(value.label)
+                }
+            }
+        } label: {
+            Label(status.label, systemImage: status == .archived ? "archivebox" : "bookmark")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
     private var statusPicker: some View {
         Menu {
             ForEach(NoteStatus.allCases, id: \.self) { status in
@@ -244,7 +277,7 @@ private struct EditorPane: View {
             Image(systemName: "tree")
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(.quaternary)
-            Text("选一条笔记，或按 ⌘N 新建")
+            Text("选一条笔记，或按 ⌘N 新建；⌘⇧V 收一篇剪藏")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }

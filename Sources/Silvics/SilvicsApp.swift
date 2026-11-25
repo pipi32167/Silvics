@@ -43,6 +43,11 @@ struct SilvicsApp: App {
                     app.isShowingNewNote = true
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Button("新建剪藏…") {
+                    app.isShowingNewClip = true
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
             }
             CommandGroup(after: .saveItem) {
                 Button("打开笔记…") {
@@ -54,6 +59,11 @@ struct SilvicsApp: App {
                     app.selectScope(.orphans)
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Button("剪藏（未读）") {
+                    app.selectClipScope(.clipUnread)
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
 
                 Button("今天的日记") {
                     app.goToToday()

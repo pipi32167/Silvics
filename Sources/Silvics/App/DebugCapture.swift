@@ -135,6 +135,11 @@ enum DebugCapture {
                     app.jumpToTodo(todo)
                 }
             case "journal": app.selectScope(.journal)
+            case "clips", "clip-unread": app.selectClipScope(.clipUnread)
+            case "clips-all": app.selectClipScope(.clipAll)
+            case "clips-archived": app.selectClipScope(.clipArchived)
+            case "new-clip": app.selectClipScope(.clipUnread); app.isShowingNewClip = true
+            case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
             case "lists", "lists-demo": seedListsDemo(app)
             case "tables", "tables-demo": seedTablesDemo(app)
             case "journal-today": app.goToToday()

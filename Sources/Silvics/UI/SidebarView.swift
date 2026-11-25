@@ -13,7 +13,7 @@ struct SidebarView: View {
     }
 
     private var noteRows: [NoteSummary] {
-        rows.filter { !$0.isJournal }
+        rows.filter { NoteTypes.descriptor(for: $0.type).inMainList }
     }
 
     private var journalRows: [NoteSummary] {
@@ -24,14 +24,18 @@ struct SidebarView: View {
         app.sidebarScope == .journal
     }
 
+    private var isClipScope: Bool { app.isClipScope }
+
     private var scopeTitle: String {
         query.isEmpty ? app.sidebarScope.title : "搜索结果"
     }
 
     /// 分组标题右边的数量。
     private var headCount: Int {
-        if !query.isEmpty { return rows.count }
-        return isJournalScope ? app.journalEntries.count : rows.count
+        if !query.isEmpty { return isClipScope ? app.visibleClips.count : rows.count }
+        if isJournalScope { return app.journalEntries.count }
+        if isClipScope { return app.visibleClips.count }
+        return rows.count
     }
 
     var body: some View {
@@ -47,13 +51,33 @@ struct SidebarView: View {
                     scopeRow(.all, symbol: "tray.full", count: app.noteCount)
                     scopeRow(.orphans, symbol: "circle.dashed", count: app.orphanCount)
                     scopeRow(.journal, symbol: "calendar", count: app.journalEntries.count)
-                    ForEach(app.tags) { tag in
-                        scopeRow(.tag(tag.name), symbol: "number", count: tag.count)
-                    }
                 } header: {
                     HStack {
                         Text("视图")
                         Spacer()
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                }
+
+                Section {
+                    scopeRow(.clipUnread, symbol: "bookmark", count: app.clipUnreadCount)
+                    scopeRow(.clipAll, symbol: "books.vertical", count: app.clipTotalCount)
+                    scopeRow(.clipArchived, symbol: "archivebox", count: app.clipArchivedCount)
+                    ForEach(isClipScope ? app.clipTags : app.tags) { tag in
+                        if isClipScope {
+                            scopeRow(.clipTag(tag.name), symbol: "number", count: tag.count)
+                        } else {
+                            scopeRow(.tag(tag.name), symbol: "number", count: tag.count)
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text(isClipScope ? "剪藏" : "标签")
+                        Spacer()
+                        if isClipScope {
+                            Text("\(app.clipTags.count)").monospacedDigit()
+                        }
                     }
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tertiary)
@@ -112,6 +136,26 @@ struct SidebarView: View {
             } else {
                 ForEach(app.journalEntries) { entry in
                     journalRow(entry)
+                }
+            }
+        } else if isClipScope {
+            if app.visibleClips.isEmpty {
+                emptyRow
+            } else {
+                ForEach(app.visibleClips) { clip in
+                    ClipRow(clip: clip, isSelected: app.selection == clip.id)
+                        .tag(clip.id)
+                        .contextMenu {
+                            Button(clip.status == .archived ? "取消归档" : "归档") {
+                                app.setClipStatus(
+                                    id: clip.id,
+                                    status: clip.status == .archived ? .read : .archived
+                                )
+                            }
+                            Button("删除剪藏", role: .destructive) {
+                                app.deleteClip(id: clip.id)
+                            }
+                        }
                 }
             }
         } else if rows.isEmpty {
@@ -244,7 +288,14 @@ struct SidebarView: View {
     }
 
     /// 搜索范围：只搜笔记 / 含日记。默认只搜笔记，和 `⌘P` 一致。
+    @ViewBuilder
     private var searchScopePicker: some View {
+        if !isClipScope {
+            searchScopePickerContent
+        }
+    }
+
+    private var searchScopePickerContent: some View {
         HStack(spacing: 4) {
             ForEach(SearchScope.allCases, id: \.self) { scope in
                 Button {
@@ -272,11 +323,16 @@ struct SidebarView: View {
         HStack(spacing: 12) {
             Label("\(app.orphanCount)", systemImage: "circle.dashed")
                 .help("孤儿笔记：既无出链也无入链")
-            Label("\(app.tags.count)", systemImage: "number")
+            Label("\(isClipScope ? app.clipTags.count : app.tags.count)", systemImage: "number")
                 .help("标签数量")
             Spacer()
-            Label("\(app.noteCount)", systemImage: "square.stack")
-                .help("普通笔记数（不含日记）")
+            if isClipScope {
+                Label("\(app.clipTotalCount)", systemImage: "books.vertical")
+                    .help("剪藏数（未读 \(app.clipUnreadCount) / 归档 \(app.clipArchivedCount)）")
+            } else {
+                Label("\(app.noteCount)", systemImage: "square.stack")
+                    .help("普通笔记数（不含日记与剪藏）")
+            }
         }
         .font(.system(size: 10).monospacedDigit())
         .foregroundStyle(.tertiary)
@@ -297,6 +353,11 @@ struct SidebarView: View {
 
     private var emptyText: String {
         if !query.isEmpty { return "没有命中" }
+        if isClipScope {
+            return app.clipTotalCount == 0
+                ? "还没有剪藏。按 ⌘⇧V 收一篇。"
+                : "这个范围里没有剪藏"
+        }
         if isJournalScope {
             return app.noteCount == 0 && app.journalEntries.isEmpty
                 ? "还没有笔记。按 ⌘N 开始，⌘⇧J 打开今天的日记。"
@@ -333,5 +394,55 @@ private struct NoteRow: View {
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
+    }
+}
+
+
+// MARK: - 剪藏行
+
+private struct ClipRow: View {
+    let clip: ClipSummary
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(clip.status == .unread ? Color.accentColor : Color.secondary.opacity(0.35))
+                    .frame(width: 5, height: 5)
+                Text(clip.title)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(clip.status == .archived ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if clip.aiState != .done {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .help(clip.aiState.label)
+                }
+            }
+            HStack(spacing: 5) {
+                if !clip.site.isEmpty {
+                    Text(clip.site)
+                        .lineLimit(1)
+                }
+                Text(Self.dateText(clip.createdAt))
+                if !clip.tags.isEmpty {
+                    Text(clip.tags.prefix(2).joined(separator: " · "))
+                        .lineLimit(1)
+                }
+            }
+            .font(.system(size: 10.5))
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+    }
+
+    private static func dateText(_ ms: Int64) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd"
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
 }

@@ -10,7 +10,7 @@ final class AppState: ObservableObject {
 
     @Published private(set) var summaries: [NoteSummary] = []
     @Published var selection: String?          // 选中的笔记 id
-    @Published private(set) var current: Note?
+    @Published var current: Note?
     @Published private(set) var backlinks: [Backlink] = []
     @Published private(set) var outgoing: [NoteLink] = []
     @Published private(set) var danglingTargets: [String] = []
@@ -35,6 +35,16 @@ final class AppState: ObservableObject {
     @Published private(set) var appearance: AppearanceSettings = .init()
     /// 模型服务设置。密钥在 Keychain，这里只有非敏感部分。
     @Published private(set) var providerSettings = ProviderSettings()
+    /// 剪藏设置。改动即时生效并落 UserDefaults。
+    @Published var clipSettings = ClipSettings.load()
+    /// 全部剪藏（列表模型，不含正文）。
+    @Published var clipSummaries: [ClipSummary] = []
+    /// 剪藏标签，只出现在剪藏范围。
+    @Published var clipTags: [TagCount] = []
+    @Published var clipUnreadCount: Int = 0
+    @Published var clipTotalCount: Int = 0
+    @Published var clipArchivedCount: Int = 0
+    @Published var isShowingNewClip: Bool = false
     /// 哪些 provider 已经存了密钥。列表里显示「已配置」用。
     @Published private(set) var providersWithKey: Set<UUID> = []
     /// 最近一次同步里没能自动合并的正文冲突。
@@ -45,7 +55,7 @@ final class AppState: ObservableObject {
     /// 全部标签与使用次数。
     @Published private(set) var tags: [TagCount] = []
     @Published var isShowingQuickOpen: Bool = false
-    @Published private(set) var statusMessage: String?
+    @Published var statusMessage: String?
     @Published var isShowingNewNote: Bool = false
     @Published var isShowingMentionsSheet: Bool = false
     @Published var isShowingAliasSheet: Bool = false
@@ -69,13 +79,13 @@ final class AppState: ObservableObject {
 
     // MARK: - 内部
 
-    private var repo: GRDBNoteRepository
+    var repo: GRDBNoteRepository
     private let database: AppDatabase
     /// 模型服务的读写与校验。密钥走 Keychain。
     let providerService = ProviderService()
     private var saveTask: Task<Void, Never>?
     /// 最近一次落库的正文，用于跳过无变化的保存。
-    private var lastSavedBody: String = ""
+    var lastSavedBody: String = ""
     /// 上次批量转换前的正文。按笔记 id 存。
     private var conversionUndo: [String: String]?
     // 定时同步
@@ -206,6 +216,7 @@ final class AppState: ObservableObject {
             noteCount = try repo.noteCount()
             journalEntries = try repo.journalEntries()
             tags = try repo.allTags(types: repo.mainListTypes)
+            refreshClips()
             resolvedKeys = Set(summaries.map { TextNormalizer.key($0.title) })
             if case .tag(let name) = sidebarScope, !tags.contains(where: { $0.name == name }) {
                 sidebarScope = .all
@@ -281,6 +292,8 @@ final class AppState: ObservableObject {
         case .tag(let name):
             let ids = Set(occurrenceSummaryIds(tagged: name))
             return noteSummaries.filter { ids.contains($0.id) }
+        case .clipUnread, .clipAll, .clipArchived, .clipTag:
+            return []
         }
     }
 
@@ -304,8 +317,22 @@ final class AppState: ObservableObject {
     }
 
     func selectScope(_ scope: SidebarScope) {
+        if scope.isClipScope {
+            selectClipScope(scope)
+            return
+        }
+        flushPendingSave()
         sidebarScope = scope
         searchQuery = ""
+        // 从剪藏范围回来时，当前选中的是剪藏，换回一条普通笔记。
+        if current?.type == NoteTypes.clipID {
+            if let first = visibleSummaries().first {
+                selection = first.id
+                loadNote(id: first.id)
+            } else {
+                current = nil
+            }
+        }
     }
 
     /// `⌘P` Quick Open 的查询。

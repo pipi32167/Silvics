@@ -199,6 +199,7 @@ final class EditorTextView: NSTextView {
     /// 勾选 / 取消勾选：改正文的 `[ ]` ↔ `[x]`，走 `shouldChangeText` + `didChangeText`，可撤销（S39）。
     @discardableResult
     func toggleTodo(at location: Int) -> Bool {
+        guard isEditable else { return false }
         guard let storage = textStorage else { return false }
         guard let range = MarkdownStyler.todoCheckRange(in: string, at: location) else { return false }
         let current = (string as NSString).substring(with: range)
@@ -426,6 +427,10 @@ struct NoteEditorView: NSViewRepresentable {
     let mentions: [MentionDecoration]
     /// 外观设置。变化时重排样式（字号、行距、字体族）。
     let appearance: AppearanceSettings
+    /// 只读：整篇按渲染态显示，不接 onChange、不弹补全、待办框不给点。
+    var editable: Bool = true
+    /// 是否把 `[[ ]]` 画成链接并可点。剪藏是单向引用，正文里的 `[[ ]]` 只是文本。
+    var rendersWikiLinks: Bool = true
     /// 用户每改一个字就回报一次。
     var onChange: (String) -> Void
     /// 补全查询。
@@ -467,9 +472,9 @@ struct NoteEditorView: NSViewRepresentable {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.allowsImageEditing = false
-        textView.isEditable = true
+        textView.isEditable = editable
         textView.isSelectable = true
-        textView.allowsUndo = true
+        textView.allowsUndo = editable
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -637,12 +642,12 @@ struct NoteEditorView: NSViewRepresentable {
             lastAppearance = parent.appearance
 
             let spans = MarkdownStyler.analyze(text)
-            let wikis = WikiScanner.scan(text)
+            let wikis = parent.rendersWikiLinks ? WikiScanner.scan(text) : []
             let listMarkers = MarkdownStyler.listMarkers(in: text)
             let quoteMarkers = MarkdownStyler.quoteMarkerRanges(in: text)
             let tableBlocks = MarkdownStyler.tableBlocks(in: text)
             let fullRange = NSRange(location: 0, length: storage.length)
-            let caretParagraph = paragraphRange(at: textView.selectedRange().location)
+            let caretParagraph = parent.editable ? paragraphRange(at: textView.selectedRange().location) : nil
             let marks = MarkdownStyler.syntaxMarkerRanges(
                 in: text,
                 caretParagraph: caretParagraph,
@@ -685,9 +690,9 @@ struct NoteEditorView: NSViewRepresentable {
             textView.selectedRanges = selection
 
             // 记录引用命中区间，供 ⌘ 点击使用
-            textView.wikiHitRects = wikis.map { link in
+            textView.wikiHitRects = parent.rendersWikiLinks ? wikis.map { link in
                 (link.nsRange(in: text), link.target)
-            }
+            } : []
             textView.mentionRanges = parent.mentions.map(\.range)
         }
 
@@ -722,7 +727,7 @@ struct NoteEditorView: NSViewRepresentable {
                     || !lastTableBlocks.isEmpty else {
                 return
             }
-            let caretParagraph = paragraphRange(at: textView.selectedRange().location)
+            let caretParagraph = parent.editable ? paragraphRange(at: textView.selectedRange().location) : nil
             guard caretParagraph != lastCaretParagraph else { return }
 
             let marks = MarkdownStyler.split(lastSyntaxMarkers, caretParagraph: caretParagraph)
@@ -963,6 +968,7 @@ struct NoteEditorView: NSViewRepresentable {
         // MARK: 文本变化
 
         func textDidChange(_ notification: Notification) {
+            guard parent.editable else { return }
             guard let textView = notification.object as? EditorTextView else { return }
             let text = textView.string
             restyle(force: false)
@@ -1004,6 +1010,7 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         private func refreshCompletionIfNeeded() {
+            guard parent.editable else { return }
             guard let textView else { DebugLog.write("refresh: no textView"); return }
             guard let context = activeWikiContext() else {
                 DebugLog.write("refresh: no active context, caret=\(textView.selectedRange())")

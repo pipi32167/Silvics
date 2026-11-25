@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 右侧上下文面板：反向链接、出链、悬空目标。
@@ -5,10 +6,23 @@ import SwiftUI
 struct ContextPanelView: View {
     @EnvironmentObject private var app: AppState
 
+    @State private var summaryDraft: String = ""
+    @State private var tagInput: String = ""
+    @State private var summarySaveTask: Task<Void, Never>?
+    @State private var isConfirmingDelete = false
+    @State private var isSummarizing = false
+
+    private var clipNote: Note? {
+        guard let note = app.current, note.type == NoteTypes.clipID else { return nil }
+        return note
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if app.current == nil {
+                if let clip = clipNote {
+                    clipSections(clip)
+                } else if app.current == nil {
                     Text("选一条笔记查看连接")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
@@ -24,7 +38,237 @@ struct ContextPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle("连接")
+        .navigationTitle(clipNote == nil ? "连接" : "剪藏")
+        .onChange(of: app.current?.id) { _, _ in
+            summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
+            tagInput = ""
+        }
+        .onAppear {
+            summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
+        }
+        .alert("删除这篇剪藏？", isPresented: $isConfirmingDelete) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) {
+                if let clip = clipNote { app.deleteClip(id: clip.id) }
+            }
+        } message: {
+            let refs = clipNote.map { app.clipReferenceCount(id: $0.id) } ?? 0
+            Text(refs > 0
+                 ? "有 \(refs) 篇笔记引用它，删除后这些引用会变成悬空。"
+                 : "这个操作不能撤销。")
+        }
+    }
+
+    // MARK: - 剪藏
+
+    @ViewBuilder
+    private func clipSections(_ clip: Note) -> some View {
+        let meta = clip.metaFields
+        let status = ClipStatus(rawValue: meta[ClipFields.status] ?? "") ?? .unread
+        let aiState = ClipAIState(rawValue: meta[ClipFields.aiState] ?? "") ?? .pending
+
+        // 来源
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("来源")
+            VStack(alignment: .leading, spacing: 5) {
+                sourceRow("站点", meta[ClipFields.site])
+                sourceRow("作者", meta[ClipFields.author])
+                sourceRow("发布时间", meta[ClipFields.published])
+                sourceRow("抓取时间", Self.dateText(clip.createdAt))
+                sourceRow("字数", "\(clip.body.count)")
+                if let raw = meta[ClipFields.url], !raw.isEmpty, let url = URL(string: raw) {
+                    Link(destination: url) {
+                        Label("打开原文", systemImage: "arrow.up.right.square")
+                            .font(.system(size: 11))
+                    }
+                }
+                if let model = meta[ClipFields.aiModel], !model.isEmpty {
+                    sourceRow("整理模型", model)
+                }
+            }
+        }
+
+        // 摘要
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                sectionTitle("摘要")
+                if aiState != .done {
+                    Text(aiState.label)
+                        .font(.system(size: 9))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Button {
+                    isSummarizing = true
+                    Task {
+                        let message = await app.retryClipSummary(id: clip.id)
+                        isSummarizing = false
+                        if let message { app.statusMessage = "重新整理失败：\(message)" }
+                        summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
+                    }
+                } label: {
+                    if isSummarizing {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Text("重新整理").font(.system(size: 10))
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSummarizing || app.clipProvider() == nil)
+                .help(app.clipProvider() == nil ? "先在设置里配置对话模型" : "用当前模型重新生成摘要与标签")
+            }
+            TextEditor(text: $summaryDraft)
+                .font(.system(size: 12))
+                .frame(minHeight: 90)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(0.045))
+                )
+                .onChange(of: summaryDraft) { _, value in
+                    guard clipNote?.id == clip.id else { return }
+                    summarySaveTask?.cancel()
+                    summarySaveTask = Task {
+                        try? await Task.sleep(nanoseconds: 600_000_000)
+                        guard !Task.isCancelled else { return }
+                        await MainActor.run {
+                            if value != clip.metaFields[ClipFields.summary] {
+                                app.updateClipSummary(id: clip.id, summary: value)
+                            }
+                        }
+                    }
+                }
+        }
+
+        // 标签
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("标签", count: clip.tagNames.count)
+            if clip.tagNames.isEmpty {
+                hint("还没有标签。模型未配置时可以手动加。")
+            } else {
+                FlowTags(tags: clip.tagNames) { name in
+                    app.updateClipTags(id: clip.id, tags: clip.tagNames.filter { $0 != name })
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("加标签，回车确认", text: $tagInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .onSubmit { addTag(to: clip) }
+                Button("添加") { addTag(to: clip) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11))
+                    .disabled(ClipTagPolicy.sanitize(tagInput) == nil)
+            }
+        }
+
+        // 被引用
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("被引用", count: app.backlinks.count)
+            if app.backlinks.isEmpty {
+                hint("还没有笔记引用它。在概念笔记或日记里写 [[\(clip.title)]] 即可。")
+            } else {
+                ForEach(app.backlinks) { backlink in
+                    Button {
+                        app.select(backlink.sourceId)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(backlinkLabel(backlink))
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Text(backlink.snippet)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                                .multilineTextAlignment(.leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.045))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        // 操作
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("操作")
+            HStack(spacing: 8) {
+                Button(status == .unread ? "标记已读" : "标记未读") {
+                    app.setClipStatus(id: clip.id, status: status == .unread ? .read : .unread)
+                }
+                Button(status == .archived ? "取消归档" : "归档") {
+                    app.setClipStatus(id: clip.id, status: status == .archived ? .read : .archived)
+                }
+                Button("导出") { exportCurrent(clip) }
+                Button("删除", role: .destructive) {
+                    isConfirmingDelete = true
+                }
+            }
+            .font(.system(size: 11))
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private func exportCurrent(_ clip: Note) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = ClipExport.fileName(for: clip)
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try app.exportClip(id: clip.id, to: url)
+            app.statusMessage = "已导出到 \(url.lastPathComponent)"
+        } catch {
+            app.statusMessage = "导出失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func addTag(to clip: Note) {
+        guard let clean = ClipTagPolicy.sanitize(tagInput) else { return }
+        let merged = clip.tagNames + [clean]
+        app.updateClipTags(id: clip.id, tags: merged)
+        tagInput = ""
+    }
+
+    private func sourceRow(_ label: String, _ value: String?) -> some View {
+        Group {
+            if let value, !value.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(label)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 56, alignment: .leading)
+                    Text(value)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    private func backlinkLabel(_ backlink: Backlink) -> String {
+        guard let source = app.summaries.first(where: { $0.id == backlink.sourceId }),
+              source.type == NoteTypes.journalID
+        else { return backlink.sourceTitle }
+        return "日记 · \(backlink.sourceTitle)"
+    }
+
+    private static func dateText(_ ms: Int64) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
 
     // MARK: - 反向链接
@@ -229,6 +473,14 @@ struct ContextPanelView: View {
 
     // MARK: - 组件
 
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title)
@@ -247,5 +499,35 @@ struct ContextPanelView: View {
             .font(.system(size: 11))
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+
+// MARK: - 标签流式布局
+
+private struct FlowTags: View {
+    let tags: [String]
+    let onRemove: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(tags, id: \.self) { tag in
+                HStack(spacing: 5) {
+                    Text("#\(tag)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Button {
+                        onRemove(tag)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("移除标签")
+                    Spacer(minLength: 0)
+                }
+            }
+        }
     }
 }
