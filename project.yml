@@ -50,7 +50,7 @@ targets:
         CFBundleName: Silvics
         CFBundleDisplayName: Silvics
         CFBundleShortVersionString: "0.2.1"
-        CFBundleVersion: "56"
+        CFBundleVersion: "57"
         CFBundlePackageType: APPL
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.productivity
