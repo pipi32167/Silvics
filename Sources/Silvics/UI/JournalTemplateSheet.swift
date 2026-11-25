@@ -262,7 +262,7 @@ struct JournalTemplateSheet: View {
     // MARK: - 动作
 
     private func reloadChoices() {
-        choices = JournalTemplates.sorted(JournalTemplates.load(in: app.debugVaultURL))
+        choices = JournalTemplates.sorted(JournalTemplates.load(in: app.vaultURL))
     }
 
     private func beginCreate() {

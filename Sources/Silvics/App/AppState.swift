@@ -963,14 +963,15 @@ final class AppState: ObservableObject {
 
 extension AppState {
 
+    /// vault 目录。模板管理等界面要用，不能只在 DEBUG 下存在。
+    var vaultURL: URL { repo.vaultURL }
+
     #if DEBUG
     /// 仅 DEBUG：取证用，直接塞一组冲突。
     func debugSetConflicts(_ conflicts: [VaultConflict]) {
         syncConflicts = conflicts
     }
 
-    /// 仅 DEBUG：取证用，vault 目录（写模板文件、塞日记正文都要它）。
-    var debugVaultURL: URL { repo.vaultURL }
 
     /// 仅 DEBUG：取证用，不经编辑器直接写一篇日记的正文。
     func debugSeedJournal(on date: String, body: String) {

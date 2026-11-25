@@ -190,7 +190,7 @@ enum DebugCapture {
                         name: item.name,
                         order: item.order,
                         body: item.body,
-                        in: app.debugVaultURL
+                        in: app.vaultURL
                     )
                 } catch {
                     // 重跑取证时文件已存在：留着已有的那份，不用报错。
