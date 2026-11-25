@@ -138,6 +138,19 @@ final class AppState: ObservableObject {
         }
     }
 
+    #if DEBUG
+    /// 仅测试：注入内存库与临时 vault，跳过磁盘库、vault 自愈与定时同步。
+    init(repo: GRDBNoteRepository, clipSettings: ClipSettings = ClipSettings()) {
+        self.database = repo.db
+        self.repo = repo
+        self.clipSettings = clipSettings
+        self.appearance = AppearanceSettings.load()
+        self.providerSettings = providerService.settings
+        loadAll(selectFirst: false)
+        refreshClips()
+    }
+    #endif
+
     // MARK: - 同步时机
 
     /// 定时同步 + 启动后一次。判定在 `SyncScheduler`，这里只负责触发。
@@ -272,6 +285,17 @@ final class AppState: ObservableObject {
         flushPendingSave()
         selection = id
         loadNote(id: id)
+        markOpenedClipReadIfNeeded(id: id)
+    }
+
+    /// 打开剪藏时按设置自动标已读。放在统一的选择入口，侧栏、⌘P、右栏跳转都会命中。
+    private func markOpenedClipReadIfNeeded(id: String) {
+        guard clipSettings.markReadOnOpen,
+              let note = current, note.id == id,
+              note.type == NoteTypes.clipID,
+              note.metaFields[ClipFields.status] == ClipStatus.unread.rawValue
+        else { return }
+        setClipStatus(id: id, status: .read)
     }
 
     /// 侧栏列表。搜索优先，其次是当前范围。

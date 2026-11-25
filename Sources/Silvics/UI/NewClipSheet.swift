@@ -408,6 +408,7 @@ struct NewClipSheet: View {
             suggestion: suggestion,
             settings: settings,
             existingTags: app.clipTagCandidates(),
+            providerAvailable: app.clipProvider() != nil,
             isTaken: { app.clipTitleTaken($0) }
         )
         value = finalized.draft

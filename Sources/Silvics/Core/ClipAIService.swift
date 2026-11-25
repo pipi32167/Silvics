@@ -143,6 +143,7 @@ enum ClipAIService {
         suggestion: ClipSuggestion?,
         settings: ClipSettings,
         existingTags: [String],
+        providerAvailable: Bool = true,
         isTaken: (String) -> Bool
     ) -> (draft: ClipDraft, warnings: [String]) {
         var out = draft
@@ -178,7 +179,8 @@ enum ClipAIService {
             warnings += tagged.warnings
             out.aiState = .done
         } else {
-            out.aiState = settings.autoSummarize ? .failed : .pending
+            // 没配模型不是失败：只存正文，标「待整理」，配置后可重试。
+            out.aiState = (settings.autoSummarize && providerAvailable) ? .failed : .pending
         }
         return (out, warnings)
     }

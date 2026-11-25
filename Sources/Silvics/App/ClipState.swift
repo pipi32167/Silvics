@@ -49,8 +49,7 @@ extension AppState {
             return
         }
         if let first = visibleClips.first {
-            selection = first.id
-            loadNote(id: first.id)
+            select(first.id)
         } else {
             selection = nil
             current = nil
@@ -62,11 +61,6 @@ extension AppState {
     /// 打开剪藏；按设置决定是否自动标已读。
     func openClip(id: String) {
         select(id)
-        guard current?.type == NoteTypes.clipID else { return }
-        if clipSettings.markReadOnOpen,
-           current?.metaFields[ClipFields.status] == ClipStatus.unread.rawValue {
-            setClipStatus(id: id, status: .read)
-        }
     }
 
     func clipReferenceCount(id: String) -> Int {

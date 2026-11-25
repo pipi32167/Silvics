@@ -83,7 +83,9 @@ extension GRDBNoteRepository {
             guard oldKey != newKey else { return [] }
 
             var impacts: [RenameImpact] = []
-            for row in try Row.fetchAll(conn, sql: "SELECT id, title, body FROM note") {
+            for row in try Row.fetchAll(conn, sql: "SELECT id, title, body, type FROM note") {
+                let type: String = row["type"] ?? NoteTypes.noteID
+                guard NoteTypes.descriptor(for: type).emitsLinks else { continue }
                 let body: String = row["body"]
                 let count = WikiScanner.scan(body).filter {
                     TextNormalizer.key($0.target) == oldKey

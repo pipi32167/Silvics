@@ -37,9 +37,10 @@ enum ClipFileImport {
 
         if ext == "html" || ext == "htm" {
             let article = ClipExtractor.extract(html: ClipExtractor.decode(data))
+            let title = article.title.isEmpty ? fileName : article.title
             draft = ClipDraft(
-                title: article.title.isEmpty ? fileName : article.title,
-                sourceTitle: article.title,
+                title: title,
+                sourceTitle: title,
                 site: article.site,
                 author: article.author,
                 published: article.published,
@@ -54,9 +55,10 @@ enum ClipFileImport {
                     text = frontmatter.body
                 }
             }
+            let resolved = title.isEmpty ? fileName : title
             draft = ClipDraft(
-                title: title.isEmpty ? fileName : title,
-                sourceTitle: title,
+                title: resolved,
+                sourceTitle: resolved,
                 site: "",
                 author: "",
                 published: "",

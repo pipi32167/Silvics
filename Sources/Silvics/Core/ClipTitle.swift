@@ -25,6 +25,7 @@ enum ClipTitleStrategy: String, Codable, CaseIterable, Sendable {
 enum ClipTitle {
 
     static let maxLength = 60
+    static let minLength = 4
     static let fallbackLength = 40
 
     /// 清洗并保证唯一。
@@ -41,8 +42,8 @@ enum ClipTitle {
         isTaken: (String) -> Bool
     ) -> String {
         var title = clean(raw)
-        if title.isEmpty { title = fromBody(body) }
-        if title.isEmpty { title = "未命名剪藏 · " + today() }
+        if title.count < minLength { title = fromBody(body) }
+        if title.count < minLength { title = "未命名剪藏 · " + today() }
 
         let suffix = clean(source)
         if TextNormalizer.isDateLike(title), !suffix.isEmpty {
@@ -80,7 +81,7 @@ enum ClipTitle {
                 text.removeFirst()
             }
             text = clean(text)
-            if text.isEmpty { continue }
+            if text.count < minLength { continue }
             if text.count > fallbackLength {
                 text = String(text.prefix(fallbackLength)).trimmingCharacters(in: .whitespaces) + "…"
             }
