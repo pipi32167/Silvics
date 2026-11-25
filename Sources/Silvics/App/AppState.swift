@@ -448,6 +448,42 @@ final class AppState: ObservableObject {
         JournalTemplates.defaultNames(in: repo.vaultURL, limit: limit)
     }
 
+    /// 面板里保存一份模板：`existing` 为 nil 时新建，否则覆盖（含改名）。
+    ///
+    /// 落盘格式由 `JournalTemplates.create/update` 决定，这里只补一条状态提示。
+    /// 下一次 `⌘⇧J` 会重新读目录，所以保存后立刻生效，不用重启。
+    @discardableResult
+    func saveJournalTemplate(
+        _ existing: JournalTemplate?,
+        name: String,
+        order: String,
+        body: String
+    ) throws -> JournalTemplate {
+        let saved: JournalTemplate
+        if let existing {
+            saved = try JournalTemplates.update(existing, name: name, order: order, body: body, in: repo.vaultURL)
+            // 改名后记忆里的旧名字换成新名字，否则下次新建会以为模板没了。
+            let remembered = JournalTemplateMemory.names
+            if saved.name != existing.name, remembered.contains(existing.name) {
+                JournalTemplateMemory.names = remembered.map { $0 == existing.name ? saved.name : $0 }
+            }
+        } else {
+            saved = try JournalTemplates.create(name: name, order: order, body: body, in: repo.vaultURL)
+        }
+        statusMessage = existing == nil ? "模板已新建：\(saved.name)" : "模板已保存：\(saved.name)"
+        return saved
+    }
+
+    /// 面板里删除一份模板。记忆里留着已删掉的名字没有意义，顺手清掉。
+    func deleteJournalTemplate(_ template: JournalTemplate) throws {
+        try JournalTemplates.delete(template, in: repo.vaultURL)
+        let remembered = JournalTemplateMemory.names
+        if remembered.contains(template.name) {
+            JournalTemplateMemory.names = remembered.filter { $0 != template.name }
+        }
+        statusMessage = "模板已删除：\(template.name)"
+    }
+
     /// 「模板…」确认：覆盖记忆。只影响之后新建的日记，不改已有日记正文。
     func setJournalTemplateNames(_ names: [String]) {
         JournalTemplateMemory.names = names
