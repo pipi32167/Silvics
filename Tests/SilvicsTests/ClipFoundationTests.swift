@@ -90,6 +90,18 @@ final class ClipFoundationTests: XCTestCase {
         XCTAssertEqual(backlinks.map(\.sourceId), [concept.id])
     }
 
+    func testJournalCanReferenceClip() throws {
+        let clip = try makeClip(title: "稀疏重复优于集中突击")
+        let journal = try repo.journalNote(on: "2026-11-24", using: [])
+        var withBody = journal
+        withBody.body = (journal.body.isEmpty ? "" : journal.body + "\n") + "今天重读 [[稀疏重复优于集中突击]]。"
+        _ = try repo.save(withBody)
+
+        let outgoing = try repo.outgoing(from: journal.id)
+        XCTAssertEqual(outgoing.first?.toId, clip.id)
+        XCTAssertEqual(try repo.backlinks(to: clip.id).map(\.sourceId), [journal.id])
+    }
+
     func testClipBodyDoesNotProduceLinks() throws {
         let concept = try makeConcept(title: "间隔重复对抗遗忘")
         let clip = try makeClip(
