@@ -113,6 +113,34 @@ final class JournalTests: XCTestCase {
 
     // MARK: - C03 上一个有日记的日子不是「昨天」
 
+
+    /// 用**真实日期**走一遍「昨天 → 今天」，验证不是只有合成日期能过。
+    ///
+    /// 前一天留两条未完成、一条已完成；今天新建时应当带过来两条，且来源日期是昨天。
+    func testCarryFromYesterdayIntoTodayWithRealDates() throws {
+        let repo = try makeRepo()
+        let today = JournalDate.today()
+        let yesterday = JournalDate.today(Date().addingTimeInterval(-24 * 3600))
+
+        var prev = try repo.journalNote(on: yesterday, using: [])
+        prev.body = """
+        ## 工作
+        - [ ] 昨天没做完 A
+        - [ ] 昨天没做完 B
+        - [x] 昨天已经做完 C
+        """
+        _ = try repo.save(prev)
+
+        let todayNote = try repo.journalNote(on: today, using: [])
+        XCTAssertTrue(todayNote.body.contains("## 承接（来自 \(JournalTodo.short(yesterday))）"),
+                      todayNote.body)
+        XCTAssertTrue(todayNote.body.contains("- [ ] 昨天没做完 A"), todayNote.body)
+        XCTAssertTrue(todayNote.body.contains("- [ ] 昨天没做完 B"), todayNote.body)
+        XCTAssertFalse(todayNote.body.contains("昨天已经做完 C"), "已完成的不能带过来")
+        XCTAssertEqual(todayNote.metaFields["carryFrom"], yesterday)
+        XCTAssertEqual(try JournalCarry.openTodos(in: todayNote.body).count, 2)
+    }
+
     func testC03CarryComesFromMostRecentJournalNotYesterday() throws {
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: "- [ ] 二十一号的事")

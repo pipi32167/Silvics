@@ -341,6 +341,7 @@ final class AppState: ObservableObject {
             loadNote(id: note.id)
             return note
         } catch {
+            DebugLog.write("openJournal(\(date)) failed: \(error.localizedDescription)")
             statusMessage = "打开日记失败：\(error.localizedDescription)"
             return nil
         }
