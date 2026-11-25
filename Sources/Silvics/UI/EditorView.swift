@@ -3,6 +3,56 @@ import SwiftUI
 
 // MARK: - 文本视图
 
+/// 待办行左侧的复选框。只负责外观与点击，位置由 `EditorTextView` 排。
+///
+/// 不用 `NSTextAttachment`：附件会改写正文（实测 197 → 177 字），
+/// 而这里只让浮层动，正文一个字符不动（S39 / S40）。
+///
+/// 也不用 `setButtonType(.switch)` + `isBordered = false`：本机实测它只画出
+/// 一块淡灰圆角矩形，没有边框，勾选态也只是一根对钩，难认。
+/// 改用 SF Symbols：未完成 `square`，已完成 `checkmark.square.fill`。
+final class TodoCheckbox: NSButton {
+
+    /// 该行行首的字符偏移。点击时按它定位待办。
+    var lineLocation: Int = 0
+
+    /// 勾选状态。只换图与色，不改正文。
+    var isChecked: Bool = false {
+        didSet {
+            guard oldValue != isChecked else { return }
+            applyAppearance()
+        }
+    }
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: ListLayout.checkboxSize, height: ListLayout.checkboxSize))
+        setButtonType(.momentaryChange)
+        title = ""
+        isBordered = false
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        focusRingType = .none
+        setAccessibilityLabel("勾选待办")
+        applyAppearance()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not supported") }
+
+    private func applyAppearance() {
+        let name = isChecked ? "checkmark.square.fill" : "square"
+        image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        contentTintColor = isChecked ? Theme.linkText : Theme.secondaryText
+        state = isChecked ? .on : .off
+        setAccessibilityValue(isChecked ? "已完成" : "未完成")
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
 /// 编辑用的 NSTextView。
 ///
 /// 只加两件事：⌘ 点击打开引用、Esc 关闭补全。
@@ -27,6 +77,242 @@ final class EditorTextView: NSTextView {
         }
     }
 
+    /// 当前正文的列表行。项目符号 / 序号 / 待办复选框都按它画。
+    var listMarkers: [ListMarker] = [] {
+        didSet {
+            if oldValue != listMarkers { needsDisplay = true }
+            relayoutTodoCheckboxes()
+        }
+    }
+
+    /// 光标所在段落。这一段露源码：标记不压宽，也不画符号与复选框（S37 / S40）。
+    var caretParagraph: NSRange? {
+        didSet {
+            if oldValue != caretParagraph {
+                needsDisplay = true
+                relayoutTodoCheckboxes()
+            }
+        }
+    }
+
+    /// 引用块区间（画左侧竖线）。
+    var quoteRanges: [NSRange] = [] {
+        didSet {
+            if oldValue != quoteRanges { needsDisplay = true }
+        }
+    }
+
+    /// 已画出的复选框数量（测试与自检用）。
+    var todoCheckboxCount: Int { todoCheckboxes.count }
+
+    /// 已画出的复选框位置，按行首升序。
+    var todoCheckboxFrames: [NSRect] {
+        todoCheckboxes.keys.sorted().map { todoCheckboxes[$0]!.frame }
+    }
+
+    // MARK: 待办复选框浮层
+
+    /// 待办行左侧的可点方框。键是行首偏移，位置每次重排。
+    private var todoCheckboxes: [Int: TodoCheckbox] = [:]
+    private var isLayingOutCheckboxes = false
+    private var scrollObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installScrollObserver()
+    }
+
+    deinit {
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+    }
+
+    /// 滚动时重新定位方框。`NSTextView` 是滚动视图的 documentView，
+    /// 自己不动，是 clipView 的 bounds 在变，所以监听 clipView。
+    private func installScrollObserver() {
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        scrollObserver = nil
+        guard let clip = enclosingScrollView?.contentView else { return }
+        clip.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clip,
+            queue: .main
+        ) { [weak self] _ in
+            self?.relayoutTodoCheckboxes()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        relayoutTodoCheckboxes()
+    }
+
+    /// 按第一视觉行的位置重排复选框：可见范围内才建控件。
+    private func relayoutTodoCheckboxes() {
+        guard !isLayingOutCheckboxes else { return }
+        isLayingOutCheckboxes = true
+        defer { isLayingOutCheckboxes = false }
+
+        let wanted = ListLayout.checkboxTodos(listMarkers, caretParagraph: caretParagraph)
+        let visible = visibleRect.insetBy(dx: 0, dy: -60)
+        var keep: Set<Int> = []
+
+        for marker in wanted {
+            guard let frame = firstLineFrame(forCharacterAt: marker.markerRange.location) else { continue }
+            let box = NSRect(
+                x: textContainerOrigin.x + frame.minX - ListLayout.indent + 4,
+                y: textContainerOrigin.y + frame.minY
+                    + (frame.height - ListLayout.checkboxSize) / 2,
+                width: ListLayout.checkboxSize,
+                height: ListLayout.checkboxSize
+            )
+            guard box.intersects(visible) else { continue }
+            keep.insert(marker.markerRange.location)
+
+            let checkbox = todoCheckboxes[marker.markerRange.location]
+                ?? makeTodoCheckbox(at: marker.markerRange.location)
+            checkbox.lineLocation = marker.markerRange.location
+            checkbox.isChecked = marker.kind == .todo(checked: true)
+            if checkbox.frame != box { checkbox.frame = box }
+        }
+
+        for (key, checkbox) in todoCheckboxes where !keep.contains(key) {
+            checkbox.removeFromSuperview()
+            todoCheckboxes.removeValue(forKey: key)
+        }
+    }
+
+    private func makeTodoCheckbox(at lineLocation: Int) -> TodoCheckbox {
+        let checkbox = TodoCheckbox()
+        checkbox.lineLocation = lineLocation
+        checkbox.target = self
+        checkbox.action = #selector(todoCheckboxClicked(_:))
+        addSubview(checkbox)
+        todoCheckboxes[lineLocation] = checkbox
+        return checkbox
+    }
+
+    @objc private func todoCheckboxClicked(_ sender: TodoCheckbox) {
+        toggleTodo(at: sender.lineLocation)
+    }
+
+    /// 勾选 / 取消勾选：改正文的 `[ ]` ↔ `[x]`，走 `shouldChangeText` + `didChangeText`，可撤销（S39）。
+    @discardableResult
+    func toggleTodo(at location: Int) -> Bool {
+        guard let storage = textStorage else { return false }
+        guard let range = MarkdownStyler.todoCheckRange(in: string, at: location) else { return false }
+        let current = (string as NSString).substring(with: range)
+        let next = (current == "x" || current == "X") ? " " : "x"
+        guard shouldChangeText(in: range, replacementString: next) else { return false }
+        storage.replaceCharacters(in: range, with: next)
+        didChangeText()
+        // 自己先把标记表刷新一遍：勾完立刻换勾选外观，不依赖外部是否重排。
+        // `didChangeText` 之后 Coordinator 还会整体 restyle 一次，这次只是让浮层不等它。
+        listMarkers = MarkdownStyler.listMarkers(in: string)
+        return true
+    }
+
+    // MARK: 列表与引用的自绘
+
+    /// 一个段落第一视觉行在容器坐标里的 frame。
+    private func firstLineFrame(forCharacterAt index: Int) -> NSRect? {
+        guard let manager = textLayoutManager,
+              let storage = textStorage, storage.length > 0 else { return nil }
+        let ns = string as NSString
+        let clamped = min(max(0, index), ns.length - 1)
+        let paragraph = ns.paragraphRange(for: NSRange(location: clamped, length: 0))
+        let document = manager.documentRange
+        guard let start = manager.location(document.location, offsetBy: paragraph.location),
+              let end = manager.location(start, offsetBy: paragraph.length),
+              let range = NSTextRange(location: start, end: end) else { return nil }
+        manager.ensureLayout(for: range)
+        var top: NSRect?
+        manager.enumerateTextSegments(in: range, type: .standard, options: []) { _, frame, _, _ in
+            if top == nil || frame.minY < top!.minY { top = frame }
+            return true
+        }
+        return top
+    }
+
+    /// 全部视觉行在容器坐标里的纵向范围（引用竖线用）。
+    private func verticalExtent(of range: NSRange) -> (top: CGFloat, bottom: CGFloat)? {
+        guard let manager = textLayoutManager, let storage = textStorage,
+              storage.length > 0, range.length > 0 else { return nil }
+        let document = manager.documentRange
+        guard let start = manager.location(document.location, offsetBy: range.location),
+              let end = manager.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end) else { return nil }
+        manager.ensureLayout(for: textRange)
+        var top = CGFloat.greatestFiniteMagnitude
+        var bottom = -CGFloat.greatestFiniteMagnitude
+        manager.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+            top = min(top, frame.minY)
+            bottom = max(bottom, frame.maxY)
+            return true
+        }
+        guard bottom > top else { return nil }
+        return (top, bottom)
+    }
+
+    /// 项目符号、有序序号、引用竖线。
+    private func drawListDecorations() {
+        guard textStorage?.length ?? 0 > 0 else { return }
+        let origin = textContainerOrigin
+        let visible = visibleRect
+
+        for range in quoteRanges {
+            guard let extent = verticalExtent(of: range) else { continue }
+            let bar = NSRect(
+                x: origin.x + QuoteLayout.barInset,
+                y: origin.y + extent.top + 1,
+                width: QuoteLayout.barWidth,
+                height: max(0, extent.bottom - extent.top - 2)
+            )
+            guard bar.intersects(visible) else { continue }
+            Theme.quoteBar.setFill()
+            NSBezierPath(roundedRect: bar, xRadius: 1, yRadius: 1).fill()
+        }
+
+        for marker in ListLayout.markersToRender(listMarkers, caretParagraph: caretParagraph) {
+            guard let frame = firstLineFrame(forCharacterAt: marker.markerRange.location) else { continue }
+            let box = frame.offsetBy(dx: origin.x, dy: origin.y)
+            guard box.intersects(visible) else { continue }
+            switch marker.kind {
+            case .unordered:
+                let diameter = ListLayout.bulletDiameter
+                let dot = NSRect(
+                    x: box.minX - ListLayout.indent / 2 - diameter / 2,
+                    y: box.midY - diameter / 2,
+                    width: diameter,
+                    height: diameter
+                )
+                Theme.secondaryText.setFill()
+                NSBezierPath(ovalIn: dot).fill()
+            case .ordered(let number):
+                drawOrderedNumber(number, box: box)
+            case .todo:
+                break // 复选框是 NSButton 浮层
+            }
+        }
+    }
+
+    /// 有序列表的序号。**用原文序号，不重排**（S38）。
+    private func drawOrderedNumber(_ number: Int, box: NSRect) {
+        let label = "\(number)." as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: Theme.font(ofSize: Theme.bodySize * 0.92, weight: .regular),
+            .foregroundColor: Theme.secondaryText,
+        ]
+        let size = label.size(withAttributes: attributes)
+        let rect = NSRect(
+            x: box.minX - 8 - size.width,
+            y: box.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        label.draw(in: rect, withAttributes: attributes)
+    }
+
     /// 代码块整块底色。
     ///
     /// 为什么不用 `.backgroundColor`：本视图是 TextKit 2（`usingTextLayoutManager: true`），
@@ -36,6 +322,7 @@ final class EditorTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         drawCodeBlockBackgrounds()
+        drawListDecorations()
     }
 
     private func drawCodeBlockBackgrounds() {
@@ -259,6 +546,10 @@ struct NoteEditorView: NSViewRepresentable {
         private var currentQuery: String = ""
         /// 上一次算出来的语法标记（与光标无关的部分），光标移动时只需重新分桶。
         private var lastSyntaxMarkers: [NSRange] = []
+        /// 上一次算出来的列表行（含缩进与标记区间），光标移动时重算压宽。
+        private var lastListMarkers: [ListMarker] = []
+        /// 上一次算出来的引用前缀。
+        private var lastQuoteMarkers: [NSRange] = []
         /// 上一次的分桶依据，避免同段落内的每次光标移动都重设属性。
         private var lastCaretParagraph: NSRange?
 
@@ -345,6 +636,8 @@ struct NoteEditorView: NSViewRepresentable {
 
             let spans = MarkdownStyler.analyze(text)
             let wikis = WikiScanner.scan(text)
+            let listMarkers = MarkdownStyler.listMarkers(in: text)
+            let quoteMarkers = MarkdownStyler.quoteMarkerRanges(in: text)
             let fullRange = NSRange(location: 0, length: storage.length)
             let caretParagraph = paragraphRange(at: textView.selectedRange().location)
             let marks = MarkdownStyler.syntaxMarkerRanges(
@@ -364,6 +657,7 @@ struct NoteEditorView: NSViewRepresentable {
             applyHeadings(spans, storage, fullRange)
             applyInline(spans, storage, fullRange)
             applyBlocks(spans, in: text, storage, fullRange)
+            applyLists(listMarkers, quotes: quoteMarkers, caretParagraph: caretParagraph, storage: storage)
             applyWikiLinks(wikis, in: text, storage, fullRange)
             applyMentions(storage)
             applySyntaxMarks(marks, storage)
@@ -372,9 +666,14 @@ struct NoteEditorView: NSViewRepresentable {
             undoManager?.enableUndoRegistration()
 
             lastSyntaxMarkers = marks.all
+            lastListMarkers = listMarkers
+            lastQuoteMarkers = quoteMarkers
             lastCaretParagraph = caretParagraph
             // 块底色由视图自绘，区间变了要重画。
             textView.codeBlockRanges = spans.codeBlocks
+            textView.listMarkers = listMarkers
+            textView.quoteRanges = spans.blockQuotes
+            textView.caretParagraph = caretParagraph
 
             textView.typingAttributes = Theme.typingAttributes()
             textView.selectedRanges = selection
@@ -413,7 +712,9 @@ struct NoteEditorView: NSViewRepresentable {
         private func refreshSyntaxMarksForCaret() {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles, !textView.hasMarkedText() else { return }
-            guard !lastSyntaxMarkers.isEmpty else { return }
+            guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarkers.isEmpty else {
+                return
+            }
             let caretParagraph = paragraphRange(at: textView.selectedRange().location)
             guard caretParagraph != lastCaretParagraph else { return }
 
@@ -422,9 +723,59 @@ struct NoteEditorView: NSViewRepresentable {
             undoManager?.disableUndoRegistration()
             storage.beginEditing()
             applySyntaxMarks(marks, storage)
+            // 标记宽度随光标段落切换：新段落恢复可读宽度，旧段落重新压到 ∹0。
+            applyLists(lastListMarkers, quotes: lastQuoteMarkers, caretParagraph: caretParagraph, storage: storage)
             storage.endEditing()
             undoManager?.enableUndoRegistration()
             lastCaretParagraph = caretParagraph
+            textView.caretParagraph = caretParagraph
+        }
+
+        /// 列表行：段落缩进统一成 `ListLayout.indent`，行首标记按光标段落切两组宽度。
+        ///
+        /// 隐藏组：字号 0.1 + 负 kern，标记总宽 ∹0，正文从缩进处开始（S36）。
+        /// 可见组（光标段落）：正常字号、无 kern，能看能改（S37）。
+        private func applyLists(
+            _ markers: [ListMarker],
+            quotes: [NSRange],
+            caretParagraph: NSRange?,
+            storage: NSTextStorage
+        ) {
+            let ns = storage.string as NSString
+            for marker in markers {
+                // 段落样式覆盖整段：软换行后的行也要落在同一缩进。
+                guard ns.length > 0 else { continue }
+                let paragraph = ns.paragraphRange(for: NSRange(
+                    location: min(max(0, marker.markerRange.location), ns.length - 1),
+                    length: 0
+                ))
+                guard let whole = clamp(paragraph, storage.length) else { continue }
+                storage.addAttribute(.paragraphStyle, value: Theme.listParagraph(), range: whole)
+
+                setMarkerWidth(
+                    marker.markerRange,
+                    compressed: !ListLayout.isInCaretParagraph(marker, caretParagraph),
+                    storage: storage
+                )
+            }
+            // 引用前缀同一套：非光标段落压宽，光标段落露源码。
+            for range in quotes {
+                let inCaret = caretParagraph.map { caret in
+                    range.location < caret.location + caret.length && caret.location < range.location + range.length
+                } ?? false
+                setMarkerWidth(range, compressed: !inCaret, storage: storage)
+            }
+        }
+
+        private func setMarkerWidth(_ range: NSRange, compressed: Bool, storage: NSTextStorage) {
+            guard let r = clamp(range, storage.length) else { return }
+            let marker = (storage.string as NSString).substring(with: r)
+            if compressed {
+                storage.addAttributes(Theme.compressedMarkerAttributes(for: marker), range: r)
+            } else {
+                storage.removeAttribute(.kern, range: r)
+                storage.addAttributes(Theme.visibleMarkerAttributes(), range: r)
+            }
         }
 
         /// 光标位置所在段落的区间（含行尾换行，与 `NSString.paragraphRange(for:)` 一致）。

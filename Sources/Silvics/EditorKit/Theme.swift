@@ -179,9 +179,67 @@ enum Theme {
         let p = NSMutableParagraphStyle()
         p.lineSpacing = 4
         p.paragraphSpacing = 8
-        p.firstLineHeadIndent = 14
-        p.headIndent = 14
+        // 与列表同一套缩进：标记压缩后正文从 `ListLayout.indent` 开始，换行也对齐。
+        p.firstLineHeadIndent = ListLayout.indent
+        p.headIndent = ListLayout.indent
         return p
+    }
+
+    /// 列表行（无序 / 有序 / 待办）的段落样式。
+    ///
+    /// `firstLineHeadIndent` 与 `headIndent` 相同：首行与软换行后的行左缘一致。
+    /// 标记字符由 `compressedMarkerAttributes(for:)` 压到宽度 ≈ 0，空出来的位置交给自绘符号。
+    static func listParagraph() -> NSParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.lineSpacing = CGFloat(appearance.lineSpacing)
+        p.paragraphSpacing = 9
+        p.lineBreakMode = .byWordWrapping
+        p.firstLineHeadIndent = ListLayout.indent
+        p.headIndent = ListLayout.indent
+        return p
+    }
+
+    // MARK: - 行首标记的两种宽度
+
+    /// 隐藏态标记的字号。小到几乎只剩字形原点，配负 kern 把总宽压到 0。
+    static let hiddenMarkerFont = NSFont.systemFont(ofSize: 0.1)
+
+    private static var markerKernCache: [String: CGFloat] = [:]
+
+    /// 让一段标记的总宽 ≈ 0 的 kern 值：`-总宽 / 字符数`。
+    ///
+    /// kern 在 AppKit 里是每个字形之后都加一次，所以除以字符数即可。
+    /// 结果按标记原文缓存：正文重排时不会重新测量（按键不重测全篇）。
+    static func compressedMarkerKern(for marker: String) -> CGFloat {
+        guard !marker.isEmpty else { return 0 }
+        if let cached = markerKernCache[marker] { return cached }
+        let width = (marker as NSString).size(withAttributes: [.font: hiddenMarkerFont]).width
+        let kern = -width / CGFloat(marker.utf16.count)
+        if markerKernCache.count > 512 { markerKernCache.removeAll(keepingCapacity: true) }
+        markerKernCache[marker] = kern
+        return kern
+    }
+
+    /// 隐藏态标记属性：字号 0.1 + 负 kern + 无色。字符一个不动。
+    static func compressedMarkerAttributes(for marker: String) -> [NSAttributedString.Key: Any] {
+        [
+            .font: hiddenMarkerFont,
+            .kern: compressedMarkerKern(for: marker),
+            .foregroundColor: syntaxMarkHidden,
+        ]
+    }
+
+    /// 可见态标记的排版宽度。光标段落露源码时，正文就右移这么多（S37）。
+    static func visibleMarkerWidth(_ marker: String) -> CGFloat {
+        (marker as NSString).size(withAttributes: visibleMarkerAttributes()).width
+    }
+
+    /// 光标段落里的标记属性：正常字号、没有 kern（S37）。
+    static func visibleMarkerAttributes() -> [NSAttributedString.Key: Any] {
+        [
+            .font: bodyFont,
+            .foregroundColor: syntaxMarkActive,
+        ]
     }
 
     // MARK: - 基础属性

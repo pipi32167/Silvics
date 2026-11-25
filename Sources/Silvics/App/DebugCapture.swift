@@ -100,6 +100,7 @@ enum DebugCapture {
                 app.jumpToTodo(todo)
             }
         case "journal": app.selectScope(.journal)
+        case "lists", "lists-demo": seedListsDemo(app)
         case "journal-today": app.goToToday()
         case "settings":
             SettingsWindowController.show(app: app, tab: .appearance)
@@ -125,8 +126,7 @@ enum DebugCapture {
             )
             app.setJournalTemplateNames(["工作", "生活"])
             app.goToToday()
-        case "alias": app.isShowingAliasSheet = true
-        case "rename": app.isShowingRenameSheet = true
+        case "alias": app.isShowingAliasSheet = true        case "rename": app.isShowingRenameSheet = true
         case "sync": SettingsWindowController.show(app: app, tab: .sync)
         default: break
         }
@@ -169,6 +169,65 @@ enum DebugCapture {
         今天重读 稀疏重复优于集中突击 的论证，集中突击只能短期见效。
         """)
         _ = app.openJournal(on: today, using: [])
+    }
+
+    /// 仅取证：`SILVICS_SHOW=lists` 建两篇列表演示笔记并选中其中一篇。
+    ///
+    /// - 「列表渲染演示」：无序 / 有序 / 引用同一篇，用来验符号、序号、软换行对齐（截图 1、3）。
+    /// - 「待办渲染演示」：只有待办行，一条已完成一条未完成，用来验复选框浮层（截图 2）。
+    ///
+    /// `SILVICS_SELECT` 在这一步之后才跑（顺序见 `applyShowFlag`），所以选哪篇由它决定。
+    @MainActor
+    private static func seedListsDemo(_ app: AppState) {
+        let demos: [(title: String, body: String)] = [
+            ("列表渲染演示", """
+            ## 无序
+            - 列表标记压宽到 ≈ 0，正文从缩进处开始
+            - 软换行之后第二行的左缘要与首行正文对齐，所以这一条故意写得很长，长到一定会换行，用来检查对齐
+            - 第三条
+
+            ## 有序
+            1. 先跑 XCTest
+            2. 再跑截图
+            10. 序号用原文，不重排
+
+            > 引用里的 `>` 也压宽，左侧留一条竖线
+            结束行，光标停在这里看其他行的渲染态。
+            """),
+            ("待办渲染演示", """
+            ## 待办
+            - [x] 列表标记压宽到 ≈ 0
+            - [ ] 待办复选框改成浮层
+            - [ ] 光标行露源码，其余行渲染
+
+            光标停在最后一行，三条待办都保持渲染态。
+            """),
+        ]
+
+        var createdCount = 0
+        for demo in demos {
+            if let existing = app.summaries.first(where: { $0.title == demo.title }) {
+                app.select(existing.id)
+                app.bodyDidChange(demo.body)
+                app.flushPendingSave()
+                createdCount += 1
+                continue
+            }
+            guard let note = app.createNote(title: demo.title) else { continue }
+            app.bodyDidChange(demo.body)
+            app.flushPendingSave()
+            app.select(note.id)
+            createdCount += 1
+        }
+        if createdCount == 0 { print("[Silvics] 列表演示笔记没有建出来") }
+
+        // `SILVICS_SELECT` 在 `applyShowFlag` 里跑得比这里早（那时笔记还不存在），
+        // 所以这里再按同一个关键字选一次，截图才能指定截哪篇。
+        if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
+           let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
+            app.selectScope(.all)
+            app.select(match.id)
+        }
     }
 
     /// 仅取证：`SILVICS_TEMPLATES=1` 往 vault 的 `templates/` 写三份演示模板（order 1/2/3）。
