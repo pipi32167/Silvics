@@ -28,6 +28,18 @@ final class AppDatabase {
     }
 
     static func makeOnDisk() throws -> AppDatabase {
+        #if DEBUG
+        // 仅 DEBUG：`SILVICS_DB=<路径>` 换库。离屏取证要一份不掺本机真库的数据，
+        // 也不该把演示笔记写进用户库。不设这个变量时行为与原来一致。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_DB"],
+           !raw.trimmingCharacters(in: .whitespaces).isEmpty {
+            let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            return try makeOnDisk(at: url)
+        }
+        #endif
         let url = try defaultDirectory().appendingPathComponent("silvics.sqlite")
         return try makeOnDisk(at: url)
     }
