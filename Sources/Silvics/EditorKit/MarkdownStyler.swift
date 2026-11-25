@@ -85,6 +85,13 @@ enum MarkdownStyler {
         return spans
     }
 
+    /// 表格块识别（表头行 + 分隔行 + 数据行，列数一致才算）。
+    ///
+    /// 实现在 `TableLayout`：识别、显示宽度、kern 与渲染属性放在同一层，只此一处。
+    static func tableBlocks(in text: String) -> [TableBlock] {
+        TableLayout.blocks(in: text)
+    }
+
     // MARK: - 偏移映射
 
     /// 每个 UTF-8 字节边界对应的 UTF-16 偏移。数组长度 = utf8.count + 1。
