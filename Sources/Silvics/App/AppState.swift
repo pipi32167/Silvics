@@ -224,7 +224,8 @@ final class AppState: ObservableObject {
 
             if let id = selection, summaries.contains(where: { $0.id == id }) {
                 loadNote(id: id)
-            } else if selectFirst, let first = summaries.first {
+            } else if selectFirst,
+                      let first = summaries.first(where: { NoteTypes.descriptor(for: $0.type).inMainList }) {
                 selection = first.id
                 loadNote(id: first.id)
             } else {

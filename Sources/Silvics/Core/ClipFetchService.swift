@@ -10,11 +10,22 @@ enum ClipFetchError: LocalizedError, Equatable {
     case offline
     case empty
 
+    static func httpMessage(_ code: Int) -> String {
+        switch code {
+        case 401, 403: return "网页拒绝访问（可能需要登录）"
+        case 404: return "网页不存在（404）"
+        case 410: return "网页已删除（410）"
+        case 429: return "请求太频繁（429），稍后再试"
+        case 500...599: return "站点出错（\(code)），稍后再试"
+        default: return "网页返回 \(code)"
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .badURL: return "地址格式不对"
         case .blockedScheme(let scheme): return "只支持 http 或 https，收到 \(scheme)"
-        case .http(let code): return "网页返回 \(code)。\(ProviderProbe.explain(status: code))"
+        case .http(let code): return Self.httpMessage(code)
         case .notHTML(let type): return "返回的不是网页（\(type)）"
         case .tooLarge: return "网页超过 5 MB，请改用粘贴正文"
         case .timedOut: return "抓取超时，网络可能不通"

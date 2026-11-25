@@ -50,14 +50,46 @@ struct NewClipSheet: View {
             footer
         }
         .padding(18)
-        .frame(width: 620, height: 560, alignment: .topLeading)
+        .frame(width: 620, height: phase == .input ? 380 : 560, alignment: .topLeading)
         .onAppear {
+            #if DEBUG
+            applyDebugStateIfRequested()
+            #endif
             if let text = NSPasteboard.general.string(forType: .string),
                ClipURL.normalized(text) != nil, urlText.isEmpty {
                 urlText = text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
     }
+
+    #if DEBUG
+    /// 仅取证：把面板直接放在预览或错误态，用来截稳定图。
+    /// 走的是和真实流程一样的 `presentPreview` / 错误文案，不伪造界面。
+    private func applyDebugStateIfRequested() {
+        let env = ProcessInfo.processInfo.environment
+        if let mode = env["SILVICS_CLIP_STATE"] {
+            switch mode {
+            case "preview":
+                var value = ClipDraft(
+                    url: "https://sspai.com/post/example",
+                    title: "写作工具如何影响写作频率",
+                    sourceTitle: "写作工具如何影响写作频率",
+                    site: "少数派",
+                    author: "张三",
+                    published: "2026-11-20",
+                    body: String(repeating: "工具的手感决定写作频率。启动慢、光标跳、预览延迟，都会让人少写一段。\n\n", count: 4)
+                )
+                value.summary = "工具的手感直接决定写作频率。启动慢、光标跳、预览延迟都会让人少写一段；输入即渲染、没有保存按钮的工具更让人愿意随手记。这不是审美问题，是摩擦成本问题。"
+                value.tags = ["学习方法", "笔记方法"]
+                presentPreview(value)
+            case "error":
+                errorText = ClipFetchError.http(403).errorDescription
+            default:
+                break
+            }
+        }
+    }
+    #endif
 
     // MARK: - 顶部
 

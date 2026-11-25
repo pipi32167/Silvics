@@ -138,6 +138,10 @@ enum DebugCapture {
             case "clips", "clip-unread": app.selectClipScope(.clipUnread)
             case "clips-all": app.selectClipScope(.clipAll)
             case "clips-archived": app.selectClipScope(.clipArchived)
+            case "clip-tag":
+                if let tag = ProcessInfo.processInfo.environment["SILVICS_CLIP_TAG"], !tag.isEmpty {
+                    app.selectClipScope(.clipTag(tag))
+                }
             case "new-clip": app.selectClipScope(.clipUnread); app.isShowingNewClip = true
             case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
             case "lists", "lists-demo": seedListsDemo(app)
