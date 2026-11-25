@@ -53,7 +53,7 @@ struct ContextPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(panelTitle)
+
         .onChange(of: app.current?.id) { _, _ in
             summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
             tagInput = ""
@@ -494,12 +494,6 @@ struct ContextPanelView: View {
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var panelTitle: String {
-        if clipNote != nil { return "剪藏" }
-        if app.current?.type == NoteTypes.journalID { return "日记" }
-        return "连接"
     }
 
     private var emptyHint: String {

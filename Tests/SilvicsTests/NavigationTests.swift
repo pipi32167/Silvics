@@ -79,18 +79,6 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(nav.journalScope, .today)
     }
 
-    func testLegacyScopeRoundTrip() {
-        let cases: [SidebarScope] = [
-            .all, .orphans, .tag("设计"),
-            .journal,
-            .clipUnread, .clipAll, .clipArchived, .clipTag("阅读"),
-        ]
-        for legacy in cases {
-            let scope = ModuleScope(legacy: legacy)
-            XCTAssertEqual(scope?.legacy, legacy, "\(legacy) 往返不一致")
-        }
-    }
-
     // MARK: - 按类型搜索
 
     func testSearchOnlyReturnsRequestedTypes() throws {

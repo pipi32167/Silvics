@@ -40,8 +40,14 @@ struct ListPaneView: View {
 
     private var headCount: Int {
         switch app.nav.active {
-        case .notes: return query.isEmpty ? rows.count : rows.count
-        case .journal: return query.isEmpty ? journalEntries.count : rows.count
+        case .notes: return rows.count
+        case .journal:
+            if !query.isEmpty { return rows.count }
+            switch app.nav.journalScope {
+            case .todos: return app.todoOverview.count
+            case .templates: return app.journalTemplateCount
+            case .today, .all: return journalEntries.count
+            }
         case .clips: return app.visibleClips.count
         }
     }

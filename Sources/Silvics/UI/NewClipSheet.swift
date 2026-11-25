@@ -437,7 +437,8 @@ struct NewClipSheet: View {
         } catch let error as ClipError {
             if case .duplicateURL(let noteId, _) = error {
                 errorText = "已经剪藏过这一篇。"
-                app.selectClipScope(.clipAll)
+                app.selectModule(.clips)
+                app.applyScope(.clip(.all))
                 app.openClip(id: noteId)
                 dismiss()
             } else {

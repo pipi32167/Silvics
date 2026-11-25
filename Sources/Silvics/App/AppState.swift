@@ -38,8 +38,6 @@ final class AppState: ObservableObject {
     }
     /// 日记是否参与未链接提及扫描。设置入口在右侧面板，值落 UserDefaults。
     @Published private(set) var journalScanMentions: Bool = JournalMentionSettings.scanMentions
-    /// 旧侧栏范围的投影，供过渡期侧栏渲染。只读，改写走 `selectScope`。
-    var sidebarScope: SidebarScope { nav.scope.legacy }
     /// 外观设置。改动即时生效并落 UserDefaults。
     @Published private(set) var appearance: AppearanceSettings = .init()
     /// 模型服务设置。密钥在 Keychain，这里只有非敏感部分。
@@ -486,27 +484,21 @@ final class AppState: ObservableObject {
         nav.setScope(moduleScope)
     }
 
-    /// 旧侧栏范围 → 模块 + 范围。过渡用。
-    func applyLegacyScope(_ scope: SidebarScope) {
-        nav.apply(legacy: scope)
+    /// `⌘N`：按当前模块分流。笔记 → 新建笔记；日记 → 今天；剪藏 → 新建剪藏。
+    func newInActiveModule() {
+        switch nav.active {
+        case .notes: isShowingNewNote = true
+        case .journal: goToToday()
+        case .clips: isShowingNewClip = true
+        }
     }
 
-    func selectScope(_ scope: SidebarScope) {
-        if scope.isClipScope {
-            selectClipScope(scope)
-            return
-        }
-        flushPendingSave()
-        nav.apply(legacy: scope)
-        searchQuery = ""
-        // 从剪藏范围回来时，当前选中的是剪藏，换回一条普通笔记。
-        if current?.type == NoteTypes.clipID {
-            if let first = visibleSummaries().first {
-                selection = first.id
-                loadNote(id: first.id)
-            } else {
-                current = nil
-            }
+    /// `⌘N` 菜单标题，跟着模块变。
+    var newInActiveModuleTitle: String {
+        switch nav.active {
+        case .notes: return "新建笔记"
+        case .journal: return "打开今天的日记"
+        case .clips: return "新建剪藏…"
         }
     }
 

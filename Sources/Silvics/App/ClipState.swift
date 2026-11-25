@@ -38,25 +38,6 @@ extension AppState {
         }
     }
 
-    /// 切到剪藏范围。没有选中剪藏时选第一条未读。
-    func selectClipScope(_ scope: SidebarScope) {
-        flushPendingSave()
-        applyLegacyScope(scope)
-        searchQuery = ""
-        refreshClips()
-        // 当前选中的剪藏还在这个范围里就不动它；否则换成范围里的第一条。
-        if let current, current.type == NoteTypes.clipID,
-           visibleClips.contains(where: { $0.id == current.id }) {
-            return
-        }
-        if let first = visibleClips.first {
-            select(first.id)
-        } else {
-            selection = nil
-            current = nil
-        }
-    }
-
     // MARK: - 读
 
     /// 打开剪藏；按设置决定是否自动标已读。

@@ -75,8 +75,9 @@ enum DebugCapture {
         }
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
-            // 演示数据最后停在日记上，先把范围切回「全部」，否则选中的普通笔记不在列表里。
-            app.selectScope(.all)
+            // 演示数据最后停在日记上，先切回笔记模块的「全部」，否则选中的笔记不在列表里。
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
             app.select(match.id)
         }
         // 先切 vault 再播种 / 开面板：`SILVICS_VAULT` 换目录后，后面的写入要落到新目录。
@@ -151,7 +152,7 @@ enum DebugCapture {
                 if let tag = ProcessInfo.processInfo.environment["SILVICS_CLIP_TAG"], !tag.isEmpty {
                     app.selectModule(.clips); app.applyScope(.clip(.tag(tag)))
                 }
-            case "new-clip": app.selectClipScope(.clipUnread); app.isShowingNewClip = true
+            case "new-clip": app.selectModule(.clips); app.applyScope(.clip(.unread)); app.isShowingNewClip = true
             case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
             case "lists", "lists-demo": seedListsDemo(app)
             case "tables", "tables-demo": seedTablesDemo(app)
@@ -266,7 +267,8 @@ enum DebugCapture {
         // 所以这里再按同一个关键字选一次，截图才能指定截哪篇。
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
-            app.selectScope(.all)
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
             app.select(match.id)
         }
     }
@@ -324,7 +326,8 @@ enum DebugCapture {
 
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
-            app.selectScope(.all)
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
             app.select(match.id)
         }
     }

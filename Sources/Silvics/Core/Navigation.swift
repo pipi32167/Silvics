@@ -98,41 +98,6 @@ enum ModuleScope: Equatable, Hashable {
         case .clip(let scope): return scope.title
         }
     }
-
-    /// 旧侧栏范围的投影。导航改造期间的过渡类型，改完就删。
-    var legacy: SidebarScope {
-        switch self {
-        case .note(let scope):
-            switch scope {
-            case .all: return .all
-            case .orphans: return .orphans
-            case .tag(let name): return .tag(name)
-            }
-        case .journal:
-            return .journal
-        case .clip(let scope):
-            switch scope {
-            case .unread: return .clipUnread
-            case .all: return .clipAll
-            case .archived: return .clipArchived
-            case .pending: return .clipAll
-            case .tag(let name): return .clipTag(name)
-            }
-        }
-    }
-
-    init?(legacy: SidebarScope) {
-        switch legacy {
-        case .all, .search: self = .note(.all)
-        case .orphans: self = .note(.orphans)
-        case .tag(let name): self = .note(.tag(name))
-        case .journal: self = .journal(.all)
-        case .clipUnread: self = .clip(.unread)
-        case .clipAll: self = .clip(.all)
-        case .clipArchived: self = .clip(.archived)
-        case .clipTag(let name): self = .clip(.tag(name))
-        }
-    }
 }
 
 /// 一个模块记住的东西：范围、选中条目、搜索词。
@@ -215,12 +180,6 @@ struct NavigationState: Equatable {
         active = module
         guard scope.module == module else { return }
         setScope(scope)
-    }
-
-    /// 旧侧栏范围 → 模块 + 范围。过渡用。
-    mutating func apply(legacy: SidebarScope) {
-        guard let target = ModuleScope(legacy: legacy) else { return }
-        enter(target.module, scope: target)
     }
 
     // MARK: - 快捷读法

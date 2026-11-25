@@ -39,8 +39,8 @@ struct SilvicsApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
             CommandGroup(replacing: .newItem) {
-                Button("新建笔记") {
-                    app.isShowingNewNote = true
+                Button(app.newInActiveModuleTitle) {
+                    app.newInActiveModule()
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
@@ -49,48 +49,59 @@ struct SilvicsApp: App {
                 }
                 .keyboardShortcut("v", modifiers: [.command, .shift])
             }
-            CommandGroup(after: .saveItem) {
-                Button(app.isListPaneVisible ? "隐藏列表栏" : "显示列表栏") {
-                    app.toggleListPane()
-                }
-                .keyboardShortcut("l", modifiers: [.command, .option])
+
+            CommandMenu("视图") {
+                Button("笔记") { app.selectModule(.notes) }
+                    .keyboardShortcut("1", modifiers: .command)
+
+                Button("日记") { app.selectModule(.journal) }
+                    .keyboardShortcut("2", modifiers: .command)
+
+                Button("剪藏") { app.selectModule(.clips) }
+                    .keyboardShortcut("3", modifiers: .command)
 
                 Divider()
 
-                Button("打开笔记…") {
-                    app.isShowingQuickOpen = true
-                }
-                .keyboardShortcut("p", modifiers: .command)
+                Button("今天的日记") { app.goToToday() }
+                    .keyboardShortcut("j", modifiers: [.command, .shift])
 
-                Button("孤儿笔记") {
-                    app.selectScope(.orphans)
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
+                Button("待办总览") { app.openTodoOverview() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
 
                 Button("剪藏（未读）") {
-                    app.selectClipScope(.clipUnread)
+                    app.selectModule(.clips)
+                    app.applyScope(.clip(.unread))
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
 
-                Button("今天的日记") {
-                    app.goToToday()
+                Button("孤儿笔记") {
+                    app.selectModule(.notes)
+                    app.applyScope(.note(.orphans))
                 }
-                .keyboardShortcut("j", modifiers: [.command, .shift])
-
-                Button("待办总览…") {
-                    app.openTodoOverview()
-                }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-
-                Button("插入承接（当前行之前）") {
-                    app.insertCarryAtCaret()
-                }
-                .disabled(app.current?.type != NoteTypes.journalID)
+                .keyboardShortcut("o", modifiers: [.command, .shift])
 
                 Button("日记模板") {
                     app.selectModule(.journal)
                     app.applyScope(.journal(.templates))
                 }
+
+                Divider()
+
+                Button(app.isListPaneVisible ? "隐藏列表栏" : "显示列表栏") {
+                    app.toggleListPane()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .option])
+            }
+            CommandGroup(after: .saveItem) {
+                Button("打开笔记…") {
+                    app.isShowingQuickOpen = true
+                }
+                .keyboardShortcut("p", modifiers: .command)
+
+                Button("插入承接（当前行之前）") {
+                    app.insertCarryAtCaret()
+                }
+                .disabled(app.current?.type != NoteTypes.journalID)
 
                 Divider()
 

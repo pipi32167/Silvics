@@ -39,7 +39,8 @@ final class EditorClipTests: XCTestCase {
         let app = AppState(repo: repo)
         XCTAssertTrue(app.clipSettings.markReadOnOpen)
 
-        app.selectClipScope(.clipAll)
+        app.selectModule(.clips)
+        app.applyScope(.clip(.all))
         app.select(clip.id)
 
         let stored = try repo.clip(id: clip.id)
@@ -52,7 +53,8 @@ final class EditorClipTests: XCTestCase {
         settings.markReadOnOpen = false
         let app = AppState(repo: repo, clipSettings: settings)
 
-        app.selectClipScope(.clipAll)
+        app.selectModule(.clips)
+        app.applyScope(.clip(.all))
         app.select(clip.id)
 
         let stored = try repo.clip(id: clip.id)
@@ -64,7 +66,8 @@ final class EditorClipTests: XCTestCase {
         let concept = try repo.create(title: "间隔重复对抗遗忘")
         let app = AppState(repo: repo)
 
-        app.selectClipScope(.clipAll)
+        app.selectModule(.clips)
+        app.applyScope(.clip(.all))
         // 切范围会按设置自动标已读；先改回未读，再验证「打开概念笔记」不会动剪藏状态。
         app.setClipStatus(id: clip.id, status: .unread)
         app.select(concept.id)
