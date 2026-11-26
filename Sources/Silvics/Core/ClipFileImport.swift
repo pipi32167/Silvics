@@ -1,10 +1,10 @@
 import Foundation
 
-/// 文件导入：md / txt / html。PDF 见 issue #30，后续版本做。
+/// 文件导入：md / txt / html / pdf。PDF 交给 `ClipPDFImport` 取文字层。
 enum ClipFileImport {
 
     static let maxBytes = 5 * 1024 * 1024
-    static let supportedExtensions: Set<String> = ["md", "markdown", "txt", "html", "htm"]
+    static let supportedExtensions: Set<String> = ["md", "markdown", "txt", "html", "htm", "pdf"]
 
     enum ImportError: LocalizedError, Equatable {
         case unsupported(String)
@@ -25,6 +25,18 @@ enum ClipFileImport {
         let ext = url.pathExtension.lowercased()
         guard supportedExtensions.contains(ext) else { throw ImportError.unsupported(ext) }
 
+        let fileName = url.deletingPathExtension().lastPathComponent
+
+        // PDF 不按 5 MB 拒，改成按页截断。上限见 `ClipPDFImport`。
+        if ext == "pdf" {
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            if let size = attributes?[.size] as? Int, size > ClipPDFImport.maxFileBytes {
+                throw ClipPDFImport.PDFError.tooLarge(size)
+            }
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            return try ClipPDFImport.draft(data: data, fileName: fileName)
+        }
+
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         if let size = attributes?[.size] as? Int, size > maxBytes {
             throw ImportError.tooLarge(size)
@@ -32,7 +44,6 @@ enum ClipFileImport {
         let data = try Data(contentsOf: url)
         guard data.count <= maxBytes else { throw ImportError.tooLarge(data.count) }
 
-        let fileName = url.deletingPathExtension().lastPathComponent
         var draft: ClipDraft
 
         if ext == "html" || ext == "htm" {

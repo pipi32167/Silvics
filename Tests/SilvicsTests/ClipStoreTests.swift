@@ -281,9 +281,9 @@ final class ClipFileImportTests: XCTestCase {
     }
 
     func testRejectsUnsupportedFile() throws {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("x.pdf")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("x.docx")
         XCTAssertThrowsError(try ClipFileImport.draft(from: file)) { error in
-            XCTAssertEqual(error as? ClipFileImport.ImportError, .unsupported("pdf"))
+            XCTAssertEqual(error as? ClipFileImport.ImportError, .unsupported("docx"))
         }
     }
 }

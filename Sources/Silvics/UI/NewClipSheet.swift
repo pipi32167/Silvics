@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 新建剪藏。三态：输入 → 抓取/抽取/整理 → 预览。
 ///
@@ -29,6 +30,8 @@ struct NewClipSheet: View {
     @State private var previewTags: [String] = []
     @State private var tagInput: String = ""
     @State private var isSaving = false
+    /// 扫描件、加密件改成粘贴后显示的提示。
+    @State private var fallbackNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -59,14 +62,28 @@ struct NewClipSheet: View {
                ClipURL.normalized(text) != nil, urlText.isEmpty {
                 urlText = text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
-        }
-    }
+        }    }
 
     #if DEBUG
-    /// 仅取证：把面板直接放在预览或错误态，用来截稳定图。
-    /// 走的是和真实流程一样的 `presentPreview` / 错误文案，不伪造界面。
+    /// 仅取证：把面板直接放在预览、错误或 PDF 流程里，用来截稳定图。
+    /// 走的是和真实流程一样的 `presentPreview` / `ingestFile` / 错误文案，不伪造界面。
     private func applyDebugStateIfRequested() {
         let env = ProcessInfo.processInfo.environment
+        // `SILVICS_CLIP_FILE=<路径>`：直接跑真实的文件导入，PDF 取证都走这条。
+        if let path = env["SILVICS_CLIP_FILE"], !path.isEmpty {
+            let url = URL(fileURLWithPath: path)
+            pickedFile = url
+            isPasteMode = false
+            Task { await ingestFile() }
+            return
+        }
+        // `SILVICS_CLIP_URL=<地址>`：走真实抓取，用来验证「网址直连 PDF」。
+        if let raw = env["SILVICS_CLIP_URL"], !raw.isEmpty {
+            urlText = raw
+            isPasteMode = false
+            Task { await ingestURL() }
+            return
+        }
         if let mode = env["SILVICS_CLIP_STATE"] {
             switch mode {
             case "preview":
@@ -84,6 +101,10 @@ struct NewClipSheet: View {
                 presentPreview(value)
             case "error":
                 errorText = ClipFetchError.http(403).errorDescription
+            case "pdf-scanned":
+                errorText = ClipPDFImport.PDFError.scanned(0).errorDescription
+            case "pdf-encrypted":
+                errorText = ClipPDFImport.PDFError.encrypted.errorDescription
             default:
                 break
             }
@@ -159,7 +180,7 @@ struct NewClipSheet: View {
                 .font(.system(size: 11))
                 .buttonStyle(.borderless)
 
-                Text("也可以把文件或网址拖到这里。支持 md、txt、html。")
+                Text("也可以把文件或网址拖到这里。支持 md、txt、html、pdf。")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
             }
@@ -169,8 +190,18 @@ struct NewClipSheet: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             }
+
+            if let fallbackNote {
+                Label(fallbackNote, systemImage: "text.cursor")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onDrop(of: [.fileURL, .url, .plainText], isTargeted: nil) { providers in
+            handleDrop(providers)
+        }
     }
 
     // MARK: - 进行中
@@ -324,6 +355,8 @@ struct NewClipSheet: View {
         }
         phase = .working("正在抓取网页…")
         errorText = nil
+        fallbackNote = nil
+        warnings = []
         let settings = app.clipSettings
         switch await ClipFetchService.fetch(raw: raw, timeout: settings.fetchTimeout) {
         case .failure(let error):
@@ -331,16 +364,17 @@ struct NewClipSheet: View {
             phase = .input
         case .success(let page):
             do {
-                phase = .working("正在抽取正文…")
-                var value = try ClipIngest.draft(fromPage: page)
+                phase = .working(page.isPDF ? "正在抽取 PDF 文字…" : "正在抽取正文…")
+                let outcome = try ClipIngest.outcome(fromPage: page)
+                var value = outcome.draft
+                warnings += outcome.warnings
                 if let warning = ClipIngest.shortBodyWarning(value.body) {
                     warnings.append(warning)
                 }
                 value = await polish(value, settings: settings)
                 presentPreview(value)
             } catch {
-                errorText = error.localizedDescription
-                phase = .input
+                handleImportFailure(error, fallbackTitle: ClipIngest.pdfFileName(for: page.url))
             }
         }
     }
@@ -363,16 +397,42 @@ struct NewClipSheet: View {
     private func ingestFile() async {
         guard let pickedFile else { return }
         do {
-            var value = try ClipIngest.draft(fromFile: pickedFile)
+            errorText = nil
+            fallbackNote = nil
+            warnings = []
+            phase = .working(pickedFile.pathExtension.lowercased() == "pdf"
+                ? "正在抽取 PDF 文字…"
+                : "正在整理…")
+            let outcome = try ClipIngest.outcome(fromFile: pickedFile)
+            var value = outcome.draft
+            warnings += outcome.warnings
             if let existing = app.existingClip(forBody: value.body) {
                 warnings.append("内容与已剪藏的《\(existing.title)》相同，仍然可以再存一份。")
             }
-            phase = .working("正在整理…")
             value = await polish(value, settings: app.clipSettings)
             presentPreview(value)
         } catch {
-            errorText = error.localizedDescription
-            phase = .input
+            handleImportFailure(
+                error,
+                fallbackTitle: pickedFile.deletingPathExtension().lastPathComponent
+            )
+        }
+    }
+
+    /// PDF 打不开、扫描件、加密件统一处理：能粘贴的就把人送到粘贴框。
+    private func handleImportFailure(_ error: Error, fallbackTitle: String) {
+        errorText = error.localizedDescription
+        phase = .input
+        guard let pdfError = error as? ClipPDFImport.PDFError else { return }
+        switch pdfError {
+        case .scanned, .encrypted:
+            isPasteMode = true
+            if pastedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                pastedTitle = fallbackTitle
+            }
+            fallbackNote = "已切到粘贴框。把 PDF 里的正文粘进来，后面的整理和保存不变。"
+        case .unreadable, .tooLarge, .tooLargeDownload, .empty:
+            break
         }
     }
 
@@ -460,13 +520,58 @@ struct NewClipSheet: View {
 
     private func pickFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .html, .init(filenameExtension: "md") ?? .plainText]
+        panel.allowedContentTypes = [.pdf, .plainText, .html, .init(filenameExtension: "md") ?? .plainText]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         pickedFile = url
         isPasteMode = false
         Task { await ingestFile() }
+    }
+
+    /// 拖进来：文件走文件流程，网址走网址流程，长文本直接进粘贴框。
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, !url.hasDirectoryPath else { return }
+                    Task { @MainActor in
+                        pickedFile = url
+                        isPasteMode = false
+                        await ingestFile()
+                    }
+                }
+                return true
+            }
+            if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in
+                        urlText = url.absoluteString
+                        isPasteMode = false
+                        await ingestURL()
+                    }
+                }
+                return true
+            }
+            if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+                _ = provider.loadObject(ofClass: NSString.self) { value, _ in
+                    guard let text = value as? String else { return }
+                    Task { @MainActor in
+                        if ClipURL.normalized(text) != nil {
+                            urlText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            isPasteMode = false
+                            await ingestURL()
+                        } else {
+                            pastedBody = text
+                            isPasteMode = true
+                        }
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     private func optional(_ value: String) -> String? {

@@ -82,6 +82,17 @@ enum OffscreenCapture {
     // MARK: - 入口
 
     /// 设了 `SILVICS_OFFSCREEN` 就走离屏通道。
+    /// `SILVICS_OFFSCREEN_SHEET=new-clip`：不渲染主界面，改成只渲染一张 sheet。
+    /// 屏幕锁着的时候窗口通道出不了图，sheet 也得靠这条路取证。
+    static var sheetName: String? {
+        guard let raw = ProcessInfo.processInfo.environment["SILVICS_OFFSCREEN_SHEET"],
+              !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return raw
+    }
+
+    /// sheet 画布。没给 `SILVICS_OFFSCREEN_SIZE` 时用它，别拿 1280x900 的白底糊一圈。
+    static let sheetSize = NSSize(width: 660, height: 640)
+
     static var isRequested: Bool { path != nil }
 
     /// 启动离屏通道。没有 `SILVICS_OFFSCREEN`、或已经启动过时什么都不做。
@@ -101,7 +112,11 @@ enum OffscreenCapture {
 
         let parsed = parseSize(ProcessInfo.processInfo.environment["SILVICS_OFFSCREEN_SIZE"])
         if let warning = parsed.warning { log("警告：\(warning)") }
-        log("画布 \(Int(parsed.size.width))x\(Int(parsed.size.height)) pt，按 \(pixelScale)× 像素渲染")
+        let canvas = sheetName == nil
+            ? parsed.size
+            : (ProcessInfo.processInfo.environment["SILVICS_OFFSCREEN_SIZE"] == nil ? sheetSize : parsed.size)
+        log("画布 \(Int(canvas.width))x\(Int(canvas.height)) pt，按 \(pixelScale)× 像素渲染"
+            + (sheetName.map { "，只渲染 sheet：\($0)" } ?? ""))
 
         // 离屏用自己的 AppState：它不经过 WindowGroup，拿不到 RootView 里那个。
         applyVaultIfRequested()
@@ -121,7 +136,7 @@ enum OffscreenCapture {
 
         // 给 SwiftUI 与防抖保存一拍时间，再搭视图。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            build(app: app, size: parsed.size, path: path)
+            build(app: app, size: canvas, path: path)
         }
     }
 
@@ -153,6 +168,9 @@ enum OffscreenCapture {
         if chosen.isJournal {
             app.selectModule(.journal)
             app.applyScope(.journal(.all))
+        } else if chosen.type == NoteTypes.clipID {
+            app.selectModule(.clips)
+            app.applyScope(.clip(.all))
         } else {
             app.selectModule(.notes)
             app.applyScope(.note(.all))
@@ -165,6 +183,7 @@ enum OffscreenCapture {
 
     @MainActor
     private static func build(app: AppState, size: NSSize, path: String) {
+        if sheetName != nil { return buildSheet(app: app, size: size, path: path) }
         let hosting = NSHostingView(rootView: RootView().environmentObject(app))
         hosting.frame = NSRect(origin: .zero, size: size)
         log("NSHostingView 已建：\(describe(hosting.frame))，window=\(hosting.window == nil ? "nil（离屏）" : "非空")")
@@ -177,6 +196,29 @@ enum OffscreenCapture {
             forceLayout(hosting, label: "第 2 轮")
             dumpTree(hosting)
             render(hosting, size: size, path: path)
+        }
+    }
+
+    /// 只渲染 sheet。`NewClipSheet` 自己带固定尺寸，画布比它大就居中留白。
+    @MainActor
+    private static func buildSheet(app: AppState, size: NSSize, path: String) {
+        // 不在窗口里时 `Color.primary` 解不出外观，字会画成白底白字。锁到浅色。
+        let root = ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            NewClipSheet().environmentObject(app)
+        }
+        let sheet = NSHostingView(rootView: root)
+        sheet.appearance = NSAppearance(named: .aqua)
+        sheet.frame = NSRect(origin: .zero, size: size)
+        log("sheet 离屏：\(sheetName ?? "?")，画布 \(describe(sheet.frame))")
+        forceLayout(sheet, label: "第 1 轮")
+
+        // 文件导入、抓取、整理都是异步的，要等面板自己走到预览态再拍。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            app.clearStatus()
+            forceLayout(sheet, label: "第 2 轮")
+            dumpTree(sheet)
+            render(sheet, size: size, path: path)
         }
     }
 
