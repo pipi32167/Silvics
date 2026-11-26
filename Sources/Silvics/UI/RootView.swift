@@ -109,6 +109,7 @@ struct RootView: View {
         DebugCapture.runConflictDrill(app)
         DebugCapture.seedConflictDemo(app)
         DebugCapture.applyCaretProbe()
+        DebugCapture.startCursorProbe()
         DebugCapture.schedule()
     }
     #endif

@@ -204,6 +204,21 @@ enum WikiScanner {
         return out
     }
 
+    /// 补全提交时要替换的区间。
+    ///
+    /// 输入 `[` 会自动补 `]`（issue #8），所以光标后面多半留着一对 `]]`。
+    /// 提交时把它一起吃掉，否则会写成 `[[标题]]]]`。
+    static func commitReplacementRange(_ range: NSRange, in text: String) -> NSRange {
+        let ns = text as NSString
+        var out = range
+        let after = range.location + range.length
+        guard after >= 0, after + 2 <= ns.length else { return out }
+        if ns.substring(with: NSRange(location: after, length: 2)) == "]]" {
+            out.length += 2
+        }
+        return out
+    }
+
     private static func isMasked(
         _ index: String.Index,
         _ masked: [Range<String.Index>],
