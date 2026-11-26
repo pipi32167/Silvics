@@ -52,7 +52,16 @@ enum ClipExtractor {
         let root = HTMLTree.parse(raw)
         HTMLTree.prune(root)
         let container = HTMLTree.chooseContainer(root)
-        article.body = postProcess(render(container))
+        var body = postProcess(render(container), title: article.title)
+        // JS 渲染的页面（如澎湃）静态 HTML 里没有正文，只剩页脚与许可证。
+        // 判定标准不是长度，而是「有没有像正文的段落」；没有就退回摘要。
+        if !looksLikeArticleBody(body),
+           let description = metaContent(in: raw, key: "description")
+            ?? metaContent(in: raw, key: "og:description"),
+           looksLikeArticleBody(description) || description.count >= 40 {
+            body = description
+        }
+        article.body = body
         return article
     }
 
@@ -126,7 +135,7 @@ enum ClipExtractor {
     }
 
     /// 行级收尾：解实体、去「[编辑]」、去社交/版权行、截掉相关阅读段、压空行。
-    static func postProcess(_ raw: String) -> String {
+    static func postProcess(_ raw: String, title: String = "") -> String {
         var text = decodeEntities(raw)
         text = text.replacingOccurrences(of: "\u{00a0}", with: " ")
 
@@ -140,10 +149,63 @@ enum ClipExtractor {
                     .trimmingCharacters(in: .whitespaces)
             }
 
-        // 只剩标点或分隔符的行没有信息。
+        // 只剩标点、分隔符或纯数字的行没有信息（投票数、点赞数常单独成行）。
         lines = lines.filter { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return !(trimmed.isEmpty == false && ["-", "·", "|", "—", "–"].contains(trimmed))
+            if ["-", "·", "|", "—", "–", "+1", "＋1"].contains(trimmed) { return false }
+            if trimmed.range(of: #"^[-•]?\s*[+＋]?\d+(\.\d+)?万?$"#, options: .regularExpression) != nil { return false }
+            // 网易等站点的编辑署名：`杨秋子_NX4687`。
+            if trimmed.range(of: #"^[^\s]+_N[A-Z0-9]{3,}$"#, options: .regularExpression) != nil { return false }
+            // 发布时间：`2026-11-24 09:33:15`、`2026年11月24日 09:33 来源：…`。
+            if trimmed.range(of: #"^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(:\d{2})?$"#, options: .regularExpression) != nil { return false }
+            if trimmed.range(of: #"^\d{4}年\d{1,2}月\d{1,2}日.*来源"#, options: .regularExpression) != nil { return false }
+            if trimmed.range(of: #"^\d{2}:\d{2}(:\d{2})?$"#, options: .regularExpression) != nil { return false }
+            // 面包屑：「国内新闻>正文」这类短行。
+            if trimmed.contains(">"), trimmed.count < 40, !trimmed.hasPrefix(">"), !trimmed.hasPrefix("#") {
+                return false
+            }
+            return true
+        }
+
+        // 站点框架的固定行：频道名、正文标签、客户端引导。
+        let uiLines: Set<String> = [
+            "新闻中心", "正文", "首页", "查看更多", "更多", "反馈", "打开APP", "下载APP",
+            "客户端", "相关新闻", "热点推荐", "返回顶部", "大字体", "小字体", "换一批",
+        ]
+        lines = lines.filter { line in
+            let bare = line.trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "#> -*\t"))
+            return !uiLines.contains(bare)
+        }
+
+        // 制作人员、来源、编辑署名：短行里出现这些前缀就删。
+        // 账号名常与「发布于…官方账号」重复：这里只记住名字，等标题去重后再删，
+        // 否则正文开头的重复标题会顶在账号名前面，判断不到。
+        var leadingAccountName: String?
+        if let first = lines.firstIndex(where: { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+        }) {
+            let name = lines[first].trimmingCharacters(in: .whitespaces)
+            if name.count <= 20 {
+                let window = lines[first...].prefix(4)
+                if window.dropFirst().contains(where: { $0.contains("发布于") && $0.contains(name) }) {
+                    leadingAccountName = name
+                }
+            }
+        }
+
+        let bylinePrefixes = [
+            "策划：", "统筹：", "执笔：", "审校：", "视觉：", "出品：", "监制：",
+            "编辑：", "责编：", "责任编辑：", "本文来源：", "来源：", "作者：",
+            "记者：", "校对：", "原标题：", "Notice:", "问AI", "【编辑", "（编辑",
+        ]
+        lines = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("|") || trimmed.hasPrefix("｜") { return false }
+            if trimmed.contains("发布于"), trimmed.contains("官方账号"), trimmed.count < 60 { return false }
+            guard trimmed.count < 60 else { return true }
+            return !bylinePrefixes.contains { trimmed.hasPrefix($0) }
         }
 
         // 站点自带的分享、关注、版权、推荐语。只在短行里删，避免误伤正文句子。
@@ -153,7 +215,9 @@ enum ClipExtractor {
             "公众号", "官方店铺", "位派友", "已充电", "利益相关声明", "Matrix 首页推荐",
             "文章代表作者个人观点", "未经授权", "转载请注明", "点击关注", "订阅我们",
             "Matrix 是少数派的写作社区", "上一页", "下一页", "上一篇", "下一篇",
-            "上一节", "下一节", "返回顶部",
+            "上一节", "下一节", "返回顶部", "特别声明：", "免责声明：", "版权声明：",
+            "增值电信业务经营许可证", "互联网新闻信息服务许可证", "信息网络传播视听节目许可证",
+            "© 2014-", "上海东方报业", "ICP备", "公网安备",
         ]
         // 明确的站点声明/推广语，长短都删；其余噪声只删短行，避免误伤正文。
         let strongNoisePhrases = [
@@ -166,6 +230,33 @@ enum ClipExtractor {
             if strongNoisePhrases.contains(where: { trimmed.contains($0) }) { return false }
             guard trimmed.count < 80 else { return true }
             return !noisePhrases.contains { trimmed.contains($0) }
+        }
+
+        // 正文里重复一遍标题时删掉第一处（站点常见 h1 + 正文标题两份）。
+        if !title.isEmpty {
+            let normalizedTitle = title
+                .components(separatedBy: " - ").first?
+                .trimmingCharacters(in: .whitespaces) ?? title
+            if let firstHeading = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("#")
+            }) {
+                let bare = lines[firstHeading]
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "# \t"))
+                if bare == normalizedTitle || normalizedTitle.hasPrefix(bare) && bare.count >= 8 {
+                    lines.remove(at: firstHeading)
+                }
+            }
+        }
+
+        // 正文开头可能还有标题行；在前三个非空行里找账号名，找到就删。
+        if let name = leadingAccountName {
+            let candidates = lines.indices
+                .filter { !lines[$0].trimmingCharacters(in: .whitespaces).isEmpty }
+                .prefix(3)
+            if let hit = candidates.first(where: { lines[$0].trimmingCharacters(in: .whitespaces) == name }) {
+                lines.remove(at: hit)
+            }
         }
 
         // 开头是站点推荐语、编者按或声明时，跳到下一个标题，别把推广段落当正文。
@@ -187,15 +278,43 @@ enum ClipExtractor {
             "猜你喜欢", "你可能还喜欢", "更多阅读", "本文标签", "版权声明",
             "免责声明", "特别声明", "本文来自", "往期推荐",
         ]
+        let stopPrefixes = [
+            "更多精彩内容请进入", "【编辑", "（编辑", "专题：", "国内新闻精选",
+            "TA的文章", "相关专题", "热门推荐",
+        ]
         for (index, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let bare = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "#> -*\t"))
+            if stopPrefixes.contains(where: { bare.hasPrefix($0) }) {
+                lines = Array(lines[0..<index])
+                break
+            }
             guard trimmed.hasPrefix("#") || bare.count <= 12 else { continue }
             if stopHeadings.contains(where: { bare == $0 || bare.hasPrefix($0 + " ") || bare.hasPrefix($0 + "：") }) {
                 lines = Array(lines[0..<index])
                 break
             }
         }
+
+        // 末尾连续的无标点短行，多是站点标签或导航（维基的「概念 / 学习软件 / 践行和研究者」）。
+        // 短行之间夹着空行也算连续。
+        var end = lines.count
+        while end > 0, lines[end - 1].trimmingCharacters(in: .whitespaces).isEmpty { end -= 1 }
+        var start = end
+        var navCount = 0
+        var cursor = end - 1
+        while cursor >= 0 {
+            let trimmed = lines[cursor].trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { cursor -= 1; continue }
+            if isTrailingNavLine(lines[cursor]) {
+                navCount += 1
+                start = cursor
+                cursor -= 1
+                continue
+            }
+            break
+        }
+        if navCount >= 2 { lines.removeSubrange(start..<end) }
 
         var out: [String] = []
         var blankRun = 0
@@ -209,6 +328,26 @@ enum ClipExtractor {
             out.append(line)
         }
         return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 末尾导航行的判定：短、无句末标点、不是列表/标题/引用。
+    private static func isTrailingNavLine(_ raw: String) -> Bool {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty, line.count <= 12 else { return false }
+        if line.hasPrefix("#") || line.hasPrefix("-") || line.hasPrefix(">") || line.hasPrefix("|") { return false }
+        if line.hasPrefix("http") { return false }
+        let terminal = CharacterSet(charactersIn: "。！？.!?：:；;，,")
+        if line.unicodeScalars.last.map({ terminal.contains($0) }) ?? false { return false }
+        return true
+    }
+
+    /// 正文至少要有几段像人写的长句；全是页脚、许可证、导航的不算。
+    static func looksLikeArticleBody(_ text: String) -> Bool {
+        let bodyChars = text
+            .components(separatedBy: "\n")
+            .filter { $0.count >= 40 }
+            .reduce(0) { $0 + $1.count }
+        return bodyChars >= 100
     }
 
     // MARK: - 元信息
