@@ -122,16 +122,37 @@ final class EditorTextView: NSTextView {
     private var todoCheckboxes: [Int: TodoCheckbox] = [:]
     private var isLayingOutCheckboxes = false
     private var scrollObserver: NSObjectProtocol?
-    /// 上一次看到的 ⌘ 状态。只在变化时重算指针形状。
-    private var lastCommandFlag = NSEvent.modifierFlags.contains(.command)
+    /// ⌘ 变化的监听。挂在本进程的事件流上，不依赖第一响应者（issue #8）。
+    private var modifierMonitor: Any?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         installScrollObserver()
+        installModifierMonitor()
+        // 新视图进窗口时按当前 ⌘ 状态把 cursor rect 注册一次。
+        window?.invalidateCursorRects(for: self)
     }
 
     deinit {
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        if let modifierMonitor { NSEvent.removeMonitor(modifierMonitor) }
+    }
+
+    /// 监听 ⌘ 的按下与松开。
+    ///
+    /// 为什么不用 `flagsChanged`：它只投给第一响应者。换笔记时
+    /// `NoteEditorView(...).id(note.id)` 会把整块视图换新，新视图不一定拿到焦点，
+    /// 于是「悬停在引用上按 ⌘」就没有反应。窗口级监听不受焦点影响。
+    private func installModifierMonitor() {
+        if let modifierMonitor {
+            NSEvent.removeMonitor(modifierMonitor)
+            self.modifierMonitor = nil
+        }
+        guard window != nil else { return }
+        modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.refreshCursorForModifiers()
+            return event
+        }
     }
 
     /// 滚动时重新定位方框。`NSTextView` 是滚动视图的 documentView，
@@ -391,29 +412,45 @@ final class EditorTextView: NSTextView {
     /// 按住 ⌘ 时，落在引用上的指针变成手型，提示「可跳转」。
     override func resetCursorRects() {
         super.resetCursorRects()
-        guard NSEvent.modifierFlags.contains(.command) else { return }
+        guard currentCursorState().registersHandRects else { return }
         for rect in wikiLinkCursorRects() {
             addCursorRect(rect, cursor: .pointingHand)
         }
     }
 
+    /// 有焦点时 `flagsChanged` 也会到（监听之外的兜底）。
     override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
-        refreshCursorForCommandKey()
+        #if DEBUG
+        debugFlagsChangedCount += 1
+        #endif
+        refreshCursorForModifiers()
     }
 
     /// ⌘ 只是按下 / 松开、鼠标不动时，AppKit 不会重算光标矩形，这里手动推一次。
-    private func refreshCursorForCommandKey() {
+    ///
+    /// 每次都按当前状态算，不看历史，因此视图重建、刚进窗口、焦点在别处都不会漏。
+    func refreshCursorForModifiers() {
         guard let window else { return }
-        let command = NSEvent.modifierFlags.contains(.command)
-        guard command != lastCommandFlag else { return }
-        lastCommandFlag = command
+        let state = currentCursorState()
         window.invalidateCursorRects(for: self)
+        if let cursor = state.cursor { cursor.set() }
+    }
 
-        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        guard bounds.contains(point) else { return }
-        guard wikiTarget(at: point) != nil else { return }
-        (command ? NSCursor.pointingHand : NSCursor.iBeam).set()
+    /// 当前指针形状的两个输入：⌘ 状态与指针位置。
+    ///
+    /// 两个输入都能被测试与取证钩子替换（`debugModifierOverride` / `debugPointerOverride`），
+    /// 这样不必真的按住键盘也能验证判定。
+    func currentCursorState() -> WikiCursorState {
+        let flags = debugModifierOverride ?? NSEvent.modifierFlags
+        let point = debugPointerOverride ?? pointerLocation()
+        let overLink = bounds.contains(point) && wikiTarget(at: point) != nil
+        return WikiCursorState(commandHeld: flags.contains(.command), overLink: overLink)
+    }
+
+    private func pointerLocation() -> NSPoint {
+        guard let window else { return NSPoint(x: -1, y: -1) }
+        return convert(window.mouseLocationOutsideOfEventStream, from: nil)
     }
 
     /// 每个引用区间按视觉行切开的矩形（视图坐标）。
@@ -443,7 +480,20 @@ final class EditorTextView: NSTextView {
         return out
     }
 
+    /// 是否已挂上 ⌘ 监听。换笔记重建视图后必须重新挂上。
+    var isObservingModifierChanges: Bool { modifierMonitor != nil }
+
+    /// 取证 / 测试用：替换系统 ⌘ 状态，不必真的按键。
+    ///
+    /// 平时是 `nil`，判定走 `NSEvent.modifierFlags`。测试要断言的正是「判定只看当前输入」。
+    var debugModifierOverride: NSEvent.ModifierFlags?
+    /// 取证 / 测试用：替换指针位置。
+    var debugPointerOverride: NSPoint?
+
     #if DEBUG
+    /// 收到了多少次 `flagsChanged`。只用于取证。
+    var debugFlagsChangedCount = 0
+
     /// 仅取证：报告「鼠标是否停在引用上、当前指针是不是手型」。
     ///
     /// 指针形状截不进图（`screencapture -C` 在本机不画光标），只能读运行时的真值。
@@ -460,7 +510,9 @@ final class EditorTextView: NSTextView {
             cursor = "other"
         }
         let hits = wikiHitRects.map { "\($0.0.location)+\($0.0.length)" }.joined(separator: ",")
+        let isFirstResponder = window.firstResponder === self
         return "cmd=\(NSEvent.modifierFlags.contains(.command)) overLink=\(overLink)"
+            + " fr=\(isFirstResponder) flags=\(debugFlagsChangedCount)"
             + " cursor=\(cursor) rects=\(wikiLinkCursorRects().count)"
             + " point=\(Int(point.x)),\(Int(point.y)) bounds=\(Int(bounds.width))x\(Int(bounds.height))"
             + " hits=\(hits)"

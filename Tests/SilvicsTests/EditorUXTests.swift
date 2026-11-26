@@ -196,6 +196,80 @@ final class EditorUXTests: XCTestCase {
         XCTAssertTrue(textView.wikiLinkCursorRects().isEmpty)
     }
 
+    func testCursorStateOnlyDependsOnCurrentInputs() {
+        // 判定表：只有「按住 ⌘ + 落在引用上」才是手型
+        XCTAssertEqual(WikiCursorState(commandHeld: true, overLink: true).cursor, .pointingHand)
+        XCTAssertEqual(WikiCursorState(commandHeld: false, overLink: true).cursor, .iBeam)
+        XCTAssertNil(WikiCursorState(commandHeld: true, overLink: false).cursor)
+        XCTAssertNil(WikiCursorState(commandHeld: false, overLink: false).cursor)
+        XCTAssertTrue(WikiCursorState(commandHeld: true, overLink: false).registersHandRects,
+                      "⌘ 按下时整篇的引用区都要注册手型，指针移到哪条都对")
+        XCTAssertFalse(WikiCursorState(commandHeld: false, overLink: true).registersHandRects)
+    }
+
+    /// 换笔记会整块重建编辑视图（`.id(note.id)`）。视图在 ⌘ 按住时创建，
+    /// 之后第一次按下 / 松开 ⌘ 也必须生效 —— 旧实现把它缓存成初值，判成「没变化」跳过了。
+    func testCursorRefreshesEvenWhenViewWasBuiltWhileCommandHeld() {
+        let text = "看 [[另一篇]] 的结论"
+        let (textView, _) = makeTextView(text)
+        guard let link = WikiScanner.scan(text).first else { return XCTFail("没扫到引用") }
+        textView.wikiHitRects = [(link.nsRange(in: text), link.target)]
+        textView.layoutSubtreeIfNeeded()
+
+        // 指针停在引用上（取手型矩形的中心）
+        guard let rect = textView.wikiLinkCursorRects().first else { return XCTFail("没有手型矩形") }
+        textView.debugPointerOverride = NSPoint(x: rect.midX, y: rect.midY)
+
+        // 重建后按住的 ⌘：必须立刻是手型
+        textView.debugModifierOverride = [.command]
+        textView.refreshCursorForModifiers()
+        XCTAssertTrue(NSCursor.current === NSCursor.pointingHand,
+                      "⌘ 按住且在引用上，指针应为手型")
+
+        // 松开 ⌘：回到文本指针
+        textView.debugModifierOverride = []
+        textView.refreshCursorForModifiers()
+        XCTAssertTrue(NSCursor.current === NSCursor.iBeam)
+
+        // 再按下 ⌘：仍然要变手型（这一步旧实现会漏）
+        textView.debugModifierOverride = [.command]
+        textView.refreshCursorForModifiers()
+        XCTAssertTrue(NSCursor.current === NSCursor.pointingHand,
+                      "第二次按下 ⌘ 仍应变手型")
+
+        textView.debugModifierOverride = nil
+        textView.debugPointerOverride = nil
+    }
+
+    /// 指针不在引用上时，按 ⌘ 不能变成手型。
+    func testCursorIgnoresCommandWhenPointerIsNotOnLink() {
+        let text = "看 [[另一篇]] 的结论"
+        let (textView, _) = makeTextView(text)
+        guard let link = WikiScanner.scan(text).first else { return XCTFail("没扫到引用") }
+        textView.wikiHitRects = [(link.nsRange(in: text), link.target)]
+        textView.layoutSubtreeIfNeeded()
+
+        textView.debugModifierOverride = [.command]
+        textView.debugPointerOverride = NSPoint(x: 1, y: 1) // 行首，不在引用上
+        textView.refreshCursorForModifiers()
+        XCTAssertFalse(NSCursor.current === NSCursor.pointingHand, "引用之外不该出现手型")
+
+        textView.debugModifierOverride = nil
+        textView.debugPointerOverride = nil
+    }
+
+    /// 换笔记重建视图后，新视图自己也要能收 ⌘ 变化（不依赖第一响应者）。
+    func testRebuiltEditorInstallsModifierMonitor() {
+        let (textView, window) = makeTextView("看 [[另一篇]]")
+        XCTAssertNotNil(textView.window)
+        // 视图进窗口时装上窗口级监听；这里用「另一个视图当第一响应者」模拟失焦
+        let other = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        window.contentView?.addSubview(other)
+        window.makeFirstResponder(other)
+        XCTAssertFalse(window.firstResponder === textView, "前提：编辑视图不在焦点上")
+        XCTAssertTrue(textView.isObservingModifierChanges, "失焦也要监听 ⌘，否则悬停按 ⌘ 没反应")
+    }
+
     func testCursorRectsFollowTextChanges() {
         let text = "看 [[另一篇]]"
         let (textView, _) = makeTextView(text)
