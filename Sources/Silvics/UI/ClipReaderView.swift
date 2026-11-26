@@ -77,6 +77,9 @@ struct ClipReaderView: View {
         NoteEditorView(
             initialText: note.body,
             text: isEditing ? draftBody : note.body,
+            // 剪藏正文只靠 `updatedAt` 当外部改写的版本号：库里改了正文，读视图跟着重画。
+            textRevision: Int(truncatingIfNeeded: note.updatedAt),
+            liveText: { isEditing ? draftBody : note.body },
             resolvedKeys: app.resolvedKeys,
             mentions: [],
             appearance: app.appearance,

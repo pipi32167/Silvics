@@ -699,6 +699,11 @@ struct NoteEditorView: NSViewRepresentable {
     let initialText: String
     /// 当前正文。外部改写（批量转换、改名、撤销）后要同步进来。
     let text: String
+    /// 正文被外部改写的次数。只有它变了才把 `text` 同步进视图（issue #34）。
+    var textRevision: Int = 0
+    /// 取正文的实时读值。SwiftUI 传进来的 `text` 可能是上一轮渲染的快照，
+    /// 真正要写进视图时以这个为准。不传则退回 `text`。
+    var liveText: (() -> String)?
     /// 已解析的引用目标键集合。决定引用是实线还是虚线。
     let resolvedKeys: Set<String>
     /// 当前笔记的未链接提及。画点状下划线，`⌘⇧K` 转换。
@@ -724,7 +729,18 @@ struct NoteEditorView: NSViewRepresentable {
         Coordinator(self)
     }
 
+    /// 当前要写进视图的正文。`liveText` 优先，避免陈旧快照。
+    var currentText: String { liveText?() ?? text }
+
+    #if DEBUG
+    /// 仅 DEBUG：这一段建过几个视图。取证脚本用它证明「敲字不再重建视图」。
+    nonisolated(unsafe) static var makeCount = 0
+    #endif
+
     func makeNSView(context: Context) -> NSScrollView {
+        #if DEBUG
+        Self.makeCount += 1
+        #endif
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -772,7 +788,7 @@ struct NoteEditorView: NSViewRepresentable {
         textView.insertionPointColor = .labelColor
         textView.font = Theme.bodyFont
         textView.typingAttributes = Theme.typingAttributes()
-        textView.string = initialText
+        textView.string = currentText
         context.coordinator.wire(textView: textView)
         textView.onOpenWikiLink = { [weak coordinator = context.coordinator] title in
             coordinator?.handleOpenLink(title)
@@ -800,9 +816,12 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? EditorTextView else { return }
 
-        // 外部改过正文（批量转换、改名、启用别名、撤销）时同步进来。
-        if textView.string != text {
-            context.coordinator.applyExternalText(text, to: textView)
+        // 外部改过正文（批量转换、改名、启用别名、撤销）才同步。
+        //
+        // 不能用「视图 != 传入值」判：SwiftUI 会把上一轮渲染算出的旧快照再跑一次 updateNSView，
+        // 那时视图里已经是用户刚敲的字，按陈旧快照重设就把这段吞了（issue #34）。
+        // 只认 `bodyRevision`：用户敲字不动它，外部改写才加一。
+        if context.coordinator.syncExternalText(context.coordinator.parent.currentText, revision: textRevision) {
         } else if context.coordinator.lastResolvedKeys != resolvedKeys
                     || context.coordinator.lastMentions != mentions
                     || context.coordinator.lastAppearance != appearance {
@@ -873,12 +892,19 @@ struct NoteEditorView: NSViewRepresentable {
         fileprivate var lastMentions: [MentionDecoration] = []
         fileprivate var lastAppearance = AppearanceSettings()
 
+        /// 已经接受过的外部正文版本号。只增不减。
+        private(set) var appliedRevision: Int = 0
+        /// 组合态里拒不掉的正文，等组合结束再写。
+        private var pendingExternal: (text: String, revision: Int)?
+        private var pendingRetries = 0
+
         init(_ parent: NoteEditorView) {
             self.parent = parent
             self.lastPublishedText = parent.initialText
             self.lastResolvedKeys = parent.resolvedKeys
             self.lastMentions = parent.mentions
             self.lastAppearance = parent.appearance
+            self.appliedRevision = parent.textRevision
         }
 
         /// 外部改了正文（DB 侧改写），同步记录避免被当成用户输入再存一次。
@@ -905,6 +931,73 @@ struct NoteEditorView: NSViewRepresentable {
             isApplyingUndo = false
             didReceiveExternalText(text)
             restyle(force: true)
+        }
+
+        // MARK: 外部正文同步（issue #34）
+
+        /// 只在「外部改写版本号」变化时把正文写进视图。
+        ///
+        /// 不能用「视图 != 传入值」判：SwiftUI 会把上一轮渲染算出的旧快照再跑一次
+        /// `updateNSView`，那时视图里已是用户刚上屏的字，按旧快照重设就把它冲掉。
+        ///
+        /// 返回 true 表示这次拿到了外部正文（写了，或已在组合态里排队）。
+        @discardableResult
+        func syncExternalText(_ text: String, revision: Int) -> Bool {
+            guard revision != appliedRevision else { return false }
+            guard let textView else { return false }
+
+            // 组合态：先记下，等输入法上屏后再写。组合期重设正文会清掉 marked range，
+            // 候选窗被顶掉，正在敲的拼音和后续上屏一起丢。
+            if textView.hasMarkedText() {
+                pendingExternal = (text, revision)
+                pendingRetries = 0
+                schedulePendingExternal()
+                return true
+            }
+
+            appliedRevision = revision
+            pendingExternal = nil
+            // 内容一样就别动：`applyExternalText` 会清撤销栈，白白丢掉 ⌘Z（issue #35）。
+            guard textView.string != text else {
+                didReceiveExternalText(text)
+                return true
+            }
+            applyExternalText(text, to: textView)
+            return true
+        }
+
+        /// 组合结束后把排队的外部正文落下。
+        ///
+        /// 只在用户没有继续敲字时落：组合上屏会先过一次 `textDidChange`，
+        /// 那里发现正文已经变了，就把这次外部写入作废（用户输入优先）。
+        private func commitPendingExternal(_ pending: (text: String, revision: Int)) {
+            guard let textView else { return }
+            appliedRevision = pending.revision
+            pendingExternal = nil
+            guard textView.string != pending.text else {
+                didReceiveExternalText(pending.text)
+                return
+            }
+            applyExternalText(pending.text, to: textView)
+        }
+
+        /// 20 ms 一轮，最多试 5 秒；组合一直不结束就丢掉，宁可不刷新也不打断输入。
+        private func schedulePendingExternal() {
+            guard pendingExternal != nil else { return }
+            guard pendingRetries < 250 else {
+                pendingExternal = nil
+                return
+            }
+            pendingRetries += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+                guard let self, let pending = self.pendingExternal else { return }
+                guard let textView = self.textView else { return }
+                if textView.hasMarkedText() {
+                    self.schedulePendingExternal()
+                    return
+                }
+                self.commitPendingExternal(pending)
+            }
         }
 
         /// 视图被销毁（切换笔记、窗口关闭）时收掉浮层，断开代理。
@@ -1466,6 +1559,11 @@ struct NoteEditorView: NSViewRepresentable {
             guard parent.editable else { return }
             guard let textView = notification.object as? EditorTextView else { return }
             let text = textView.string
+            // 用户在排队的外部正文落下之前就自己敲了字：以视图为准，丢掉那次外部写入。
+            if let pending = pendingExternal, text != pending.text {
+                pendingExternal = nil
+                appliedRevision = pending.revision
+            }
             restyle(force: false)
             parent.onChange(text)
             refreshCompletionIfNeeded()

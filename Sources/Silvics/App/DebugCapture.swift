@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import Carbon
 import SwiftUI
 
 /// 仅 DEBUG：把窗口自己画成 PNG，用于验收取证。
@@ -494,6 +495,8 @@ enum DebugCapture {
         case "tables": runTableSelfTest()
         case "link-jump": runLinkJumpSelfTest(app)
         case "cursor-unfocused": runUnfocusedCursorSelfTest(app)
+        case "ime": runIMESelfTest(app)
+        case "watch": startIMEWatch(app)
         case "undo": runUndoSelfTest(app)
         case "undo-same": runUndoSameNoteSelfTest(app)
         case "undo-switch": runUndoSwitchSelfTest(app)
@@ -1233,5 +1236,255 @@ enum DebugCapture {
             }
         }
     }
+
+    /// `SILVICS_SELFTEST=ime`：模拟系统中文输入法连敲几个词，逐步打印各层正文。
+    ///
+    /// 输入法在 AppKit 层只做两件事：`setMarkedText`（组合态）与 `insertText`（上屏）。
+    /// 按这个接口驱动真实的 `EditorTextView`，就会走 `textDidChange` → 重排样式 →
+    /// 防抖保存 → SwiftUI 回灌这一整条链路，和真人敲拼音同路。
+    ///
+    /// 步间隔默认 0.8 s，比 500 ms 的防抖保存宽，好让保存与回灌落在两步之间。
+    /// `SILVICS_IME_GAP` 可改间隔（秒）。
+    @MainActor
+    private static func runIMESelfTest(_ app: AppState, after delay: TimeInterval? = nil) {
+        let env = ProcessInfo.processInfo.environment
+        let delay = delay ?? Double(env["SILVICS_IME_DELAY"] ?? "") ?? 2.5
+        let gap = Double(env["SILVICS_IME_GAP"] ?? "") ?? 0.8
+        let words = ["你好", "世界", "输入法", "吞字", "复现"]
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            app.openTitle("中文输入是笔记应用的关键路径")
+            var waited = 0
+            while (app.current == nil || app.current?.type == NoteTypes.clipID) && waited < 40 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findEditorTextView(in: window.contentView!) else {
+                print("[ime] 找不到编辑区 标题=\(app.current?.title ?? "nil") 笔记数=\(app.summaries.count)")
+                return
+            }
+            window.makeFirstResponder(textView)
+            let base = textView.string
+            textView.setSelectedRange(NSRange(location: (base as NSString).length, length: 0))
+            print("[ime] 起始 长度=\((base as NSString).length) 尾部=\(tail(base))"
+                + " 标题=\(app.current?.title ?? "nil") 建视图次数=\(NoteEditorView.makeCount)")
+
+            var expectation = base
+            var checks: [(String, Bool)] = []
+
+            for (index, word) in words.enumerated() {
+                // 每步取当前树上的编辑区，别拿到已被替换掉的旧视图。
+                let live = findEditorTextView(in: window.contentView!) ?? textView
+                if live.window?.firstResponder !== live { window.makeFirstResponder(live) }
+                let pinyin = "nihao"
+                live.setMarkedText(
+                    pinyin,
+                    selectedRange: NSRange(location: (pinyin as NSString).length, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                let markedTail = tail(live.string)
+                let marked = live.hasMarkedText()
+                live.insertText(word, replacementRange: NSRange(location: NSNotFound, length: 0))
+
+                expectation += word
+                let viewNow = live.string
+                let appBody = app.current?.body ?? ""
+                let ok = viewNow == expectation && appBody == expectation
+                checks.append(("第 \(index + 1) 步 上屏「\(word)」", ok))
+                print("[ime] 第 \(index + 1) 步 组合态 marked=\(marked) 尾部=\(markedTail)")
+                print("[ime] 第 \(index + 1) 步 上屏「\(word)」 视图长度=\((viewNow as NSString).length)"
+                    + " 视图一致=\(viewNow == expectation) 应用长度=\((appBody as NSString).length)"
+                    + " 应用一致=\(appBody == expectation) 光标=\(live.selectedRange().location)"
+                    + " 尾部=\(tail(viewNow))")
+                try? await Task.sleep(nanoseconds: UInt64(gap * 1_000_000_000))
+            }
+
+            // 第 6 步：保存触发的重渲染与新输入落在同一轮 runloop。
+            //
+            // `flushPendingSave` 会发布一批状态（列表、引用、提及），SwiftUI 因此排一轮渲染；
+            // 那轮渲染手里的正文是「敲字之前」的快照。用户恰在这时又敲了一个词，
+            // 旧实现等渲染落地就把新词按快照写回，于是吞字。
+            do {
+                let live = findEditorTextView(in: window.contentView!) ?? textView
+                app.flushPendingSave()
+                live.insertText("吞字", replacementRange: NSRange(location: NSNotFound, length: 0))
+                expectation += "吞字"
+                try? await Task.sleep(nanoseconds: UInt64(max(gap, 0.8) * 1_000_000_000))
+                let after = (findEditorTextView(in: window.contentView!) ?? live).string
+                checks.append(("第 6 步 保存后同一轮敲字", after == expectation))
+                print("[ime] 第 6 步 保存后同一轮敲字 长度=\((after as NSString).length)"
+                    + " 保住=\(after == expectation) 尾部=\(tail(after))")
+            }
+
+            // 第 7 步：组合态里连按两键，中间夹着 SwiftUI 的一轮渲染。
+            //
+            // 输入法每次按键都 `setMarkedText` → `textDidChange` → 发布；
+            // 上一轮渲染手里的正文比视图少一个字母，若按它重设整篇，
+            // 组合就被截断（`hasMarkedText` 变 false，候选窗消失），随后上屏少字。
+            do {
+                let live = findEditorTextView(in: window.contentView!) ?? textView
+                live.setMarkedText(
+                    "nihao",
+                    selectedRange: NSRange(location: 5, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                live.setMarkedText(
+                    "nihaoa",
+                    selectedRange: NSRange(location: 6, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                print("[ime] 第 7 步 连按两键后立刻 marked=\(live.hasMarkedText()) 尾部=\(tail(live.string))")
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                let settled = findEditorTextView(in: window.contentView!) ?? live
+                let marked = settled.hasMarkedText()
+                checks.append(("第 7 步 组合串不被截断", marked))
+                print("[ime] 第 7 步 渲染落地后 marked=\(marked)"
+                    + " 尾部=\(tail(settled.string)) 组合串=\(marked ? "在" : "被截断")")
+                settled.unmarkText()
+                expectation += "nihaoa"
+                try? await Task.sleep(nanoseconds: UInt64(max(gap, 0.5) * 1_000_000_000))
+            }
+
+            // 第 8 步：组合态里正文被外部改写（同步导入、改名、批量转换都会这样）。
+            //
+            // 旧实现在这一下把整篇重设成库里的正文：拼音消失、`hasMarkedText` 变 false，
+            // 输入法候选窗被顶掉，后续上屏就少字。新实现把外部正文排在组合结束之后。
+            do {
+                let live = findEditorTextView(in: window.contentView!) ?? textView
+                live.setMarkedText(
+                    "nihao",
+                    selectedRange: NSRange(location: 5, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                let composing = live.hasMarkedText()
+                if let id = app.current?.id { app.loadNote(id: id) }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                let settled = findEditorTextView(in: window.contentView!) ?? live
+                let marked = settled.hasMarkedText()
+                checks.append(("第 8 步 组合期外部改写不打断组合", composing && marked))
+                print("[ime] 第 8 步 组合期外部改写 改写前组合=\(composing)"
+                    + " 改写后组合=\(marked) 尾部=\(tail(settled.string))")
+                settled.unmarkText()
+                expectation += "nihao"
+                try? await Task.sleep(nanoseconds: UInt64(max(gap, 0.5) * 1_000_000_000))
+            }
+
+            // 等最后一轮防抖保存与回灌走完，再判最终结果。
+            try? await Task.sleep(nanoseconds: UInt64(max(gap, 0.8) * 1_000_000_000))
+            let live = findEditorTextView(in: window.contentView!) ?? textView
+            let viewNow = live.string
+            let appBody = app.current?.body ?? ""
+            let failed = checks.filter { !$0.1 }.map(\.0)
+            print("[ime] 判据 " + checks.map { "\($0.0)=\($0.1 ? "通过" : "失败")" }.joined(separator: " / "))
+            print("[ime] 结论 \(failed.isEmpty ? "全部通过" : "有失败")"
+                + " 期望长度=\((expectation as NSString).length)"
+                + " 视图长度=\((viewNow as NSString).length)"
+                + " 应用长度=\((appBody as NSString).length)"
+                + " 文本一致=\(viewNow == expectation && appBody == expectation)"
+                + " 建视图次数=\(NoteEditorView.makeCount)")
+            if let diff = firstDiff(expectation, viewNow) {
+                print("[ime] 视图首个差异 期望=\(tailDiff(expectation, diff)) 实际=\(tailDiff(viewNow, diff))")
+            }
+            if let diff = firstDiff(expectation, appBody) {
+                print("[ime] 应用首个差异 期望=\(tailDiff(expectation, diff)) 实际=\(tailDiff(appBody, diff))")
+            }
+            print("[ime] 末段 视图=\(tail(viewNow)) 应用=\(tail(appBody))")
+            // 取证：滚到末尾再截图，图上是「最后敲的字在不在」的直接证据。
+            let caretEnd = NSRange(location: (live.string as NSString).length, length: 0)
+            live.setSelectedRange(caretEnd)
+            live.scrollRangeToVisible(caretEnd)
+            window.layoutIfNeeded()
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if let path {
+                let stem = path.hasSuffix(".png") ? String(path.dropLast(4)) : path
+                captureAll(to: stem + "-ime.png")
+            }
+            // 取证脚本跑完自己退出，外部不用去 kill（kill 掉会丢标准输出）。
+            if ProcessInfo.processInfo.environment["SILVICS_QUIT_AFTER_SELFTEST"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+            }
+        }
+    }
+
+    /// `SILVICS_SELFTEST=watch`：只盯不清，每 0.4 s 打印一次正文尾部。
+    ///
+    /// 配合外部工具往进程里投递真实键盘事件，用来验证系统输入法下的行为。
+    @MainActor
+    static func startIMEWatch(_ app: AppState) {
+        Task { @MainActor in
+            var last = ""
+            for _ in 0..<300 {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                let body = app.current?.body ?? ""
+                if body != last {
+                    print("[watch] 长度=\((body as NSString).length) 尾部=\(tail(body, 18))"
+                        + " 组合态=\(findEditorTextView(in: NSApp.windows.first?.contentView ?? NSView())?.hasMarkedText() ?? false)"
+                        + " 输入源=\(currentInputSource())")
+                    last = body
+                }
+            }
+        }
+    }
+
+    /// `SILVICS_IME_SOURCE=1`：从进程内部切到简体拼音输入源。
+    ///
+    /// 从外部进程调 `TISSelectInputSource` 在本机不生效（App 仍报 ABC），
+    /// 只有 App 自己切才会真的换过去。
+    @MainActor
+    static func selectPinyinInputSourceIfRequested() {
+        guard ProcessInfo.processInfo.environment["SILVICS_IME_SOURCE"] == "1" else { return }
+        let list = TISCreateInputSourceList(nil, true)?.takeRetainedValue() as? [TISInputSource] ?? []
+        for source in list {
+            guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { continue }
+            let id = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+            if id.contains("SCIM.ITABC") {
+                let status = TISSelectInputSource(source)
+                print("[ime-source] 选中 \(id) status=\(status) 现在=\(currentInputSource())")
+                return
+            }
+        }
+        print("[ime-source] 没找到简体拼音输入源")
+    }
+
+    /// 当前输入源名字，用来确认真的在拼音输入法下打字。
+    @MainActor
+    static func currentInputSource() -> String {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyLocalizedName) else {
+            return "unknown"
+        }
+        return Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+    }
+
+    /// 只找编辑区的 `EditorTextView`，不要拿列表栏搜索框的 field editor 充数。
+    private static func findEditorTextView(in view: NSView) -> EditorTextView? {
+        if let textView = view as? EditorTextView { return textView }
+        for sub in view.subviews {
+            if let found = findEditorTextView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private static func tail(_ text: String, _ count: Int = 12) -> String {
+        let ns = text as NSString
+        let start = max(0, ns.length - count)
+        return ns.substring(with: NSRange(location: start, length: ns.length - start))
+            .replacingOccurrences(of: "\n", with: "⏎")
+    }
+
+    private static func firstDiff(_ a: String, _ b: String) -> Int? {
+        let lhs = Array(a.utf16)
+        let rhs = Array(b.utf16)
+        for index in 0..<min(lhs.count, rhs.count) where lhs[index] != rhs[index] { return index }
+        return lhs.count == rhs.count ? nil : min(lhs.count, rhs.count)
+    }
+
+    private static func tailDiff(_ text: String, _ offset: Int) -> String {
+        let ns = text as NSString
+        let start = max(0, min(offset, ns.length) - 4)
+        return ns.substring(with: NSRange(location: start, length: min(12, ns.length - start)))
+    }
+
 }
 #endif

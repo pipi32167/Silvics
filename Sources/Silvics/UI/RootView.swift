@@ -104,6 +104,7 @@ struct RootView: View {
             let n = DemoSeeder.seedIfEmpty(app)
             if n > 0 { print("[Silvics] seeded \(n) notes") }
         }
+        DebugCapture.selectPinyinInputSourceIfRequested()
         DebugCapture.applyShowFlag(app)
         DebugCapture.runSelfTest(app)
         DebugCapture.runConflictDrill(app)
@@ -232,6 +233,8 @@ private struct EditorPane: View {
                     NoteEditorView(
                         initialText: note.body,
                         text: note.body,
+                        textRevision: app.bodyRevision,
+                        liveText: { app.current?.body ?? note.body },
                         resolvedKeys: app.resolvedKeys,
                         mentions: app.mentionDecorations(),
                         appearance: app.appearance,
