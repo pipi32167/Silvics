@@ -13,7 +13,7 @@ import XCTest
 @MainActor
 final class EditorIMETests: XCTestCase {
 
-    /// 用例编号：I01、I05（见 `docs/日记编辑器边界用例.md`）。
+    /// 用例编号：I05（组合期外部改写）、I06（旧快照落地）—— 见 `docs/日记编辑器边界用例.md`。
 
     // MARK: - 工具
 
