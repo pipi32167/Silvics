@@ -97,7 +97,7 @@ struct ClipSummary: Identifiable, Equatable, Hashable {
 }
 
 /// 新建剪藏的输入。抓取、粘贴、文件导入都产出这一份。
-struct ClipDraft {
+struct ClipDraft: Equatable {
     var url: String = ""
     var title: String = ""
     /// 原文标题。与 `title` 不同：`title` 是最终落库的标题，可能被清洗或追加来源。

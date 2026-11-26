@@ -162,6 +162,7 @@ enum DebugCapture {
                 if let tag = ProcessInfo.processInfo.environment["SILVICS_CLIP_TAG"], !tag.isEmpty {
                     app.selectModule(.clips); app.applyScope(.clip(.tag(tag)))
                 }
+            case "clip-pdf": importPDFClips(app)
             case "new-clip": app.selectModule(.clips); app.applyScope(.clip(.unread)); app.isShowingNewClip = true
             case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
             case "lists", "lists-demo": seedListsDemo(app)
@@ -221,6 +222,35 @@ enum DebugCapture {
         今天重读 稀疏重复优于集中突击 的论证，集中突击只能短期见效。
         """)
         _ = app.openJournal(on: today, using: [])
+    }
+
+    /// 仅取证：`SILVICS_SHOW=clip-pdf` + `SILVICS_CLIP_FILE=<pdf>[:<pdf>…]`。
+    /// 走真实的 `ClipIngest` 与 `saveClip`，用来截「PDF 剪藏存进去后读起来什么样」。
+    /// 两个入口（`RootView.onAppear` 与离屏通道）都会调 `applyShowFlag`，导入只能跑一次，
+    /// 否则同一份 PDF 会落两份。
+    nonisolated(unsafe) private static var didImportPDF = false
+
+    @MainActor
+    private static func importPDFClips(_ app: AppState) {
+        guard !didImportPDF else { return }
+        didImportPDF = true
+        let raw = ProcessInfo.processInfo.environment["SILVICS_CLIP_FILE"] ?? ""
+        for path in raw.split(separator: ":").map(String.init) where !path.isEmpty {
+            let url = URL(fileURLWithPath: path)
+            do {
+                let outcome = try ClipIngest.outcome(fromFile: url)
+                if app.existingClip(forBody: outcome.draft.body) != nil {
+                    print("[clip-pdf] 跳过重复：\(url.lastPathComponent)")
+                    continue
+                }
+                _ = try app.saveClip(outcome.draft)
+                print("[clip-pdf] 已导入 \(url.lastPathComponent)：\(outcome.draft.body.count) 字\(outcome.warnings.joined(separator: " / "))")
+            } catch {
+                print("[clip-pdf] 导入失败 \(url.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+        app.selectModule(.clips)
+        app.applyScope(.clip(.all))
     }
 
     /// 仅取证：`SILVICS_SHOW=lists` 建两篇列表演示笔记并选中其中一篇。
@@ -462,7 +492,85 @@ enum DebugCapture {
         switch ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] {
         case "convert": runConvertSelfTest(app)
         case "tables": runTableSelfTest()
+        case "link-jump": runLinkJumpSelfTest(app)
         default: return
+        }
+    }
+
+    /// `SILVICS_SELFTEST=link-jump`：查「换笔记之后指针还认不认 ⌘」。
+    ///
+    /// 换笔记走 `NoteEditorView(...).id(note.id)`，整块 NSView 换新。
+    /// 屏幕锁定时无法真按键，这里在 App 内部把鼠标挪到引用上，
+    /// 再往窗口发一个真的 `flagsChanged`（走 window → 第一响应者这条投递路径），
+    /// 然后读 `NSCursor.current` 判断是不是手型。
+    @MainActor
+    private static func runLinkJumpSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let content = window.contentView,
+                  let old = findTextView(in: content) as? EditorTextView else {
+                DebugLog.write("[link-jump] 找不到编辑区")
+                return
+            }
+            let links = WikiScanner.scan(old.string)
+            DebugLog.write("[link-jump] 跳转前：第一响应者=\(window.firstResponder === old) 引用数=\(links.count)")
+            measureCursor(tag: "跳转前", editor: old, window: window)
+
+            guard let link = links.first else {
+                DebugLog.write("[link-jump] 这篇没有引用，换一篇测")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                app.openTitle(link.target)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    guard let fresh = findTextView(in: content) as? EditorTextView else {
+                        DebugLog.write("[link-jump] 跳转后找不到编辑区")
+                        return
+                    }
+                    DebugLog.write("[link-jump] 跳转后：同一视图=\(fresh === old)"
+                        + " 第一响应者=\(window.firstResponder === fresh)")
+                    measureCursor(tag: "跳转后", editor: fresh, window: window)
+                }
+            }
+        }
+    }
+
+    /// 把鼠标挪到第一条引用上，往窗口发一个 `flagsChanged`，再读当前指针。
+    @MainActor
+    private static func measureCursor(tag: String, editor: EditorTextView, window: NSWindow) {
+        let rects = editor.wikiLinkCursorRects()
+        guard let rect = rects.first else {
+            DebugLog.write("[link-jump] \(tag)：没有手型矩形，跳过")
+            return
+        }
+        let inWindow = editor.convert(rect, to: nil)
+        let onScreen = window.convertToScreen(inWindow)
+        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
+        CGWarpMouseCursorPosition(CGPoint(x: onScreen.midX, y: screenHeight - onScreen.midY))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let flags = NSEvent.modifierFlags
+            if let event = NSEvent.keyEvent(
+                with: .flagsChanged,
+                location: .zero,
+                modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "",
+                charactersIgnoringModifiers: "",
+                isARepeat: false,
+                keyCode: 55
+            ) {
+                window.sendEvent(event)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                let cursor = NSCursor.current === NSCursor.pointingHand ? "hand"
+                    : (NSCursor.current === NSCursor.iBeam ? "ibeam" : "other")
+                DebugLog.write("[link-jump] \(tag)：系统修饰键=\(flags.contains(.command))"
+                    + " 手型矩形=\(rects.count) 收到 flagsChanged=\(editor.debugFlagsChangedCount)"
+                    + " 指针=\(cursor) \(editor.debugCursorReport())")
+            }
         }
     }
 
