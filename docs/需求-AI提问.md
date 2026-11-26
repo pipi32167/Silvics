@@ -310,3 +310,26 @@ struct AIContextRequest {
 
 1. 会话放 `ai/*.jsonl` 并进 manifest 是否接受？manifest schema 从 2 升到 3。
 2. 会话随 git 同步。vault 推到公开仓库时提问会公开。是否需要额外提示或加密？
+
+## 9. 实现状态（v0.7.0 起）
+
+已落地：
+
+| 项 | 位置 |
+| --- | --- |
+| 会话模型 + JSONL 编解码 + 三方合并 | `Core/AIConversation.swift` |
+| 会话文件读写、清空标记、按条数与字节双闸裁剪 | `Core/AIConversationStore.swift` |
+| 上下文拼装（系统提示词 + 正文 + 引用 + 历史 + 证据） | `Core/AIContextBuilder.swift` |
+| 设置、常用提示词、右栏页签 | `Core/AISettings.swift` |
+| 发送、取消、重试、选区引用、本地抓取 | `App/AppStateAI.swift` |
+| 右栏 AI 页 | `UI/AIChatPanelView.swift` |
+| 设置页「AI 提问」 | `UI/Settings/AISettingsPane.swift` |
+| `ai/*.jsonl` 进 manifest（schema 3）与远端三方合并 | `Core/VaultFormat.swift`、`Core/VaultSync.swift` |
+
+未做（见 §8 待确认与验收报告「后续」）：
+
+- 流式输出。当前一次性返回。
+- 外部联网服务。当前只用本地 `ClipFetchService`。
+- 会话加密。会话随 git 同步，推到公开仓库等于公开提问。
+
+验收：`docs/acceptance/ai-chat-v0.7.0/report.md`。单测 607 项全过，其中 AI 相关 60 项，含两台「设备」经 bare 仓库同步后消息取并集的集成测试。
