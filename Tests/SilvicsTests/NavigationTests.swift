@@ -80,6 +80,13 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(nav.journalScope, .today)
     }
 
+    /// 模块快捷键只有一份：菜单与模块栏都读 `AppModule.shortcutKey`（issue #42）。
+    func testModuleShortcutKeysAreUniqueAndOrdered() {
+        XCTAssertEqual(AppModule.allCases.map(\.shortcutKey), ["1", "2", "3"])
+        XCTAssertEqual(AppModule.allCases.map(\.shortcutLabel), ["⌘1", "⌘2", "⌘3"])
+        XCTAssertEqual(Set(AppModule.allCases.map(\.shortcutKey)).count, AppModule.allCases.count)
+    }
+
     // MARK: - 按类型搜索
 
     func testSearchOnlyReturnsRequestedTypes() throws {

@@ -51,14 +51,11 @@ struct SilvicsApp: App {
             }
 
             CommandMenu("视图") {
-                Button("笔记") { app.selectModule(.notes) }
-                    .keyboardShortcut("1", modifiers: .command)
-
-                Button("日记") { app.selectModule(.journal) }
-                    .keyboardShortcut("2", modifiers: .command)
-
-                Button("剪藏") { app.selectModule(.clips) }
-                    .keyboardShortcut("3", modifiers: .command)
+                // 键位来自 `AppModule.shortcutKey`，与模块栏显示同一份，不各写一份。
+                ForEach(AppModule.allCases) { module in
+                    Button(module.title) { app.selectModule(module) }
+                        .keyboardShortcut(KeyEquivalent(module.shortcutKey), modifiers: .command)
+                }
 
                 Divider()
 

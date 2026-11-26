@@ -43,6 +43,40 @@ final class AppearanceSettingsTests: XCTestCase {
         XCTAssertEqual(settings.bodySize, 100, "clamped 不应修改原值")
     }
 
+    // MARK: - 面板字号
+
+    func testPanelSizeDefaultsOneStepBelowBody() {
+        let settings = AppearanceSettings()
+        XCTAssertEqual(settings.panelSize, 13.5)
+        XCTAssertLessThan(settings.panelSize, settings.bodySize, "面板字号默认比正文小一档")
+        XCTAssertTrue(AppearanceSettings.panelSizeRange.contains(settings.panelSize))
+    }
+
+    func testPanelSizeClamps() {
+        var settings = AppearanceSettings()
+        settings.panelSize = 99
+        XCTAssertEqual(settings.clamped.panelSize, AppearanceSettings.panelSizeRange.upperBound)
+        settings.panelSize = 1
+        XCTAssertEqual(settings.clamped.panelSize, AppearanceSettings.panelSizeRange.lowerBound)
+    }
+
+    func testPanelSizeMissingInOldJSONFallsBack() throws {
+        let legacy = Data(#"{"bodySize":17,"codeSize":12,"lineSpacing":6,"fontFamily":"system"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppearanceSettings.self, from: legacy)
+        XCTAssertEqual(decoded.panelSize, 13.5)
+        XCTAssertEqual(decoded.bodySize, 17)
+    }
+
+    func testPanelSizeRoundTrips() throws {
+        var settings = AppearanceSettings()
+        settings.panelSize = 16
+        let decoded = try JSONDecoder().decode(
+            AppearanceSettings.self,
+            from: try JSONEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded, settings)
+    }
+
     // MARK: - 持久化
 
     func testSaveAndLoad() {

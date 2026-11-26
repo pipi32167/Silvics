@@ -233,15 +233,15 @@ struct NewClipSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             TextField("标题", text: $previewTitle)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, weight: .medium))
+                .font(PanelFont.text(.medium))
 
             VStack(alignment: .leading, spacing: 5) {
                 Text("摘要")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(PanelFont.label(.semibold))
                     .textCase(.uppercase)
                     .foregroundStyle(.secondary)
                 TextEditor(text: $previewSummary)
-                    .font(.system(size: 12))
+                    .font(PanelFont.text())
                     .frame(minHeight: 110)
                     .padding(6)
                     .background(
@@ -252,24 +252,24 @@ struct NewClipSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("标签")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(PanelFont.label(.semibold))
                     .textCase(.uppercase)
                     .foregroundStyle(.secondary)
                 if previewTags.isEmpty {
                     Text("没有标签")
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                         .foregroundStyle(.tertiary)
                 } else {
                     HStack(spacing: 6) {
                         ForEach(previewTags, id: \.self) { tag in
                             HStack(spacing: 4) {
                                 Text("#\(tag)")
-                                    .font(.system(size: 11))
+                                    .font(PanelFont.label())
                                 Button {
                                     previewTags.removeAll { $0 == tag }
                                 } label: {
                                     Image(systemName: "xmark")
-                                        .font(.system(size: 7))
+                                        .font(PanelFont.meta())
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -282,11 +282,11 @@ struct NewClipSheet: View {
                 HStack(spacing: 6) {
                     TextField("加标签，回车确认", text: $tagInput)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                         .onSubmit { addTag() }
                     Button("添加") { addTag() }
                         .buttonStyle(.borderless)
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                         .disabled(ClipTagPolicy.sanitize(tagInput) == nil)
                 }
             }
@@ -298,7 +298,7 @@ struct NewClipSheet: View {
                     Text("\(draft.body.count) 字")
                     Spacer()
                 }
-                .font(.system(size: 10.5))
+                .font(PanelFont.meta())
                 .foregroundStyle(.tertiary)
             }
 

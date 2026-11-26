@@ -47,10 +47,22 @@ struct AppearanceSettingsPane: View {
                             .frame(width: 48, alignment: .trailing)
                     }
                 }
+
+                LabeledContent("面板字号") {
+                    HStack(spacing: 12) {
+                        Slider(value: $draft.panelSize, in: AppearanceSettings.panelSizeRange, step: 0.5)
+                            .frame(width: 190)
+                            .accessibilityIdentifier("panel-size-slider")
+                        Text(String(format: "%.1f pt", draft.panelSize))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                }
             } header: {
                 Text("文字")
             } footer: {
-                Text("标题字号按正文比例缩放：正文 15 时一级标题 26。")
+                Text("标题字号按正文比例缩放：正文 15 时一级标题 26。面板字号作用于右栏（详情 / AI）与弹窗预览。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -117,6 +129,11 @@ struct AppearanceSettingsPane: View {
 
                 Text("let pattern = \"间隔重复\"")
                     .font(.system(size: draft.codeSize, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Text("右栏与弹窗预览按这一档显示：模型名、摘要、标签。")
+                    .font(.system(size: draft.panelSize))
+                    .fontDesign(design)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

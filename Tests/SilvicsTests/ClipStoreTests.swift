@@ -164,6 +164,66 @@ final class ClipStoreTests: XCTestCase {
         XCTAssertNotNil(try repo.journalNote(on: "2026-11-24", using: []))
     }
 
+    /// 列表查询只取列表列（issue #42）。这里守住「少取的列不影响结果」。
+    func testClipSummariesMatchFullNote() throws {
+        let first = try repo.createClip(draft(
+            title: "稀疏重复优于集中突击",
+            url: "https://example.com/a?utm_source=x",
+            site: "少数派",
+            body: String(repeating: "正文段落。", count: 200),
+            tags: ["记忆", "学习方法"]
+        ))
+        let second = try repo.createClip(draft(title: "间隔重复对抗遗忘", site: "Matrix"))
+        _ = try repo.updateClipStatus(id: second.id, status: .archived)
+
+        let summaries = try repo.clipSummaries()
+        XCTAssertEqual(summaries.count, 2)
+
+        for summary in summaries {
+            let note = try XCTUnwrap(try repo.note(id: summary.id))
+            XCTAssertEqual(summary.title, note.title)
+            XCTAssertEqual(summary.site, note.metaFields[ClipFields.site] ?? "")
+            XCTAssertEqual(summary.url, note.metaFields[ClipFields.url] ?? "")
+            XCTAssertEqual(summary.summary, note.metaFields[ClipFields.summary] ?? "")
+            XCTAssertEqual(summary.status, ClipStatus(rawValue: note.metaFields[ClipFields.status] ?? "") ?? .unread)
+            XCTAssertEqual(summary.tags, note.tagNames)
+            XCTAssertEqual(summary.createdAt, note.createdAt)
+            XCTAssertEqual(summary.charCount, note.body.count, "字数仍按正文字符数")
+        }
+
+        XCTAssertEqual(Set(summaries.map(\.id)), [first.id, second.id])
+        let stamps = summaries.map(\.createdAt)
+        XCTAssertEqual(stamps, stamps.sorted(by: >), "按创建时间倒序，同一毫秒内顺序不限")
+    }
+
+    /// 计数走 SQL，不重读列表。两种口径必须一致。
+    func testClipCountsMatchList() throws {
+        let unread = try repo.createClip(draft(title: "未读一"))
+        let read = try repo.createClip(draft(title: "已读一"))
+        let archived = try repo.createClip(draft(title: "已归档一"))
+        _ = try repo.updateClipStatus(id: read.id, status: .read)
+        _ = try repo.updateClipStatus(id: archived.id, status: .archived)
+
+        let counts = try repo.clipCounts()
+        XCTAssertEqual(counts.total, 3)
+        XCTAssertEqual(counts.unread, 1)
+        XCTAssertEqual(counts.archived, 1)
+        XCTAssertEqual(counts.unread, try repo.clipUnreadCount())
+        XCTAssertEqual(counts.total, try repo.clipSummaries().count)
+        XCTAssertNotEqual(unread.id, archived.id)
+    }
+
+    /// 剪藏搜索也只取列表列：短查询走 LIKE，长查询走 FTS。
+    func testClipSearchUsesLightColumns() throws {
+        let hit = try repo.createClip(draft(title: "稀疏重复优于集中突击", body: "正文里有间隔重复四个字。"))
+        _ = try repo.createClip(draft(title: "无关标题", body: "完全不相干的正文。"))
+
+        XCTAssertEqual(try repo.clipSummaries(query: "间隔重复").map(\.id), [hit.id])
+        XCTAssertEqual(try repo.clipSummaries(query: "稀疏").map(\.id), [hit.id])
+        XCTAssertEqual(try repo.clipSummaries(query: "稀疏", status: .archived).count, 0)
+        XCTAssertEqual(try repo.clipSummaries(query: "间隔重复").first?.charCount, hit.body.count)
+    }
+
     func testTitleFromBodyWhenSourceMissing() throws {
         let note = try repo.createClip(draft(title: "", body: "# 从正文提取的标题\n\n正文内容。"))
         XCTAssertEqual(note.title, "从正文提取的标题")

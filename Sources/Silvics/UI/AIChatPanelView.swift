@@ -27,7 +27,7 @@ struct AIChatPanelView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(app.current?.title ?? "全局提问")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(PanelFont.label(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
@@ -36,7 +36,7 @@ struct AIChatPanelView: View {
                         app.clearAIConversation()
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 10))
+                            .font(PanelFont.label())
                     }
                     .buttonStyle(.plain)
                     .help("清空当前会话的上下文。写一条清空标记，随同步带走。")
@@ -46,17 +46,17 @@ struct AIChatPanelView: View {
             HStack(spacing: 4) {
                 if app.current == nil {
                     Text("没有选中笔记，正文上下文为空")
-                        .font(.system(size: 9.5))
+                        .font(PanelFont.meta())
                         .foregroundStyle(.tertiary)
                 } else {
                     Text("\(app.aiVisibleMessages.count) 条消息")
-                        .font(.system(size: 9.5))
+                        .font(PanelFont.meta())
                         .foregroundStyle(.tertiary)
                 }
                 Spacer(minLength: 0)
                 if app.aiBadLineCount > 0 {
                     Text("\(app.aiBadLineCount) 行无法解析")
-                        .font(.system(size: 9.5))
+                        .font(PanelFont.meta())
                         .foregroundStyle(.orange)
                 }
             }
@@ -106,10 +106,10 @@ struct AIChatPanelView: View {
     private var emptyHint: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(app.current == nil ? "全局提问" : "就这一篇提问")
-                .font(.system(size: 11, weight: .medium))
+                .font(PanelFont.label(.medium))
                 .foregroundStyle(.secondary)
             Text("正文会自动带上。在编辑器里选中一段按 ⌘⇧Q 可以只追问那一段。")
-                .font(.system(size: 10.5))
+                .font(PanelFont.label())
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -121,18 +121,18 @@ struct AIChatPanelView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 4) {
                 Text(message.isUser ? "你" : "AI")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(PanelFont.meta(.semibold))
                     .foregroundStyle(message.isUser ? Color.secondary : Color.accentColor)
                 Spacer(minLength: 0)
                 if let model = message.model, !model.isEmpty {
                     Text(model)
-                        .font(.system(size: 8.5))
+                        .font(PanelFont.meta())
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
             }
             Text(message.content)
-                .font(.system(size: 11.5))
+                .font(PanelFont.text())
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -155,11 +155,11 @@ struct AIChatPanelView: View {
     private func quoteRow(_ quote: AIQuote) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("引用 · \(quote.noteTitle)")
-                .font(.system(size: 9))
+                .font(PanelFont.meta())
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
             Text(quote.text)
-                .font(.system(size: 10))
+                .font(PanelFont.label())
                 .foregroundStyle(.secondary)
                 .lineLimit(4)
         }
@@ -174,11 +174,11 @@ struct AIChatPanelView: View {
     private func evidenceRow(_ evidence: AIEvidence) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(evidence.title.isEmpty ? evidence.url : evidence.title)
-                .font(.system(size: 9.5))
+                .font(PanelFont.meta())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Text(evidence.url)
-                .font(.system(size: 9))
+                .font(PanelFont.meta())
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -194,17 +194,17 @@ struct AIChatPanelView: View {
     private func errorBanner(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9))
+                .font(PanelFont.meta())
                 .foregroundStyle(.orange)
             Text(text)
-                .font(.system(size: 10.5))
+                .font(PanelFont.label())
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if app.aiVisibleMessages.last?.isUser == true {
                 Button("重试") { app.retryAILastQuestion() }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(PanelFont.label())
             }
         }
         .padding(8)
@@ -218,12 +218,12 @@ struct AIChatPanelView: View {
         HStack(spacing: 6) {
             ProgressView().controlSize(.mini)
             Text("正在生成…")
-                .font(.system(size: 10.5))
+                .font(PanelFont.label())
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
             Button("停止") { app.cancelAIRequest() }
                 .buttonStyle(.borderless)
-                .font(.system(size: 10))
+                .font(PanelFont.label())
         }
         .padding(.vertical, 4)
     }
@@ -245,7 +245,7 @@ struct AIChatPanelView: View {
             promptMenu
 
             TextEditor(text: $app.aiInput)
-                .font(.system(size: 11.5))
+                .font(PanelFont.text())
                 .scrollContentBackground(.hidden)
                 .frame(height: 64)
                 .padding(5)
@@ -264,7 +264,7 @@ struct AIChatPanelView: View {
                     isShowingEvidenceField.toggle()
                 } label: {
                     Image(systemName: "globe")
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                 }
                 .buttonStyle(.borderless)
                 .help("抓一个网页作为本轮材料")
@@ -278,10 +278,10 @@ struct AIChatPanelView: View {
 
                 if app.aiIsSending {
                     Button("停止") { app.cancelAIRequest() }
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                 } else {
                     Button("发送") { app.sendAIQuestion() }
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                         .keyboardShortcut(.return, modifiers: [])
                         .disabled(!app.aiCanSend || app.aiInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("ai-send")
@@ -300,15 +300,15 @@ struct AIChatPanelView: View {
     private func activeQuoteCard(_ quote: AIQuote) -> some View {
         HStack(alignment: .top, spacing: 5) {
             Image(systemName: "text.quote")
-                .font(.system(size: 9))
+                .font(PanelFont.meta())
                 .foregroundStyle(.tertiary)
             VStack(alignment: .leading, spacing: 1) {
                 Text("引用 · \(quote.noteTitle)")
-                    .font(.system(size: 9))
+                    .font(PanelFont.meta())
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 Text(quote.text)
-                    .font(.system(size: 10))
+                    .font(PanelFont.label())
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -317,7 +317,7 @@ struct AIChatPanelView: View {
                 app.removeAIQuote()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8))
+                    .font(PanelFont.meta())
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
@@ -335,10 +335,10 @@ struct AIChatPanelView: View {
             ForEach(Array(app.aiEvidences.enumerated()), id: \.offset) { index, evidence in
                 HStack(alignment: .top, spacing: 5) {
                     Image(systemName: "globe")
-                        .font(.system(size: 9))
+                        .font(PanelFont.meta())
                         .foregroundStyle(.orange)
                     Text(evidence.title.isEmpty ? evidence.url : evidence.title)
-                        .font(.system(size: 10))
+                        .font(PanelFont.label())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -346,7 +346,7 @@ struct AIChatPanelView: View {
                         app.removeAIEvidence(at: index)
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8))
+                            .font(PanelFont.meta())
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
@@ -363,10 +363,10 @@ struct AIChatPanelView: View {
     private var providerHint: some View {
         HStack(alignment: .top, spacing: 5) {
             Image(systemName: "sparkles")
-                .font(.system(size: 9))
+                .font(PanelFont.meta())
                 .foregroundStyle(.secondary)
             Text("还没有可用的对话模型：\(app.aiUnavailableReason ?? "未配置")")
-                .font(.system(size: 10))
+                .font(PanelFont.label())
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -389,7 +389,7 @@ struct AIChatPanelView: View {
             }
         } label: {
             Label("提示词", systemImage: "text.badge.plus")
-                .font(.system(size: 10.5))
+                .font(PanelFont.label())
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -401,10 +401,10 @@ struct AIChatPanelView: View {
         HStack(spacing: 5) {
             TextField("https://…", text: $evidenceURL)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 10.5))
+                .font(PanelFont.label())
                 .onSubmit { loadEvidence() }
             Button("抓取") { loadEvidence() }
-                .font(.system(size: 10))
+                .font(PanelFont.label())
                 .disabled(evidenceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                           || app.aiEvidenceLoading)
         }

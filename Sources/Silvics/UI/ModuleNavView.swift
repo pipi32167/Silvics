@@ -42,7 +42,7 @@ struct ModuleNavView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .help("\(module.title)（⌘\(AppModule.allCases.firstIndex(of: module)! + 1)）")
+                .help("\(module.title)（\(module.shortcutLabel)）")
             }
 
             Button {
@@ -122,12 +122,25 @@ struct ModuleNavView: View {
                 Text("\(moduleCount(module))")
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.tertiary)
+                // 快捷键直接写在行尾，不用去菜单里找。
+                Text(module.shortcutLabel)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(active ? Color.accentColor : Color.secondary)
+                    .accessibilityIdentifier("module-shortcut-\(module.rawValue)")
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .background(selectionBackground(active))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowSeparator(.hidden)
+    }
+
+    /// 选中行的底色。模块行与范围行共用，收起态的图标栏也用同一套色阶。
+    private func selectionBackground(_ active: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(active ? Color.accentColor.opacity(0.16) : Color.clear)
     }
 
     private func scopeRow(_ row: ScopeRow) -> some View {
@@ -148,7 +161,9 @@ struct ModuleNavView: View {
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .background(selectionBackground(active))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

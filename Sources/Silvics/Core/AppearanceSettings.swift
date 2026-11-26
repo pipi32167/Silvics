@@ -26,10 +26,15 @@ struct AppearanceSettings: Codable, Equatable {
     var codeSize: Double = 13.5
     var lineSpacing: Double = 5
     var fontFamily: FontFamily = .system
+    /// 右栏（详情 / AI）与弹窗预览的字号。
+    ///
+    /// 比正文小一档，但仍要能读。默认 13.5：旧版本这里写死 11–12，偏小（issue #42）。
+    var panelSize: Double = 13.5
 
     static let bodySizeRange: ClosedRange<Double> = 13...19
     static let codeSizeRange: ClosedRange<Double> = 11...16
     static let lineSpacingRange: ClosedRange<Double> = 3...9
+    static let panelSizeRange: ClosedRange<Double> = 11...18
 
     static let defaultsKey = "silvics.appearance.settings"
 
@@ -47,6 +52,7 @@ struct AppearanceSettings: Codable, Equatable {
         codeSize = try container.decodeIfPresent(Double.self, forKey: .codeSize) ?? fallback.codeSize
         lineSpacing = try container.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? fallback.lineSpacing
         fontFamily = try container.decodeIfPresent(FontFamily.self, forKey: .fontFamily) ?? fallback.fontFamily
+        panelSize = try container.decodeIfPresent(Double.self, forKey: .panelSize) ?? fallback.panelSize
         clamp()
     }
 
@@ -54,6 +60,7 @@ struct AppearanceSettings: Codable, Equatable {
         bodySize = min(max(bodySize, Self.bodySizeRange.lowerBound), Self.bodySizeRange.upperBound)
         codeSize = min(max(codeSize, Self.codeSizeRange.lowerBound), Self.codeSizeRange.upperBound)
         lineSpacing = min(max(lineSpacing, Self.lineSpacingRange.lowerBound), Self.lineSpacingRange.upperBound)
+        panelSize = min(max(panelSize, Self.panelSizeRange.lowerBound), Self.panelSizeRange.upperBound)
     }
 
     var clamped: AppearanceSettings {

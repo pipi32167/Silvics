@@ -11,22 +11,37 @@ extension GRDBNoteRepository {
         return note
     }
 
-    /// 剪藏列表。正文不取，只取列表要显示的字段。
+    /// 剪藏列表。只取列表要显示的列，不碰正文。
+    ///
+    /// 单篇正文常有几十 KB。取整行 `Note` 会把所有正文解码一遍，
+    /// 每次切模块白读几 MB（issue #42：120 篇实测 57 ms）。
     func clipSummaries(status: ClipStatus? = nil, tagged tag: String? = nil) throws -> [ClipSummary] {
         try db.reader.read { conn in
-            var notes = try Note
-                .filter(Column("type") == NoteTypes.clipID)
-                .order(Column("createdAt").desc)
-                .fetchAll(conn)
-
-            if let tag {
-                let ids = Set(try TagIndex.noteIds(tagged: tag, in: conn, types: [NoteTypes.clipID]))
-                notes = notes.filter { ids.contains($0.id) }
-            }
-            let list = notes.map(Self.clipSummary)
+            var list = try Self.clipSummaries(in: conn, tagged: tag)
             guard let status else { return list }
-            return list.filter { $0.status == status }
+            list = list.filter { $0.status == status }
+            return list
         }
+    }
+
+    /// 列表用的列。与 `clipSummary(_ note:)` 一一对应，改字段时两处一起改。
+    static let clipSummaryColumns =
+        "id, title, tags, meta, createdAt, length(body) AS bodyLength"
+
+    private static func clipSummaries(in conn: Database, tagged tag: String?) throws -> [ClipSummary] {
+        let rows = try Row.fetchAll(conn, sql: """
+            SELECT \(clipSummaryColumns)
+            FROM note
+            WHERE type = ?
+            ORDER BY createdAt DESC
+            """, arguments: [NoteTypes.clipID])
+
+        var list = rows.map(Self.clipSummary)
+        if let tag {
+            let ids = Set(try TagIndex.noteIds(tagged: tag, in: conn, types: [NoteTypes.clipID]))
+            list = list.filter { ids.contains($0.id) }
+        }
+        return list
     }
 
     func clipUnreadCount() throws -> Int {
@@ -219,6 +234,40 @@ extension GRDBNoteRepository {
         return meta
     }
 
+    /// 行 → 列表模型。字段必须与 `clipSummaryColumns` 对齐。
+    static func clipSummary(_ row: Row) -> ClipSummary {
+        let meta = metaFields(row["meta"])
+        let status = ClipStatus(rawValue: meta[ClipFields.status] ?? "") ?? .unread
+        let aiState = ClipAIState(rawValue: meta[ClipFields.aiState] ?? "") ?? .pending
+        return ClipSummary(
+            id: row["id"],
+            title: row["title"],
+            site: meta[ClipFields.site] ?? "",
+            url: meta[ClipFields.url] ?? "",
+            summary: meta[ClipFields.summary] ?? "",
+            status: status,
+            aiState: aiState,
+            tags: tagNames(row["tags"]),
+            createdAt: row["createdAt"],
+            charCount: row["bodyLength"] ?? 0
+        )
+    }
+
+    /// `meta` 列的 JSON 解析。解析失败按空字典处理，与 `Note.metaFields` 一致。
+    private static func metaFields(_ raw: String) -> [String: String] {
+        guard let data = raw.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return decoded
+    }
+
+    private static func tagNames(_ raw: String) -> [String] {
+        guard let data = raw.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
     static func clipSummary(_ note: Note) -> ClipSummary {
         let meta = note.metaFields
         let status = ClipStatus(rawValue: meta[ClipFields.status] ?? "") ?? .unread
@@ -272,41 +321,59 @@ extension GRDBNoteRepository {
     /// 剪藏范围内搜索：标题、摘要、正文、标签。
     ///
     /// 摘要与标签已写进 FTS（见 `updateFTS`），这里只用 FTS + LIKE 兜底短查询。
+    /// 只取列表列，与 `clipSummaries()` 同一套字段（issue #42）。
     func clipSummaries(query: String, status: ClipStatus? = nil) throws -> [ClipSummary] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return try clipSummaries(status: status) }
 
-        let matched: [Note] = try db.reader.read { conn in
-            let rows: [Row]
+        let lightColumns = """
+            n.id, n.title, n.tags, n.meta, n.createdAt, length(n.body) AS bodyLength
+            """
+        let rows: [Row] = try db.reader.read { conn in
             if q.count >= 3 {
-                rows = try Row.fetchAll(conn, sql: """
-                    SELECT n.* FROM note_fts f JOIN note n ON n.rowid = f.rowid
+                return try Row.fetchAll(conn, sql: """
+                    SELECT \(lightColumns) FROM note_fts f JOIN note n ON n.rowid = f.rowid
                     WHERE note_fts MATCH ? AND n.type = ?
                     ORDER BY n.createdAt DESC LIMIT 100
                     """, arguments: [Self.ftsQuery(q), NoteTypes.clipID])
-            } else {
-                rows = try Row.fetchAll(conn, sql: """
-                    SELECT * FROM note
-                    WHERE type = ?
-                      AND (title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')
-                    ORDER BY createdAt DESC LIMIT 100
-                    """, arguments: [NoteTypes.clipID, "%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%"])
             }
-            return rows.compactMap { try? Note(row: $0) }
+            return try Row.fetchAll(conn, sql: """
+                SELECT \(lightColumns) FROM note n
+                WHERE n.type = ?
+                  AND (n.title LIKE ? ESCAPE '\\' OR n.body LIKE ? ESCAPE '\\')
+                ORDER BY n.createdAt DESC LIMIT 100
+                """, arguments: [NoteTypes.clipID, "%\(Self.likeEscaped(q))%", "%\(Self.likeEscaped(q))%"])
         }
 
-        let list = matched.map(Self.clipSummary)
+        var list = rows.map(Self.clipSummary)
         guard let status else { return list }
-        return list.filter { $0.status == status }
+        list = list.filter { $0.status == status }
+        return list
     }
 
     /// 剪藏各状态计数。侧栏与设置页用。
+    ///
+    /// 走 SQL 计数，不重读列表（issue #42：之前内部再调一次 `clipSummaries()`，57 ms × 2）。
     func clipCounts() throws -> (unread: Int, total: Int, archived: Int) {
-        let all = try clipSummaries()
-        return (
-            unread: all.filter { $0.status == .unread }.count,
-            total: all.count,
-            archived: all.filter { $0.status == .archived }.count
-        )
+        try db.reader.read { conn in
+            func count(_ status: ClipStatus?) throws -> Int {
+                guard let status else {
+                    return try Int.fetchOne(
+                        conn,
+                        sql: "SELECT COUNT(*) FROM note WHERE type = ?",
+                        arguments: [NoteTypes.clipID]
+                    ) ?? 0
+                }
+                return try Int.fetchOne(
+                    conn,
+                    sql: """
+                        SELECT COUNT(*) FROM note
+                        WHERE type = ? AND json_extract(meta, '$.clipStatus') = ?
+                        """,
+                    arguments: [NoteTypes.clipID, status.rawValue]
+                ) ?? 0
+            }
+            return (unread: try count(.unread), total: try count(nil), archived: try count(.archived))
+        }
     }
 }

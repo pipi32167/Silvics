@@ -24,6 +24,18 @@ enum AppModule: String, CaseIterable, Identifiable, Equatable {
         case .clips: return "🔖"
         }
     }
+
+    /// 切换模块的 ⌘ 键。菜单与模块栏都读这一个，不各写一份。
+    var shortcutKey: Character {
+        switch self {
+        case .notes: return "1"
+        case .journal: return "2"
+        case .clips: return "3"
+        }
+    }
+
+    /// 快捷键的显示文本，例如 `⌘1`。
+    var shortcutLabel: String { "⌘\(shortcutKey)" }
 }
 
 /// 概念笔记的范围。

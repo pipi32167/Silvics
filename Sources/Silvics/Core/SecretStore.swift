@@ -19,6 +19,16 @@ final class KeychainSecretStore: SecretStore {
         self.service = service
     }
 
+    /// 默认密钥存储。`SILVICS_NO_KEYCHAIN=1` 时换内存实现。
+    ///
+    /// 无头取证与 CI 里不能用真钥匙串：重建后的 ad-hoc 签名与旧条目的 ACL 不匹配，
+    /// 系统会弹授权框，而 `SecItemCopyMatching` 会一直等这个框，主线程直接卡住。
+    static func defaultStore() -> SecretStore {
+        ProcessInfo.processInfo.environment["SILVICS_NO_KEYCHAIN"] == "1"
+            ? InMemorySecretStore()
+            : KeychainSecretStore()
+    }
+
     func read(account: String) throws -> String? {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true

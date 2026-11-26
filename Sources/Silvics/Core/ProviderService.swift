@@ -6,7 +6,7 @@ final class ProviderService {
     private let secrets: SecretStore
     private let defaults: UserDefaults
 
-    init(secrets: SecretStore = KeychainSecretStore(), defaults: UserDefaults = .standard) {
+    init(secrets: SecretStore = KeychainSecretStore.defaultStore(), defaults: UserDefaults = .standard) {
         self.secrets = secrets
         self.defaults = defaults
         self.settings = ProviderSettings.load(from: defaults)

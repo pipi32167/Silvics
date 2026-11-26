@@ -73,7 +73,55 @@ struct ListPaneView: View {
             }
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 30)
+
+            if showsNewRow {
+                Divider()
+                newRow
+            }
         }
+    }
+
+    // MARK: - 底部新建
+
+    /// 日记的待办总览与模板占满中栏，底层没有列表，不摆新建行。
+    private var showsNewRow: Bool {
+        if app.nav.active == .journal {
+            switch app.nav.journalScope {
+            case .todos, .templates: return false
+            case .today, .all: return true
+            }
+        }
+        return true
+    }
+
+    private var newRowTitle: String {
+        switch app.nav.active {
+        case .notes: return "新建笔记"
+        case .journal: return "今天的日记"
+        case .clips: return "新建剪藏"
+        }
+    }
+
+    /// 列表底部的固定新建入口。与 `⌘N` 走同一个入口，按模块分流。
+    private var newRow: some View {
+        Button {
+            app.newInActiveModule()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(newRowTitle)
+                    .font(.system(size: 11.5))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(newRowTitle)（⌘N）")
+        .accessibilityIdentifier("list-new-item")
     }
 
     // MARK: - 列表内容

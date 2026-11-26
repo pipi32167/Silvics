@@ -60,7 +60,7 @@ struct ContextPanelView: View {
                     app.setAIPanel(tab)
                 } label: {
                     Text(tab == .details ? "详情" : "AI")
-                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                        .font(PanelFont.label(selected ? .semibold : .regular))
                         .foregroundStyle(selected ? Color.primary : Color.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
@@ -84,12 +84,12 @@ struct ContextPanelView: View {
             VStack(alignment: .leading, spacing: 18) {
                 if app.nav.active == .journal, app.nav.journalScope == .todos {
                     Text("待办总览占满中栏，右栏留空。")
-                        .font(.system(size: 12))
+                        .font(PanelFont.text())
                         .foregroundStyle(.secondary)
                         .padding(.top, 20)
                 } else if app.nav.active == .journal, app.nav.journalScope == .templates {
                     Text("模板是配置页，右栏留空。")
-                        .font(.system(size: 12))
+                        .font(PanelFont.text())
                         .foregroundStyle(.secondary)
                         .padding(.top, 20)
                 } else if let clip = clipNote {
@@ -101,7 +101,7 @@ struct ContextPanelView: View {
                     mentionSection
                 } else if app.current == nil {
                     Text(emptyHint)
-                        .font(.system(size: 12))
+                        .font(PanelFont.text())
                         .foregroundStyle(.secondary)
                         .padding(.top, 20)
                 } else {
@@ -136,7 +136,7 @@ struct ContextPanelView: View {
                 if let raw = meta[ClipFields.url], !raw.isEmpty, let url = URL(string: raw) {
                     Link(destination: url) {
                         Label("打开原文", systemImage: "arrow.up.right.square")
-                            .font(.system(size: 11))
+                            .font(PanelFont.label())
                     }
                 }
                 if let model = meta[ClipFields.aiModel], !model.isEmpty {
@@ -151,7 +151,7 @@ struct ContextPanelView: View {
                 sectionTitle("摘要")
                 if aiState != .done {
                     Text(aiState.label)
-                        .font(.system(size: 9))
+                        .font(PanelFont.meta())
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(Capsule().fill(Color.orange.opacity(0.15)))
@@ -170,7 +170,7 @@ struct ContextPanelView: View {
                     if isSummarizing {
                         ProgressView().controlSize(.mini)
                     } else {
-                        Text("重新整理").font(.system(size: 10))
+                        Text("重新整理").font(PanelFont.label())
                     }
                 }
                 .buttonStyle(.borderless)
@@ -178,7 +178,7 @@ struct ContextPanelView: View {
                 .help(app.clipProvider() == nil ? "先在设置里配置对话模型" : "用当前模型重新生成摘要与标签")
             }
             TextEditor(text: $summaryDraft)
-                .font(.system(size: 12))
+                .font(PanelFont.text())
                 .frame(minHeight: 90)
                 .scrollContentBackground(.hidden)
                 .padding(6)
@@ -214,11 +214,11 @@ struct ContextPanelView: View {
             HStack(spacing: 6) {
                 TextField("加标签，回车确认", text: $tagInput)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
+                    .font(PanelFont.label())
                     .onSubmit { addTag(to: clip) }
                 Button("添加") { addTag(to: clip) }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 11))
+                    .font(PanelFont.label())
                     .disabled(ClipTagPolicy.sanitize(tagInput) == nil)
             }
         }
@@ -235,12 +235,12 @@ struct ContextPanelView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(backlinkLabel(backlink))
-                                .font(.system(size: 12, weight: .medium))
+                                .font(PanelFont.text(.medium))
                                 .foregroundStyle(.primary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                             Text(backlink.snippet)
-                                .font(.system(size: 10.5))
+                                .font(PanelFont.meta())
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
                                 .multilineTextAlignment(.leading)
@@ -272,7 +272,7 @@ struct ContextPanelView: View {
                     isConfirmingDelete = true
                 }
             }
-            .font(.system(size: 11))
+            .font(PanelFont.label())
             .buttonStyle(.borderless)
         }
     }
@@ -302,11 +302,11 @@ struct ContextPanelView: View {
             if let value, !value.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(label)
-                        .font(.system(size: 10.5))
+                        .font(PanelFont.meta())
                         .foregroundStyle(.tertiary)
                         .frame(width: 56, alignment: .leading)
                     Text(value)
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .lineLimit(2)
@@ -343,12 +343,12 @@ struct ContextPanelView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(backlink.sourceTitle)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(PanelFont.text(.medium))
                                 .foregroundStyle(.primary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                             Text(backlink.snippet)
-                                .font(.system(size: 10.5))
+                                .font(PanelFont.meta())
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
                                 .multilineTextAlignment(.leading)
@@ -382,10 +382,10 @@ struct ContextPanelView: View {
                         } label: {
                             HStack(spacing: 5) {
                                 Image(systemName: link.status == .resolved ? "arrow.up.right" : "questionmark.circle.dashed")
-                                    .font(.system(size: 9))
+                                    .font(PanelFont.meta())
                                     .foregroundStyle(link.status == .resolved ? Color.accentColor : Color.secondary)
                                 Text(link.displayText)
-                                    .font(.system(size: 12))
+                                    .font(PanelFont.text())
                                     .foregroundStyle(link.status == .resolved ? .primary : .secondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
@@ -406,11 +406,11 @@ struct ContextPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text("未链接提及")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(PanelFont.label(.semibold))
                     .textCase(.uppercase)
                     .foregroundStyle(.secondary)
                 Text("\(app.mentions.count)")
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .font(PanelFont.label(.semibold).monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer()
                 if !app.mentions.isEmpty {
@@ -419,7 +419,7 @@ struct ContextPanelView: View {
                         app.isShowingMentionsSheet = true
                     }
                     .buttonStyle(.link)
-                    .font(.system(size: 10))
+                    .font(PanelFont.label())
                 }
             }
 
@@ -433,10 +433,10 @@ struct ContextPanelView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     Text(app.journalScanMentions ? "已开启" : "已关闭")
-                        .font(.system(size: 10))
+                        .font(PanelFont.label())
                         .foregroundStyle(.secondary)
                 }
-                .font(.system(size: 11))
+                .font(PanelFont.label())
             }
 
             if app.mentions.isEmpty {
@@ -450,16 +450,16 @@ struct ContextPanelView: View {
                     ForEach(app.mentions) { mention in
                         HStack(alignment: .top, spacing: 5) {
                             Image(systemName: mention.kind == .alias ? "tag" : "link")
-                                .font(.system(size: 9))
+                                .font(PanelFont.meta())
                                 .foregroundStyle(Color(nsColor: Theme.mentionUnderline))
                                 .padding(.top, 3)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(mention.targetTitle)
-                                    .font(.system(size: 12))
+                                    .font(PanelFont.text())
                                     .lineLimit(1)
                                 Text(mention.snippet)
-                                    .font(.system(size: 10))
+                                    .font(PanelFont.label())
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                             }
@@ -470,7 +470,7 @@ struct ContextPanelView: View {
                                 app.select(mention.noteId)
                             } label: {
                                 Image(systemName: "arrow.up.right")
-                                    .font(.system(size: 9))
+                                    .font(PanelFont.meta())
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
@@ -480,7 +480,7 @@ struct ContextPanelView: View {
                                 app.dismissMention(id: mention.id)
                             } label: {
                                 Image(systemName: "eye.slash")
-                                    .font(.system(size: 9))
+                                    .font(PanelFont.meta())
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
@@ -509,10 +509,10 @@ struct ContextPanelView: View {
                         } label: {
                             HStack(spacing: 5) {
                                 Image(systemName: "plus.circle.dashed")
-                                    .font(.system(size: 9))
+                                    .font(PanelFont.meta())
                                     .foregroundStyle(.secondary)
                                 Text(target)
-                                    .font(.system(size: 12))
+                                    .font(PanelFont.text())
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
@@ -532,7 +532,7 @@ struct ContextPanelView: View {
 
     private func sectionTitle(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 10, weight: .semibold))
+            .font(PanelFont.label(.semibold))
             .textCase(.uppercase)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -568,11 +568,11 @@ struct ContextPanelView: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(PanelFont.label(.semibold))
                 .textCase(.uppercase)
                 .foregroundStyle(.secondary)
             Text("\(count)")
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .font(PanelFont.label(.semibold).monospacedDigit())
                 .foregroundStyle(.tertiary)
             Spacer()
         }
@@ -580,7 +580,7 @@ struct ContextPanelView: View {
 
     private func hint(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(PanelFont.label())
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -598,13 +598,13 @@ private struct FlowTags: View {
             ForEach(tags, id: \.self) { tag in
                 HStack(spacing: 5) {
                     Text("#\(tag)")
-                        .font(.system(size: 11))
+                        .font(PanelFont.label())
                         .foregroundStyle(.secondary)
                     Button {
                         onRemove(tag)
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8))
+                            .font(PanelFont.meta())
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)

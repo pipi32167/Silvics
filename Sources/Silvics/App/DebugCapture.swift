@@ -53,7 +53,7 @@ enum DebugCapture {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: resize)
             }
         }
-        // SILVICS_APPEARANCE="body=18,code=14,spacing=7,family=serif"：取证时预置外观。
+        // SILVICS_APPEARANCE="body=18,code=14,spacing=7,panel=16,family=serif"：取证时预置外观。
         if let raw = ProcessInfo.processInfo.environment["SILVICS_APPEARANCE"] {
             var settings = app.appearance
             for pair in raw.split(separator: ",") {
@@ -63,6 +63,7 @@ enum DebugCapture {
                 case "body": settings.bodySize = Double(parts[1]) ?? settings.bodySize
                 case "code": settings.codeSize = Double(parts[1]) ?? settings.codeSize
                 case "spacing": settings.lineSpacing = Double(parts[1]) ?? settings.lineSpacing
+                case "panel": settings.panelSize = Double(parts[1]) ?? settings.panelSize
                 case "family": settings.fontFamily = AppearanceSettings.FontFamily(rawValue: parts[1]) ?? settings.fontFamily
                 default: break
                 }
@@ -156,6 +157,10 @@ enum DebugCapture {
             case "module-clips": app.selectModule(.clips)
             case "journal": app.selectModule(.journal); app.applyScope(.journal(.all))
             case "clips", "clip-unread": app.selectModule(.clips); app.applyScope(.clip(.unread))
+            case "clips-demo":
+                seedClipsDemo(app)
+                app.selectModule(.clips)
+                app.applyScope(.clip(.unread))
             case "clips-all": app.selectModule(.clips); app.applyScope(.clip(.all))
             case "clips-archived": app.selectModule(.clips); app.applyScope(.clip(.archived))
             case "clips-pending": app.selectModule(.clips); app.applyScope(.clip(.pending))
@@ -332,6 +337,54 @@ enum DebugCapture {
         }
         app.selectModule(.clips)
         app.applyScope(.clip(.all))
+    }
+
+    /// 仅取证：三篇剪藏，覆盖未读 / 已读 / 待整理三种状态。
+    ///
+    /// 剪藏的列表、右栏摘要、底部新建行都要有真实条目才看得出版式。
+    @MainActor
+    private static func seedClipsDemo(_ app: AppState) {
+        guard app.clipTotalCount == 0 else { return }
+        let demos: [(title: String, site: String, summary: String, tags: [String], status: ClipStatus, aiState: ClipAIState)] = [
+            (
+                "稀疏重复优于集中突击",
+                "少数派",
+                "同样的总时长拆成多次，每次之间留出遗忘，回忆本身就在加固记忆。集中突击只在短周期里占优。",
+                ["记忆", "学习方法"],
+                .unread,
+                .done
+            ),
+            (
+                "为什么清单比目标更管用",
+                "Matrix",
+                "目标描述终态，清单描述下一个动作。终态无法直接执行，动作可以。",
+                ["行动"],
+                .read,
+                .done
+            ),
+            (
+                "笔记的维护成本决定它会不会死",
+                "个人博客",
+                "整理成本高于写作收益时，笔记系统会在三个月内停摆。降低维护成本比提升容量更重要。",
+                ["笔记方法"],
+                .unread,
+                .pending
+            ),
+        ]
+        for demo in demos {
+            let draft = ClipDraft(
+                url: "https://example.com/\(demo.title)",
+                title: demo.title,
+                site: demo.site,
+                body: demo.summary + "\n\n" + String(repeating: "这是正文段落，用来撑出剪藏阅读视图的高度。\n\n", count: 6),
+                summary: demo.summary,
+                tags: demo.tags,
+                status: demo.status,
+                aiState: demo.aiState
+            )
+            _ = try? app.saveClip(draft)
+        }
+        app.selectModule(.notes)
     }
 
     /// 仅取证：`SILVICS_SHOW=lists` 建两篇列表演示笔记并选中其中一篇。
