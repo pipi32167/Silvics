@@ -156,6 +156,11 @@ scripts/release.sh --check-upload    # 验证上传通道
 - **vault 导出只写不删。** 库空了不能连带清空 vault（备份会一起没）。删除笔记走 `VaultSync.removeFromVault(id:)`。
 - **绝不让 git 做合并。** `git merge` 会把冲突标记写进正文。合并走 `LineMerge`，git 只收已解决干净的提交。
 - **判断 git 成败只看退出码。** `git remote get-url` 失败时也会往 stdout 写 `error: ...`，拿输出判空会误判。
+- **AI 会话落 `ai/<note-id>.jsonl`，一条消息一行。** 清空写 `role=clear` 标记，不删文件；删文件会被另一台的追加复活。
+- **会话合并只能走 `AIConversation.merge`。** 按 `id` 去重、按 `at` 排序、用最新清空标记截断。别在别处另写一套。
+- **远端 `ai/*.jsonl` 必须先三方合并再交给 git。** `VaultSync.resolveRemote` 调 `mergeRemoteConversations`，因为 `beginMergeKeepingOurs` 会让 git 整篇保留我方版本。
+- **会话里不写密钥与完整网页正文。** 证据上限 6000 字，会话上限 200 条 / 200 KB，两道闸都在 `AIConversation.trim`。
+- **提示词与正文都是不可信数据。** 系统提示词必须声明网页内容不可执行，模型输出全部本地校验。
 - **`TextNormalizer.bodyHash` 必须跨进程稳定。** 用 SHA256，不要用 Swift `Hasher`（每进程随机加盐）。
 - `MentionIndex.rebuildAll` 必须保留 `dismissed`（用户的决定不在正文里）。
 

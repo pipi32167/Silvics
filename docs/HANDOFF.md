@@ -449,6 +449,19 @@ open -a .build/Build/Products/Debug/Silvics.app \
 - 界面：侧栏剪藏范围（未读 / 全部 / 已归档 / 标签），中间栏复用 Typora 式编辑器只读渲染，右栏来源 / 摘要 / 标签 / 被引用 / 操作。`⌘⇧V` 新建，`⌘⇧L` 切范围。
 - PDF 剪藏已做（issue #30，0.6.0）：PDFKit 按页取文字层，字形折回常用字，扫描件/加密件走粘贴兜底，网址直连 PDF 同样支持。未做：OCR、批量 URL、浏览器扩展。
 
+### AI 提问（issue #45，0.7.0）
+
+- 右栏加「详情 / AI」两个页签，三个模块都能用。没有选中笔记时是「全局提问」（会话 id `_global`）。
+- 会话落 `<vault>/ai/<note-id>.jsonl`，一条消息一行 JSON。字段带引用、证据、模型名、token，跨设备合并后都在。
+- 清空写 `role=clear` 标记，不删文件。合并时用最新标记截断它之前的消息。
+- 合并：`AIConversation.merge` 按 `id` 去重 → 按 `at` 排序 → 用最新清空标记裁。`VaultSync.resolveRemote` 先合并远端会话再交给 git。
+- manifest schema 2 → 3，加 `conversations`（id / hash / updated）。`verify()` 会查会话漂移。
+- 上下文：系统提示词带笔记标题、正文、引用；证据只进本轮提问。截断顺序是先丢最早历史，再截正文（`AIContextBuilder`）。
+- 设置页「AI 提问」：系统提示词、4 条内置提示词（可改不可删）、正文上限 0/4000/8000/20000、历史轮数 3/5/10/20。
+- 快捷键：`⌘⌥A` 切到 AI 页，`⌘⇧Q` 引用选中内容。
+- 未做：流式输出、外部联网服务（DeepSeek Web Tools / Tavily 已核额度未接）、会话加密。
+- 验收：`docs/acceptance/ai-chat-v0.7.0/report.md`。取证钩子：`SILVICS_AI_PROVIDER=1`、`SILVICS_SHOW=ai-chat|ai-quote|ai-evidence|ai-sending|ai-error|ai-details|settings-ai`、`SILVICS_CONTEXT_WIDTH`、`SILVICS_SETTINGS_SIZE`。
+
 ## 9. 下一步：P5
 
 1. **P5 图**：局部图（当前笔记 2 跳内）与全局图。剪藏默认不进图。
