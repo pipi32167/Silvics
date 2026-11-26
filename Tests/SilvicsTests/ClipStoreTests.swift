@@ -239,6 +239,67 @@ final class ClipExtractorTests: XCTestCase {
         XCTAssertEqual(ClipExtractor.decode(data), original)
     }
 
+    func testDropsSiteChromeAroundArticleBody() {
+        let html = """
+        <html><head><title>站点标题</title></head><body>
+          <nav class="site-nav"><a href="/">首页</a><a href="/hot">热门</a></nav>
+          <article class="normal-article">
+            <div class="article__header">
+              <span>作者 关注</span>
+              <div class="article__share">微信扫码分享 分享收藏举报</div>
+            </div>
+            <div class="article-body">
+              <h4>Matrix 首页推荐</h4>
+              <p>Matrix 是少数派的写作社区，我们主张分享真实的产品体验。</p>
+              <p>文章代表作者个人观点，少数派仅对标题和排版略作修改。</p>
+              <h2>正文标题</h2>
+              <p>第一段正文。</p>
+              <p>第二段正文。</p>
+              <h2>相关阅读</h2>
+              <ul>
+                <li><a href="/a">推荐文章一</a></li>
+                <li><a href="/b">推荐文章二</a></li>
+                <li><a href="/c">推荐文章三</a></li>
+              </ul>
+            </div>
+            <div class="article__footer">标签</div>
+            <div class="post__comments"><p>评论区内容</p></div>
+          </article>
+        </body></html>
+        """
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("## 正文标题"))
+        XCTAssertTrue(body.contains("第一段正文。"))
+        XCTAssertTrue(body.contains("第二段正文。"))
+        for noise in ["作者 关注", "微信扫码", "分享收藏", "Matrix 是少数派", "文章代表作者", "相关阅读", "推荐文章", "评论区", "标签"] {
+            XCTAssertFalse(body.contains(noise), "不该保留：\(noise)\n\(body)")
+        }
+    }
+
+    func testDropsLinkFarmWithoutNoiseClassName() {
+        let links = (1...12).map { "<li><a href=\"/p/\($0)\">推荐文章 \($0)</a></li>" }.joined()
+        let html = "<html><body><article><div class=\"article-body\"><p>正文一。</p><div class=\"links\"><ul>\(links)</ul></div><p>正文二。</p></div></article></body></html>"
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("正文一。"))
+        XCTAssertTrue(body.contains("正文二。"))
+        XCTAssertFalse(body.contains("推荐文章"))
+    }
+
+    func testKeepsCodeBlock() {
+        let html = "<html><body><article><div class=\"article-body\"><p>说明。</p><pre><code>let x = 1 &lt; 2</code></pre></div></article></body></html>"
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("```"))
+        XCTAssertTrue(body.contains("let x = 1 < 2"))
+    }
+
+    func testRemovesEditLinksAndNavLines() {
+        let html = "<html><body><article><div class=\"article-body\"><h2>标题[编辑]</h2><p>正文。</p><p>上一页</p><p>下一页</p></div></article></body></html>"
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertFalse(body.contains("[编辑]"))
+        XCTAssertFalse(body.contains("上一页"))
+        XCTAssertFalse(body.contains("下一页"))
+    }
+
     func testCollapsesBlankLines() {
         let body = ClipExtractor.normalizeWhitespace("一\n\n\n\n二\n\n三")
         XCTAssertEqual(body, "一\n\n二\n\n三")
