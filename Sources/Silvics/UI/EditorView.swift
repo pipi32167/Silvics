@@ -433,6 +433,11 @@ final class EditorTextView: NSTextView {
     func refreshCursorForModifiers() {
         guard let window else { return }
         let state = currentCursorState()
+        if ProcessInfo.processInfo.environment["SILVICS_CURSOR_TRACE"] != nil {
+            DebugLog.write("[cursor-refresh] cmd=\(state.commandHeld) over=\(state.overLink)"
+                + " 指针=\(state.cursor === NSCursor.pointingHand ? "hand" : (state.cursor === NSCursor.iBeam ? "ibeam" : "nil"))"
+                + " 系统修饰键=\(NSEvent.modifierFlags.contains(.command))")
+        }
         window.invalidateCursorRects(for: self)
         if let cursor = state.cursor { cursor.set() }
     }

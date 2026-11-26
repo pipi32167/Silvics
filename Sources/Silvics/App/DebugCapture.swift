@@ -493,7 +493,7 @@ enum DebugCapture {
         case "convert": runConvertSelfTest(app)
         case "tables": runTableSelfTest()
         case "link-jump": runLinkJumpSelfTest(app)
-        case "cursor-unfocused": runUnfocusedCursorSelfTest()
+        case "cursor-unfocused": runUnfocusedCursorSelfTest(app)
         default: return
         }
     }
@@ -535,7 +535,11 @@ enum DebugCapture {
     /// 事件走 `NSApp.postEvent`，会被 App 的事件循环取出，窗口级监听能收到；
     /// 旧实现只靠第一响应者收 `flagsChanged`，这里应当完全没反应。
     @MainActor
-    private static func runUnfocusedCursorSelfTest(after delay: TimeInterval = 2.5) {
+    private static func runUnfocusedCursorSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        // 先切到一篇确定含 [[ ]] 的笔记，避免「当前这篇没有引用」导致空跑。
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay - 1.5)) {
+            app.openTitle("稀疏重复优于集中突击")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
                   let content = window.contentView,
@@ -545,7 +549,7 @@ enum DebugCapture {
             }
             window.makeFirstResponder(nil)
             DebugLog.write("[cursor-unfocused] 编辑视图第一响应者=\(window.firstResponder === editor)"
-                + " 手型矩形=\(editor.wikiLinkCursorRects().count)")
+                + " 手型矩形=\(editor.wikiLinkCursorRects().count) 装监听=\(editor.isObservingModifierChanges)")
 
             guard let rect = editor.wikiLinkCursorRects().first else {
                 DebugLog.write("[cursor-unfocused] 没有手型矩形，跳过")
@@ -557,6 +561,9 @@ enum DebugCapture {
             CGWarpMouseCursorPosition(CGPoint(x: onScreen.midX, y: screenHeight - onScreen.midY))
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                // 系统修饰键状态在锁屏下无法稳定保持，这里用产品代码里同一个注入点把 ⌘ 置为按住；
+                // 投递路径仍然是「App 事件队列 → 窗口级监听」，不是直接调函数。
+                editor.debugModifierOverride = [.command]
                 let flags = NSEvent.modifierFlags
                 if let event = NSEvent.keyEvent(
                     with: .flagsChanged, location: .zero, modifierFlags: flags,
@@ -568,7 +575,9 @@ enum DebugCapture {
                     NSApp.postEvent(event, atStart: false)
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    DebugLog.write("[cursor-unfocused] 系统修饰键=\(flags.contains(.command)) \(editor.debugCursorReport())")
+                    DebugLog.write("[cursor-unfocused] 注入的 ⌘=\(editor.debugModifierOverride?.contains(.command) == true)"
+                        + " \(editor.debugCursorReport())")
+                    editor.debugModifierOverride = nil
                 }
             }
         }
