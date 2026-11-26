@@ -27,7 +27,15 @@ struct ContextPanelView: View {
                 detailsBody
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Tokens.panel)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.panel, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.panel, style: .continuous)
+                .strokeBorder(Tokens.hair, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(Tokens.isDark ? 0.28 : 0.05), radius: 9, y: 3)
+        .padding(.vertical, 10)
+        .padding(.trailing, 10)
 
         .onChange(of: app.current?.id) { _, _ in
             summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
@@ -61,12 +69,12 @@ struct ContextPanelView: View {
                 } label: {
                     Text(tab == .details ? "详情" : "AI")
                         .font(PanelFont.label(selected ? .semibold : .regular))
-                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .foregroundStyle(selected ? Tokens.ink : Tokens.ink3)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                         .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(selected ? Color.primary.opacity(0.09) : Color.clear)
+                            RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
+                                .fill(selected ? Tokens.selectedFill : Color.clear)
                         )
                         .contentShape(Rectangle())
                 }
@@ -184,7 +192,7 @@ struct ContextPanelView: View {
                 .padding(6)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(0.045))
+                        .fill(Tokens.rail)
                 )
                 .onChange(of: summaryDraft) { _, value in
                     guard clipNote?.id == clip.id else { return }
@@ -249,7 +257,7 @@ struct ContextPanelView: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.primary.opacity(0.045))
+                                .fill(Tokens.rail)
                         )
                     }
                     .buttonStyle(.plain)
@@ -357,7 +365,7 @@ struct ContextPanelView: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.primary.opacity(0.045))
+                                .fill(Tokens.rail)
                         )
                     }
                     .buttonStyle(.plain)

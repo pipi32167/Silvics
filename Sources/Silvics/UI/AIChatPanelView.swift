@@ -122,7 +122,7 @@ struct AIChatPanelView: View {
             HStack(spacing: 4) {
                 Text(message.isUser ? "你" : "AI")
                     .font(PanelFont.meta(.semibold))
-                    .foregroundStyle(message.isUser ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(message.isUser ? Tokens.ink2 : Tokens.accent)
                 Spacer(minLength: 0)
                 if let model = message.model, !model.isEmpty {
                     Text(model)
@@ -148,7 +148,7 @@ struct AIChatPanelView: View {
         .padding(9)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(message.isUser ? Color.primary.opacity(0.05) : Color.accentColor.opacity(0.07))
+                .fill(message.isUser ? Tokens.rail : Tokens.selectedFill)
         )
     }
 
@@ -167,7 +167,7 @@ struct AIChatPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+                .fill(Tokens.rail)
         )
     }
 
@@ -251,11 +251,11 @@ struct AIChatPanelView: View {
                 .padding(5)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
+                        .fill(Tokens.rail)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(Tokens.hair, lineWidth: 1)
                 )
                 .accessibilityIdentifier("ai-input")
 
@@ -326,7 +326,7 @@ struct AIChatPanelView: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.accentColor.opacity(0.08))
+                .fill(Tokens.selectedFill)
         )
     }
 
@@ -374,7 +374,7 @@ struct AIChatPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+                .fill(Tokens.rail)
         )
     }
 

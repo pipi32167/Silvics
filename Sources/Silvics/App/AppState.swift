@@ -154,6 +154,7 @@ final class AppState: ObservableObject {
         journalScanMentions = repo.journalScanMentions
         appearance = AppearanceSettings.load()
         Theme.apply(appearance)
+        Tokens.apply(theme: appearance.themeColor)
         providerSettings = providerService.settings
         healFromVault()
         // 开关开着时，启动先补齐日记的提及：否则上次关着的历史日记一直没扫过。
@@ -184,6 +185,7 @@ final class AppState: ObservableObject {
         self.repo = repo
         self.clipSettings = clipSettings
         self.appearance = AppearanceSettings.load()
+        Tokens.apply(theme: appearance.themeColor)
         self.providerSettings = providerService.settings
         loadAll(selectFirst: false)
         refreshClips()
@@ -934,6 +936,7 @@ final class AppState: ObservableObject {
         let clamped = settings.clamped
         appearance = clamped
         Theme.apply(clamped)
+        Tokens.apply(theme: clamped.themeColor)
         clamped.save()
     }
 

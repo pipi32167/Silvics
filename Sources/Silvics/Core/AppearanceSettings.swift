@@ -5,6 +5,27 @@ import Foundation
 /// 存 UserDefaults，不进数据库。理由与 `SyncSettings` 相同：设置属于本机，
 /// 不该跟着笔记 vault 同步走。样式不进正文，`note.body` 永远是纯文本。
 struct AppearanceSettings: Codable, Equatable {
+    /// 主题色。深浅两套色值在 `Tokens` 里，这里只存选择。
+    enum ThemeColor: String, Codable, CaseIterable, Identifiable {
+        case moss
+        case indigo
+        case lilac
+        case clay
+        case graphite
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .moss: return "苔绿"
+            case .indigo: return "靛蓝"
+            case .lilac: return "藕荷"
+            case .clay: return "墨褐"
+            case .graphite: return "石墨"
+            }
+        }
+    }
+
     /// 字体族。只影响渲染，不影响正文。
     enum FontFamily: String, Codable, CaseIterable, Identifiable {
         case system
@@ -26,6 +47,8 @@ struct AppearanceSettings: Codable, Equatable {
     var codeSize: Double = 13.5
     var lineSpacing: Double = 5
     var fontFamily: FontFamily = .system
+    /// 主题色。默认苔绿。
+    var themeColor: ThemeColor = .moss
     /// 右栏（详情 / AI）与弹窗预览的字号。
     ///
     /// 比正文小一档，但仍要能读。默认 13.5：旧版本这里写死 11–12，偏小（issue #42）。
@@ -53,6 +76,7 @@ struct AppearanceSettings: Codable, Equatable {
         lineSpacing = try container.decodeIfPresent(Double.self, forKey: .lineSpacing) ?? fallback.lineSpacing
         fontFamily = try container.decodeIfPresent(FontFamily.self, forKey: .fontFamily) ?? fallback.fontFamily
         panelSize = try container.decodeIfPresent(Double.self, forKey: .panelSize) ?? fallback.panelSize
+        themeColor = try container.decodeIfPresent(ThemeColor.self, forKey: .themeColor) ?? fallback.themeColor
         clamp()
     }
 

@@ -71,21 +71,23 @@ struct ListPaneView: View {
                         Spacer()
                         Text("\(headCount)").monospacedDigit()
                     }
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: Tokens.TypeScale.label.size, weight: .medium))
+                    .foregroundStyle(Tokens.ink3)
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .tint(Tokens.accent)
             .environment(\.defaultMinListRowHeight, 30)
 
             if showsNewRow {
                 // 条带与列表同为侧栏材质，分隔靠这条 1 px 细线，不靠色差。
                 // 线画在材质之上：画在材质下面会被窗口底色冲淡到看不见。
                 newRow
-                    .background(SidebarMaterial())
+                    .background(Tokens.rail)
                     .overlay(alignment: .top) {
                         Rectangle()
-                            .fill(Color.primary.opacity(0.12))
+                            .fill(Tokens.hair)
                             .frame(height: 1)
                     }
             }
@@ -122,10 +124,10 @@ struct ListPaneView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .semibold))
                 Text(newRowTitle)
-                    .font(.system(size: 11.5))
+                    .font(.system(size: Tokens.TypeScale.body.size))
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Tokens.ink2)
             // 左缘对齐列表里的图标列，右缘留 12：看起来是列表的续行，不是另一块控件。
             .padding(.leading, 20)
             .padding(.trailing, 12)
@@ -298,7 +300,7 @@ struct ListPaneView: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+                .fill(Tokens.rail)
         )
         .padding(.horizontal, 10)
         .padding(.top, 8)
@@ -358,14 +360,15 @@ private struct NoteRow: View {
                     .font(.system(size: 9))
                     .foregroundStyle(summary.status == .evergreen ? Color.accentColor : Color.secondary)
                 Text(summary.title)
-                    .font(.system(size: 12.5))
+                    .font(Tokens.serif(Tokens.TypeScale.listTitle.size))
+                    .foregroundStyle(Tokens.ink)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             if !summary.snippet.isEmpty {
                 Text(summary.snippet)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Tokens.ink2)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -420,22 +423,4 @@ private struct ClipRow: View {
         formatter.dateFormat = "MM-dd"
         return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
-}
-
-// MARK: - 侧栏材质
-
-/// 底部新建条带的底。要跟上面的 `List(.sidebar)` 同色。
-///
-/// `.thinMaterial` / `.bar` 在浅色下都偏白，和侧栏的灰差一档；
-/// 直接用 `NSVisualEffectView(.sidebar)` 才能两种外观下都对上。
-private struct SidebarMaterial: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }

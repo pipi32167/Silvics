@@ -31,12 +31,12 @@ struct ModuleNavView: View {
                         .frame(width: 30, height: 30)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(app.nav.active == module ? Color.accentColor.opacity(0.16) : Color.clear)
+                                .fill(app.nav.active == module ? Tokens.selectedFill : Color.clear)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .strokeBorder(
-                                    app.nav.active == module ? Color.accentColor.opacity(0.35) : Color.clear,
+                                    app.nav.active == module ? Tokens.accent.opacity(0.5) : Color.clear,
                                     lineWidth: 1
                                 )
                         )
@@ -100,6 +100,8 @@ struct ModuleNavView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.rail)
         .environment(\.defaultMinListRowHeight, 30)
     }
 
@@ -126,7 +128,7 @@ struct ModuleNavView: View {
                     Text("\(moduleCount(module))")
                         .foregroundStyle(.tertiary)
                     Text(module.shortcutLabel)
-                        .foregroundStyle(active ? Color.accentColor : Color.secondary.opacity(0.75))
+                        .foregroundStyle(active ? Tokens.accent : Tokens.ink3)
                         .accessibilityIdentifier("module-shortcut-\(module.rawValue)")
                 }
                 .font(.system(size: 10).monospacedDigit())
@@ -144,7 +146,7 @@ struct ModuleNavView: View {
     /// 选中行的底色。模块行与范围行共用，收起态的图标栏也用同一套色阶。
     private func selectionBackground(_ active: Bool) -> some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(active ? Color.accentColor.opacity(0.16) : Color.clear)
+            .fill(active ? Tokens.selectedFill : Color.clear)
     }
 
     private func scopeRow(_ row: ScopeRow) -> some View {
@@ -155,7 +157,7 @@ struct ModuleNavView: View {
             HStack(spacing: 6) {
                 Image(systemName: row.symbol)
                     .font(.system(size: 10))
-                    .foregroundStyle(active ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(active ? Tokens.accent : Tokens.ink2)
                 Text(row.title)
                     .font(.system(size: 11.5, weight: active ? .medium : .regular))
                     .foregroundStyle(.primary)
@@ -176,8 +178,8 @@ struct ModuleNavView: View {
 
     private func sectionHeader(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.tertiary)
+            .font(.system(size: Tokens.TypeScale.meta.size, weight: .medium))
+            .foregroundStyle(Tokens.ink3)
     }
 
     // MARK: - 数据

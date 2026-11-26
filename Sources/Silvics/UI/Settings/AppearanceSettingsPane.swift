@@ -67,6 +67,40 @@ struct AppearanceSettingsPane: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                HStack(spacing: 14) {
+                    ForEach(AppearanceSettings.ThemeColor.allCases) { color in
+                        Button {
+                            draft.themeColor = color
+                        } label: {
+                            Circle()
+                                .fill(Color(nsColor: color.swatch))
+                                .frame(width: 20, height: 20)
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(Tokens.ink.opacity(draft.themeColor == color ? 0.55 : 0),
+                                                      lineWidth: 2)
+                                        .padding(-3)
+                                )
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(color.title)
+                        .accessibilityIdentifier("theme-color-\(color.rawValue)")
+                    }
+                    Text(draft.themeColor.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } header: {
+                Text("主题色")
+            } footer: {
+                Text("每个主题色各有一套浅色与深色值，切换后侧栏、纸面、选中态一起变。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("字体") {
                 Picker("字体族", selection: $draft.fontFamily) {
                     ForEach(AppearanceSettings.FontFamily.allCases) { family in

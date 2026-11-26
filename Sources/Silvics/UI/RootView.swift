@@ -73,6 +73,7 @@ struct RootView: View {
                     ContentPane()
                         .frame(minWidth: 320, idealWidth: 680, maxWidth: .infinity)
                     ContextPanelView()
+                        .background(Tokens.paper)
                         .frame(
                             minWidth: contextPanelWidth.min,
                             idealWidth: contextPanelWidth.ideal,
@@ -266,7 +267,7 @@ private struct EditorPane: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Tokens.paper)
     }
 
     private var header: some View {
