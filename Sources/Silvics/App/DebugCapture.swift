@@ -494,7 +494,257 @@ enum DebugCapture {
         case "tables": runTableSelfTest()
         case "link-jump": runLinkJumpSelfTest(app)
         case "cursor-unfocused": runUnfocusedCursorSelfTest(app)
+        case "undo": runUndoSelfTest(app)
+        case "undo-same": runUndoSameNoteSelfTest(app)
+        case "undo-switch": runUndoSwitchSelfTest(app)
+        case "undo-rename": runUndoRenameSelfTest(app)
+        case "undo-spaced": runUndoSpacedSelfTest(app)
         default: return
+        }
+    }
+
+    /// `SILVICS_SELFTEST=undo|undo-same|undo-switch|undo-rename`：查 ⌘Z 的三类症状（issue #35）。
+    ///
+    /// 每一步都读三处真值：可见正文、`app.current.body`、vault 文件里的正文。
+    ///
+    /// - `undo` / `undo-same`：键入 → ⌘Z（只退这一段）→ 再 ⌘Z（栈空，正文不动）
+    ///   → 重做 → 落库。配 `SILVICS_UNDO_SHOTS=<dir>` 会存「键入后 / 撤销后 / 重做后」三张图。
+    /// - `undo-switch`：A 篇键入 → 换到 B 篇 → 连按十次 ⌘Z，看 B 会不会被改成 A 的内容。
+    /// - `undo-rename`：A 篇键入 → 改名（正文被整体重写）→ 按 ⌘Z，看会不会改坏。
+    @MainActor
+    private static func runUndoSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        runUndoDrill(app, mode: "same", after: delay)
+    }
+
+    @MainActor
+    private static func runUndoSameNoteSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        runUndoDrill(app, mode: "same", after: delay)
+    }
+
+    @MainActor
+    private static func runUndoSwitchSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        runUndoDrill(app, mode: "switch", after: delay)
+    }
+
+    @MainActor
+    private static func runUndoRenameSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        runUndoDrill(app, mode: "rename", after: delay)
+    }
+
+    /// `undo-spaced`：停笔超过一个空闲间隔后继续打字，确认 ⌘Z 只退最后一段，不退整篇。
+    @MainActor
+    private static func runUndoSpacedSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        func log(_ line: String) {
+            DebugLog.write("[undo:spaced] \(line)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findTextView(in: window.contentView!) as? EditorTextView else {
+                log("找不到编辑区")
+                return
+            }
+            window.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            log("起长=\(textView.string.count) canUndo=\(textView.canUndoAction?().description ?? "nil")")
+            func type(_ chars: [Character], at offset: Int, then next: @escaping () -> Void) {
+                guard offset < chars.count else { next(); return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(offset + 1) * 0.4) {
+                    MainActor.assumeIsolated {
+                        textView.insertText(String(chars[offset]), replacementRange: textView.selectedRange())
+                        log("键入 \(chars[offset]) 后 canUndo=\(textView.canUndoAction?().description ?? "nil")")
+                        type(chars, at: offset + 1, then: next)
+                    }
+                }
+            }
+            type(Array("甲乙"), at: 0) {
+                // 停笔超过 `UndoPolicy.idleInterval`（1.5 s），让撤销栈断开。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                    MainActor.assumeIsolated {
+                        log("停笔后=\(textView.string.count) 尾=\(String(textView.string.suffix(4)).debugDescription)")
+                        type(Array("丙丁戊"), at: 0) {
+                            log("再键入后=\(textView.string.count) 尾=\(String(textView.string.suffix(8)).debugDescription)")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                MainActor.assumeIsolated {
+                                    _ = NSApp.mainMenu?.performKeyEquivalent(with: NSEvent.keyEvent(
+                                        with: .keyDown, location: .zero, modifierFlags: [.command],
+                                        timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil,
+                                        characters: "z", charactersIgnoringModifiers: "z",
+                                        isARepeat: false, keyCode: 6
+                                    )!)
+                                    log("⌘Z后=\(textView.string.count) 尾=\(String(textView.string.suffix(8)).debugDescription)")
+                                    var round = 0
+                                    while textView.canUndoAction?() == true, round < 8 {
+                                        round += 1
+                                        _ = textView.onUndo?()
+                                        log("  再撤#\(round)=\(textView.string.count) 尾=\(String(textView.string.suffix(6)).debugDescription)")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private static func runUndoDrill(_ app: AppState, mode: String, after delay: TimeInterval) {
+        func log(_ line: String) {
+            DebugLog.write("[undo:\(mode)] \(line)")
+        }
+        func vaultBody(_ id: String) -> String {
+            let url = app.repo.vaultURL
+                .appendingPathComponent(VaultFormat.notesDir, isDirectory: true)
+                .appendingPathComponent(VaultFormat.fileName(for: id))
+            return (try? String(contentsOf: url, encoding: .utf8)) ?? "<读不到>"
+        }
+        @MainActor func dump(_ tag: String, window: NSWindow?, textView: NSTextView?) {
+            let visible = textView?.string ?? "<无>"
+            let title = app.current?.title ?? "<无>"
+            let files = app.summaries.prefix(3).map { s in
+                "\(s.title):\(vaultBody(s.id).count)"
+            }.joined(separator: " ")
+            let editor = textView as? EditorTextView
+            let canUndo = editor?.canUndoAction?().description ?? "nil"
+            let canRedo = editor?.canRedoAction?().description ?? "nil"
+            let tail = String(visible.suffix(8)).debugDescription
+            let bodyCount = app.current?.body.count ?? -1
+            let status = app.statusMessage ?? "-"
+            log("\(tag) 当前=\(title) 可见=\(visible.count) 尾=\(tail) current=\(bodyCount)"
+                + " canUndo=\(canUndo) canRedo=\(canRedo) 状态=\(status) 文件=\(files)")
+        }
+        @MainActor func menuProbe(_ title: String) -> String {
+            let item = NSApp.mainMenu?.items
+                .compactMap { $0.submenu?.items }
+                .flatMap { $0 }
+                .first { $0.title == title }
+            guard let item else { return "\(title)=缺" }
+            let action = item.action.map { NSStringFromSelector($0) } ?? "nil"
+            let target = item.target.map { String(describing: type(of: $0)) } ?? "nil"
+            let routed = item.action.flatMap { NSApp.target(forAction: $0, to: nil, from: item) }
+                .map { String(describing: type(of: $0)) } ?? "nil"
+            return "\(title): action=\(action) target=\(target) 路由=\(routed) enabled=\(item.isEnabled ? "on" : "off")"
+        }
+        @MainActor func pressUndo(_ window: NSWindow) -> Bool {
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: "z", charactersIgnoringModifiers: "z",
+                isARepeat: false, keyCode: 6
+            ) else { return false }
+            return NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findTextView(in: window.contentView!) as? EditorTextView,
+                  let startNote = app.current else {
+                log("找不到编辑区")
+                return
+            }
+            log("A=\(startNote.title) (\(startNote.id)) 原长=\(textView.string.count)")
+            window.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+            for ch in "【撤销测试】" {
+                textView.insertText(String(ch), replacementRange: textView.selectedRange())
+            }
+            dump("键入后", window: window, textView: textView)
+            log("菜单 \(menuProbe("Undo")) | \(menuProbe("Redo"))")
+            if let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] {
+                captureNow(prefix: shots, tag: "01-键入后")
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                MainActor.assumeIsolated {
+                    app.flushPendingSave()
+                    dump("落库后", window: window, textView: textView)
+                    switch mode {
+                    case "rename":
+                        let old = startNote.title
+                        app.rename(newTitle: old + "改")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            MainActor.assumeIsolated {
+                                let fresh = findTextView(in: window.contentView!) as? EditorTextView
+                                dump("改名后", window: window, textView: fresh)
+                                _ = pressUndo(window)
+                                dump("⌘Z后", window: window,
+                                     textView: findTextView(in: window.contentView!) as? EditorTextView)
+                            }
+                        }
+                    case "switch":
+                        guard let other = app.summaries.first(where: { $0.id != startNote.id }) else {
+                            log("只有一篇笔记，无法换")
+                            return
+                        }
+                        app.select(other.id)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            MainActor.assumeIsolated {
+                                var currentText: EditorTextView? = findTextView(in: window.contentView!) as? EditorTextView
+                                dump("换到B", window: window, textView: currentText)
+                                if let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] {
+                                    captureNow(prefix: shots, tag: "04-换到B")
+                                }
+                                for i in 1...10 {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.3) {
+                                        MainActor.assumeIsolated {
+                                            _ = pressUndo(window)
+                                            currentText = findTextView(in: window.contentView!) as? EditorTextView
+                                            dump("⌘Z#\(i)", window: window, textView: currentText)
+                                            if i == 1, let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] {
+                                                captureNow(prefix: shots, tag: "05-B上撤销")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    default:
+                        let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"]
+                        func editorNow() -> EditorTextView? {
+                            findTextView(in: window.contentView!) as? EditorTextView
+                        }
+                        func step(_ delay: TimeInterval, _ body: @escaping @MainActor () -> Void) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                MainActor.assumeIsolated(body)
+                            }
+                        }
+                        step(0.3) {
+                            _ = pressUndo(window)
+                            dump("⌘Z#1", window: window, textView: editorNow())
+                        }
+                        step(0.8) {
+                            if let shots { captureNow(prefix: shots, tag: "02-撤销后") }
+                        }
+                        step(1.4) {
+                            _ = pressUndo(window)
+                            dump("⌘Z#2（栈已空）", window: window, textView: editorNow())
+                        }
+                        step(1.9) {
+                            let redone = NSApp.sendAction(
+                                #selector(EditorTextView.redo(_:)), to: editorNow(), from: nil
+                            )
+                            log("重做 处理=\(redone)")
+                            dump("⌘⇧Z", window: window, textView: editorNow())
+                        }
+                        step(2.4) {
+                            if let shots { captureNow(prefix: shots, tag: "03-重做后") }
+                            log("菜单 \(menuProbe("Undo")) | \(menuProbe("Redo"))")
+                        }
+                        step(2.9) {
+                            app.flushPendingSave()
+                            dump("落库后", window: window, textView: editorNow())
+                        }
+                        step(3.4) {
+                            // 撤销后的正文必须真的落库，否则下次启动又回来。
+                            _ = pressUndo(window)
+                            app.flushPendingSave()
+                            dump("再撤并落库", window: window, textView: editorNow())
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -922,6 +1172,15 @@ enum DebugCapture {
                 // 写文件不用 print：stdout 重定向到文件是块缓冲，探针会看不到。
                 DebugLog.write("[cursor-probe] " + reports.joined(separator: " | "))
             }
+        }
+    }
+
+    /// 立刻把主窗口写成 PNG。撤销演练用它取「键入后 / 撤销后 / 重做后」三张图。
+    @MainActor
+    static func captureNow(prefix: String, tag: String) {
+        let path = "\(prefix)/\(tag).png"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            captureAll(to: path)
         }
     }
 

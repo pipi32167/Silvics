@@ -149,6 +149,8 @@ scripts/release.sh --check-upload    # 验证上传通道
 - 单测不得碰真钥匙串：用 `InMemorySecretStore`。
 - 本地服务（magpie / Ollama）靠 `ProviderConfig.requiresKey=false` 免密钥；不要靠填假 key 绕过。
 - 冲突合并的模型输出必须先过 `ConflictResolver.clean` 与 `validate`：去分隔标记、拒冲突标记、拒异常长。
+- **撤销/重做只能走 `EditorUndoStack`，不要再接 `NSUndoManager` 或窗口的 `undoManager`。** 实测（macOS 27 / TextKit 2）`groupingLevel` 恒为 1，整场输入合成一步，`⌘Z` 一次清空整篇；`breakUndoCoalescing()` 只断合并不断分组，补不上。步长规则在 `UndoPolicy`（句读 / 40 字 / 停笔 1.5 s / 换段落）。
+- **外部整体替换正文（改名、别名、批量转换、冲突合并）必须调 `applyExternalText`**：它清空撤销栈并以新正文为新起点。旧快照带着旧正文的 range，留着会删错位置（实测抛 `NSRangeException`）。
 - 同步设置改动必须立即写 UserDefaults。不要再出现「只有点同步才保存」的实现。
 - 同步跑不跑由 `SyncScheduler.shouldRun` 判定（启动 10 s / 定时间格 / 失败退避 5-15-60 / 有冲突不跑）。不要在别处另写一套判断。
 - **vault 导出只写不删。** 库空了不能连带清空 vault（备份会一起没）。删除笔记走 `VaultSync.removeFromVault(id:)`。
@@ -181,6 +183,7 @@ UI → App → Core / EditorKit     反向依赖不允许
 8. **边界用例编号化就是契约**：`S/E/T/C/X/H/L` 编号跨语言、跨实现都成立，是唯一能带进 Swift 的资产。代码会重写，用例不会。移植时按编号写 XCTest。
 9. **测试不得碰真实状态**：不写真实 `UserDefaults`（用独立 suite）、不写 `~/Documents`（用临时 vault）。曾把本机提及开关设成 `true`，全量用例直接数组越界崩溃。
 10. **页面级用例管逻辑，端到端审计管交互**：JS 原型里 77 条管解析与模型，28 条真键入/回车/粘贴管编辑行为。前者能直搬，后者要在目标平台重写。两套都跑过才算验完。
+11. **别跟 AppKit 的撤销分组硬碰**：`⌘Z` 一次清空整篇，第一反应是调 `breakUndoCoalescing()`。实测它只断「合并」，不断「分组」；而分组在真实事件循环里永不关闭（`groupingLevel` 恒 1），所以整场输入还是一步。改成按操作记前后快照后，粒度、跨笔记隔离、外部替换后的安全性三件事一起解决。判据先落在「一次 ⌘Z 少几个字」这种可量的数上，别先谈手感。
 
 ## 界面取证
 
