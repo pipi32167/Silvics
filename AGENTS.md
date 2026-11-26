@@ -220,6 +220,8 @@ open .build/Build/Products/Debug/Silvics.app \
 - 加功能或改结构：minor +1（`0.4.0` → `0.4.1`）。
 - 动数据格式或要迁移：才走 major。
 - 版本号只由 `scripts/release.sh` 写入 `project.yml`。
+- 脚本在哪个分支跑，就把 `HEAD` 推到**那个分支**（分支跑就推分支，不推 main）。在 worktree 里发版后要自己补一次 `git push origin <分支>:main`，或者发版前先把分支合进 main 再跑。
+- 并行干活时版本号会被别人抢：发版前先 `git tag --list "v<版本>"` 与 `gh release list` 各看一眼，撞了就顺延。
 
 ### 验收报告
 
