@@ -18,6 +18,68 @@ struct ContextPanelView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            tabBar
+            Divider()
+            if app.aiPanel == .ai {
+                AIChatPanelView()
+            } else {
+                detailsBody
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+
+        .onChange(of: app.current?.id) { _, _ in
+            summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
+            tagInput = ""
+        }
+        .onAppear {
+            summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
+        }
+        .alert("删除这篇剪藏？", isPresented: $isConfirmingDelete) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) {
+                if let clip = clipNote { app.deleteClip(id: clip.id) }
+            }
+        } message: {
+            let refs = clipNote.map { app.clipReferenceCount(id: $0.id) } ?? 0
+            Text(refs > 0
+                 ? "有 \(refs) 篇笔记引用它，删除后这些引用会变成悬空。"
+                 : "这个操作不能撤销。")
+        }
+    }
+
+    // MARK: - 页签
+
+    /// `详情` / `AI` 两个页签。选择落 `AISettings`，下次启动沿用。
+    private var tabBar: some View {
+        HStack(spacing: 3) {
+            ForEach([AISettings.PanelTab.details, AISettings.PanelTab.ai], id: \.rawValue) { tab in
+                let selected = app.aiPanel == tab
+                Button {
+                    app.setAIPanel(tab)
+                } label: {
+                    Text(tab == .details ? "详情" : "AI")
+                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(selected ? Color.primary.opacity(0.09) : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(tab == .details ? "来源与连接" : "向 AI 提问")
+                .accessibilityIdentifier("context-tab-\(tab.rawValue)")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private var detailsBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if app.nav.active == .journal, app.nav.journalScope == .todos {
@@ -51,26 +113,6 @@ struct ContextPanelView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-
-        .onChange(of: app.current?.id) { _, _ in
-            summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
-            tagInput = ""
-        }
-        .onAppear {
-            summaryDraft = clipNote?.metaFields[ClipFields.summary] ?? ""
-        }
-        .alert("删除这篇剪藏？", isPresented: $isConfirmingDelete) {
-            Button("取消", role: .cancel) {}
-            Button("删除", role: .destructive) {
-                if let clip = clipNote { app.deleteClip(id: clip.id) }
-            }
-        } message: {
-            let refs = clipNote.map { app.clipReferenceCount(id: $0.id) } ?? 0
-            Text(refs > 0
-                 ? "有 \(refs) 篇笔记引用它，删除后这些引用会变成悬空。"
-                 : "这个操作不能撤销。")
         }
     }
 

@@ -20,7 +20,8 @@ enum ChatClient {
         config: ProviderConfig,
         key: String,
         messages: [ChatMessage],
-        maxTokens: Int = 800
+        maxTokens: Int = 800,
+        temperature: Double = 0
     ) -> Result<ProbeRequest, ProviderProbeError> {
         guard let base = config.normalizedBaseURL else { return .failure(.badURL) }
         guard !config.chatModel.isEmpty else { return .failure(.missingModel) }
@@ -34,7 +35,7 @@ enum ChatClient {
                 "model": config.chatModel,
                 "messages": messages.map { ["role": $0.role, "content": $0.content] },
                 "max_tokens": maxTokens,
-                "temperature": 0,
+                "temperature": temperature,
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: body) else {
                 return .failure(.encoding)
@@ -51,6 +52,7 @@ enum ChatClient {
             var body: [String: Any] = [
                 "model": config.chatModel,
                 "max_tokens": maxTokens,
+                "temperature": temperature,
                 "messages": conversation,
             ]
             if let system { body["system"] = system }
@@ -77,7 +79,7 @@ enum ChatClient {
             }
             var body: [String: Any] = [
                 "contents": contents,
-                "generationConfig": ["maxOutputTokens": maxTokens, "temperature": 0],
+                "generationConfig": ["maxOutputTokens": maxTokens, "temperature": temperature],
             ]
             if let system = messages.first(where: { $0.role == "system" })?.content {
                 body["systemInstruction"] = ["parts": [["text": system]]]
@@ -123,10 +125,11 @@ enum ChatClient {
         key: String,
         messages: [ChatMessage],
         maxTokens: Int = 800,
+        temperature: Double = 0,
         session: URLSession = .shared
     ) async -> Result<String, LLMError> {
         let built: ProbeRequest
-        switch request(config: config, key: key, messages: messages, maxTokens: maxTokens) {
+        switch request(config: config, key: key, messages: messages, maxTokens: maxTokens, temperature: temperature) {
         case .success(let value): built = value
         case .failure(let error): return .failure(LLMError(message: error.message))
         }

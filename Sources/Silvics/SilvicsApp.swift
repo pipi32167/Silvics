@@ -131,6 +131,20 @@ struct SilvicsApp: App {
 
                 Divider()
 
+                Button("向 AI 提问") {
+                    app.setAIPanel(.ai)
+                    SettingsNavigation.shared.selectedTab = .ai
+                }
+                .keyboardShortcut("a", modifiers: [.command, .option])
+
+                Button("引用选中内容提问") {
+                    app.captureQuoteFromEditor()
+                }
+                .keyboardShortcut("q", modifiers: [.command, .shift])
+                .disabled(app.current == nil)
+
+                Divider()
+
                 Button("整理未链接提及…") {
                     app.refreshMentionGroups()
                     app.isShowingMentionsSheet = true

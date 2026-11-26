@@ -84,6 +84,12 @@ enum DebugCapture {
         // 先切 vault 再播种 / 开面板：`SILVICS_VAULT` 换目录后，后面的写入要落到新目录。
         applySyncFlags(app)
 
+        // `SILVICS_AI_PROVIDER=1`：预置一个假的对话服务商并绑到「对话」用途。
+        // 只影响界面状态（输入框可发送），不会真的发请求。
+        if ProcessInfo.processInfo.environment["SILVICS_AI_PROVIDER"] == "1" {
+            seedDemoProvider(app)
+        }
+
         // `SILVICS_JOURNAL_CARRY=<关键字>`：取证「承接插在当前行之前」。
         // 先备好上一篇日记与今天的正文（同步），等编辑区出来后把光标放进含关键字的段落，
         // 再走 `insertCarryAtCaret` 的真实链路。截图里要能看出承接段不在最前。
@@ -197,8 +203,81 @@ enum DebugCapture {
                 app.goToToday()
             case "alias": app.isShowingAliasSheet = true        case "rename": app.isShowingRenameSheet = true
             case "sync": SettingsWindowController.show(app: app, tab: .sync)
+            case "ai", "ai-empty":
+                app.setAIPanel(.ai)
+            case "ai-details", "details":
+                app.setAIPanel(.details)
+            case "ai-chat":
+                seedAIConversation(app)
+                app.setAIPanel(.ai)
+            case "ai-quote":
+                app.setAIPanel(.ai)
+                app.aiQuote = AIQuote(
+                    noteID: app.current?.id ?? "n-demo",
+                    noteTitle: app.current?.title ?? "剪藏标题",
+                    text: "稀疏重复优于集中突击：同样的总时长拆成多次，每次之间留出遗忘，回忆本身就在加固记忆。"
+                )
+            case "ai-sending":
+                seedAIConversation(app)
+                app.setAIPanel(.ai)
+                app.aiIsSending = true
+            case "ai-error":
+                seedAIConversation(app)
+                app.setAIPanel(.ai)
+                app.aiError = "模型响应超时"
+            case "ai-evidence":
+                app.setAIPanel(.ai)
+                app.aiEvidences = [
+                    AIEvidence(
+                        url: "https://example.com/spaced-repetition",
+                        title: "间隔重复的实验证据",
+                        text: "实验组把 60 分钟拆成 6 次，每次 10 分钟，一周后测试回忆率显著高于一次学完的对照组。"
+                    )
+                ]
+            case "ai-no-provider":
+                app.setAIPanel(.ai)
+                app.aiError = "还没有可用的对话模型：未选择服务商"
+            case "settings-ai":
+                SettingsWindowController.show(app: app, tab: .ai)
             default: break
             }
+    }
+
+    /// 仅取证：往当前会话写一组固定的提问与回答。
+    ///
+    /// 不调模型：截图要的是布局，不是真实回答。
+    @MainActor
+    private static func seedAIConversation(_ app: AppState) {
+        let noteID = app.aiSessionID
+        let store = app.aiStore
+        let base = AIMessage.now() - 60_000
+        let quote = AIQuote(
+            noteID: app.current?.id ?? "n-demo",
+            noteTitle: app.current?.title ?? "剪藏标题",
+            text: "稀疏重复优于集中突击：同样的总时长拆成多次，每次之间留出遗忘。"
+        )
+        let messages: [AIMessage] = [
+            AIMessage(
+                id: "demo-1", at: base, role: AIMessage.roleUser,
+                content: "这篇说的「间隔」到底该多长？", quote: quote
+            ),
+            AIMessage(
+                id: "demo-2", at: base + 3_000, role: AIMessage.roleAssistant,
+                content: "文中给的是「刚好开始遗忘时」而不是固定天数。实践上先用 1 天、3 天、7 天三档，之后按回忆难度拉开。关键不是日历，是每次回忆都得有点费力。",
+                model: "deepseek-chat"
+            ),
+            AIMessage(
+                id: "demo-3", at: base + 8_000, role: AIMessage.roleUser,
+                content: "那和集中复习比，总时长一样的话哪个更好？"
+            ),
+            AIMessage(
+                id: "demo-4", at: base + 12_000, role: AIMessage.roleAssistant,
+                content: "总时长相同时间隔更好。原因有两条：一是每次回忆都是一次检索练习，二是间隔让遗忘发生，重新提取的难度更高，留下的痕迹更深。集中复习的收益主要停在当时的熟悉感上。",
+                model: "deepseek-chat"
+            ),
+        ]
+        _ = try? store.save(messages, noteID: noteID)
+        app.reloadAIConversation()
     }
 
     /// 仅取证：备好「上一篇日记 + 今天日记」，供 `SILVICS_JOURNAL_CARRY` 演示中间插入。

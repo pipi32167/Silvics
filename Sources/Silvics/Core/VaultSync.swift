@@ -46,6 +46,11 @@ final class VaultSync {
         for dir in [vaultURL, baseURL, conflictsURL, trashURL] + noteDirURLs {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        // AI 会话目录。它在 vault 根下，和 notes/ 平级，跟着 git 同步。
+        try fm.createDirectory(
+            at: vaultURL.appendingPathComponent(VaultFormat.aiDir, isDirectory: true),
+            withIntermediateDirectories: true
+        )
         let ignore = vaultURL.appendingPathComponent(".gitignore")
         try VaultFormat.writeAtomic(Data(VaultFormat.gitignore.utf8), to: ignore)
     }
@@ -82,7 +87,9 @@ final class VaultSync {
         }
 
         _ = live
-        let manifest = VaultFormat.makeManifest(snapshot)
+        let conversations = exportConversations()
+        written += conversations.written
+        let manifest = VaultFormat.makeManifest(snapshot, conversations: conversations.entries)
         if try VaultFormat.writeAtomic(
             VaultFormat.encodeManifest(manifest),
             to: vaultURL.appendingPathComponent(VaultFormat.manifestName)
@@ -90,6 +97,25 @@ final class VaultSync {
             written += 1
         }
         return written
+    }
+
+    /// 把 `ai/*.jsonl` 写进 vault。只写不删，和笔记一致。
+    ///
+    /// 会话本来就是在 vault 目录里读写的，这里再写一次是为了两件事：
+    /// 库外的旧会话能在换目录时被收拢，以及 manifest 拿到一致的条目。
+    @discardableResult
+    func exportConversations() -> (written: Int, entries: [(id: String, text: String, updated: Int64)]) {
+        let store = AIConversationStore(vaultURL: vaultURL)
+        var written = 0
+        var entries: [(id: String, text: String, updated: Int64)] = []
+        for (noteID, messages) in store.loadAll().sorted(by: { $0.key < $1.key }) {
+            let kept = AIConversation.trim(messages)
+            guard !kept.isEmpty else { continue }
+            let text = AIConversation.encode(kept)
+            if (try? store.save(kept, noteID: noteID)) == true { written += 1 }
+            entries.append((noteID, text, kept.last?.at ?? 0))
+        }
+        return (written, entries)
     }
 
     /// 笔记被删掉时同步删掉 vault 里的文件。只有用户主动删除才调用。
@@ -204,6 +230,37 @@ final class VaultSync {
                 if VaultFormat.contentHash(note) != entry.hash { hashMismatch += 1 }
             }
             if hashMismatch > 0 { problems.append("\(hashMismatch) 篇整篇哈希与 manifest 不一致") }
+        }
+
+        // 会话文件校验。旧 manifest 没有这个字段，按空数组对待，不报错。
+        let aiDirURL = vaultURL.appendingPathComponent(VaultFormat.aiDir, isDirectory: true)
+        let aiFiles = (try? fm.contentsOfDirectory(atPath: aiDirURL.path)) ?? []
+        var diskConversations: [String: String] = [:]
+        for name in aiFiles where name.hasSuffix("." + AIConversation.fileExtension) {
+            guard let noteID = AIConversation.noteID(fromFileName: name),
+                  let text = try? String(contentsOf: aiDirURL.appendingPathComponent(name), encoding: .utf8)
+            else { continue }
+            diskConversations[noteID] = text
+        }
+        let manifestConversations = Dictionary(
+            manifest.conversations.map { ($0.id, $0.hash) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let missingConversations = Set(manifestConversations.keys).subtracting(diskConversations.keys)
+        let extraConversations = Set(diskConversations.keys).subtracting(manifestConversations.keys)
+        if !missingConversations.isEmpty {
+            problems.append("\(missingConversations.count) 个会话在 manifest 里有、文件不存在")
+        }
+        if !extraConversations.isEmpty {
+            problems.append("\(extraConversations.count) 个会话文件不在 manifest 里，下次同步会补上")
+        }
+        var conversationMismatch = 0
+        for (noteID, text) in diskConversations {
+            guard let expected = manifestConversations[noteID] else { continue }
+            if VaultFormat.conversationHash(text) != expected { conversationMismatch += 1 }
+        }
+        if conversationMismatch > 0 {
+            problems.append("\(conversationMismatch) 个会话文件哈希与 manifest 不一致")
         }
 
         let local = try repo.vaultNotes().filter { shouldSync(type: $0.type) }
@@ -368,6 +425,40 @@ final class VaultSync {
         return report.inserted + report.updated
     }
 
+    // MARK: - AI 会话合并
+
+    /// 把远端改过的 `ai/*.jsonl` 与本地的三方合并，结果写回本地。
+    ///
+    /// base 取 merge-base 那一版，所以两边各自追加的消息会并到一起，
+    /// 清空标记也按时间生效。返回合并过的会话数。
+    @discardableResult
+    func mergeRemoteConversations(
+        git: GitClient,
+        baseRev: String,
+        branch: String,
+        changed: [String]
+    ) -> Int {
+        let store = AIConversationStore(vaultURL: vaultURL)
+        var merged = 0
+        for path in changed {
+            guard path.hasPrefix(VaultFormat.aiDir + "/") else { continue }
+            guard let name = path.split(separator: "/").last.map(String.init),
+                  let noteID = AIConversation.noteID(fromFileName: name)
+            else { continue }
+
+            let remoteText = git.fileContent(path: path, ref: "origin/\(branch)") ?? ""
+            let baseText = git.fileContent(path: path, ref: baseRev) ?? ""
+            let local = store.load(noteID: noteID).messages
+            let remote = AIConversation.decode(remoteText).messages
+            let base = AIConversation.decode(baseText).messages
+
+            let result = AIConversation.merge(base: base, local: local, remote: remote)
+            guard !result.isEmpty, result != local else { continue }
+            if (try? store.save(result, noteID: noteID)) != nil { merged += 1 }
+        }
+        return merged
+    }
+
     // MARK: - 冲突解决
 
     private struct Resolution {
@@ -382,6 +473,10 @@ final class VaultSync {
         let git = self.git
         let baseRev = git.mergeBase("origin/\(branch)") ?? "HEAD"
         let changed = git.changedPaths(from: baseRev, to: "origin/\(branch)")
+
+        // AI 会话按消息 id 三方合并，写回本地。
+        // `beginMergeKeepingOurs` 会让 git 保留我们的版本，所以必须先合完再交给 git。
+        mergeRemoteConversations(git: git, baseRev: baseRev, branch: branch, changed: changed)
 
         var localById: [String: VaultFormat.Note] = [:]
         for note in try repo.vaultNotes() { localById[note.id] = note }

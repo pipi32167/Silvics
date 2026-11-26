@@ -17,9 +17,12 @@ enum VaultFormat {
 
     static let schema = 1
     /// manifest 的版本。2 起哈希覆盖整篇（frontmatter + 正文），不只是正文。
-    static let manifestSchema = 2
+    /// 3 起带 `conversations`：AI 会话文件也进 manifest，能查漂移。
+    static let manifestSchema = 3
     static let notesDir = "notes"
     static let templatesDir = "templates"
+    /// AI 会话目录。一条笔记一个 `<note-id>.jsonl`。
+    static let aiDir = "ai"
     static let baseDir = ".base"
     static let conflictsDir = ".conflicts"
     static let trashDir = ".trash"
@@ -561,6 +564,8 @@ enum VaultFormat {
         var schema: Int
         var count: Int
         var notes: [Entry]
+        /// AI 会话文件。旧 manifest 没有这个字段，缺省空数组。
+        var conversations: [ConversationEntry] = []
 
         struct Entry: Codable, Equatable {
             var id: String
@@ -572,9 +577,22 @@ enum VaultFormat {
             /// 文件名。日记是日期式文件名，不能从 id 直接推。旧 manifest 缺省按 `<id>.md`。
             var file: String? = nil
         }
+
+        /// 一个会话文件的指纹。`id` 是笔记 id（全局会话用 `_global`）。
+        struct ConversationEntry: Codable, Equatable {
+            var id: String
+            var hash: String
+            var updated: Int64
+        }
     }
 
-    static func makeManifest(_ notes: [Note]) -> Manifest {
+    /// 会话文件的整篇哈希。用来查「文件改过但没重写 manifest」。
+    static func conversationHash(_ text: String) -> String { hash(text) }
+
+    static func makeManifest(
+        _ notes: [Note],
+        conversations: [(id: String, text: String, updated: Int64)] = []
+    ) -> Manifest {
         Manifest(
             schema: manifestSchema,
             count: notes.count,
@@ -587,6 +605,15 @@ enum VaultFormat {
                         updated: $0.updatedAt,
                         dir: noteDir(for: $0.type),
                         file: noteFileName(id: $0.id, type: $0.type)
+                    )
+                }
+                .sorted { $0.id < $1.id },
+            conversations: conversations
+                .map {
+                    Manifest.ConversationEntry(
+                        id: $0.id,
+                        hash: conversationHash($0.text),
+                        updated: $0.updated
                     )
                 }
                 .sorted { $0.id < $1.id }

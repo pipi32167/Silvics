@@ -44,6 +44,29 @@ final class AppState: ObservableObject {
     @Published private(set) var providerSettings = ProviderSettings()
     /// 剪藏设置。改动即时生效并落 UserDefaults。
     @Published var clipSettings = ClipSettings.load()
+
+    // MARK: - AI 提问
+
+    /// AI 提问设置。改动即时生效并落 UserDefaults。
+    @Published var aiSettings = AISettings.load()
+    /// 当前会话的消息（含清空标记）。显示时用 `AIConversation.visible`。
+    @Published var aiMessages: [AIMessage] = []
+    /// 本轮引用。提问时带进上下文，发完清掉。
+    @Published var aiQuote: AIQuote?
+    /// 本轮网页证据。只进本轮请求，不回灌历史。
+    @Published var aiEvidences: [AIEvidence] = []
+    /// 提问输入框。
+    @Published var aiInput: String = ""
+    /// 正在等模型回答。
+    @Published var aiIsSending = false
+    /// 上次失败的给用户看的原因。
+    @Published var aiError: String?
+    /// 正在抓网页。
+    @Published var aiEvidenceLoading = false
+    /// 会话文件里有几行解析不了。界面提示用。
+    @Published var aiBadLineCount = 0
+    /// 正在跑的请求。点「停止」时取消。
+    var aiTask: Task<Void, Never>?
     /// 全部剪藏（列表模型，不含正文）。
     @Published var clipSummaries: [ClipSummary] = []
     /// 剪藏标签，只出现在剪藏范围。
@@ -412,6 +435,7 @@ final class AppState: ObservableObject {
             danglingTargets = try repo.danglingTargets()
             mentions = try repo.mentions(in: id)
             aliases = try repo.aliases(noteId: id)
+            loadAIConversation()
         } catch {
             statusMessage = "打开笔记失败：\(error.localizedDescription)"
         }
@@ -769,7 +793,8 @@ final class AppState: ObservableObject {
     }
 
     /// 正文与 `body` 一致的编辑区。窗口里还有搜索框的 field editor，不能只取第一个 `NSTextView`。
-    private static func editorTextView(in view: NSView, matching body: String) -> NSTextView? {
+    /// 供 `AppStateAI` 取编辑区选区用，不能是 private。
+    static func editorTextView(in view: NSView, matching body: String) -> NSTextView? {
         var candidates: [NSTextView] = []
         collectTextViews(in: view, into: &candidates)
         return candidates.first { $0.string == body } ?? candidates.first
@@ -979,6 +1004,8 @@ final class AppState: ObservableObject {
         appearance = AppearanceSettings()
         Theme.apply(appearance)
         clipSettings = ClipSettings()
+        aiSettings = AISettings()
+        AISettings.clear()
         refreshProviders()
     }
 

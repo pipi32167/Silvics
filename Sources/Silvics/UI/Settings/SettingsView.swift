@@ -6,6 +6,7 @@ import SwiftUI
 enum SettingsTab: String, CaseIterable, Identifiable {
     case appearance
     case clips
+    case ai
     case providers
     case sync
     case about
@@ -16,6 +17,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return "外观"
         case .clips: return "剪藏"
+        case .ai: return "AI 提问"
         case .providers: return "模型服务"
         case .sync: return "同步"
         case .about: return "关于"
@@ -26,6 +28,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return "textformat.size"
         case .clips: return "bookmark"
+        case .ai: return "sparkles"
         case .providers: return "sparkles"
         case .sync: return "arrow.triangle.2.circlepath"
         case .about: return "info.circle"
@@ -105,6 +108,8 @@ struct SettingsView: View {
                 AppearanceSettingsPane()
             case .clips:
                 ClipSettingsPane()
+            case .ai:
+                AISettingsPane()
             case .providers:
                 ProvidersSettingsPane()
             case .sync:
