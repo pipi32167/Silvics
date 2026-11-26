@@ -21,7 +21,7 @@ struct AIEvidence: Codable, Equatable {
 ///
 /// 元数据跟着消息走：引用、证据、模型名、token 数都在同一条记录里，
 /// 跨设备合并后不会丢。
-struct AIMessage: Codable, Equatable {
+struct AIMessage: Codable, Equatable, Identifiable {
     var id: String
     var at: Int64
     var role: String
