@@ -62,7 +62,13 @@ final class EditorTextView: NSTextView {
     /// 点击的引用目标标题。由 Coordinator 提供解析。
     var onOpenWikiLink: ((String) -> Void)?
     /// 已解析的引用区间与目标。用于点击命中判定。
-    var wikiHitRects: [(NSRange, String)] = []
+    var wikiHitRects: [(NSRange, String)] = [] {
+        didSet {
+            if !Self.sameWikiRects(oldValue, wikiHitRects) {
+                window?.invalidateCursorRects(for: self)
+            }
+        }
+    }
     /// 当前笔记的未链接提及区间。`⌘⇧K` 按光标命中判定。
     var mentionRanges: [NSRange] = []
     /// Esc 时先通知补全面板。
@@ -116,6 +122,8 @@ final class EditorTextView: NSTextView {
     private var todoCheckboxes: [Int: TodoCheckbox] = [:]
     private var isLayingOutCheckboxes = false
     private var scrollObserver: NSObjectProtocol?
+    /// 上一次看到的 ⌘ 状态。只在变化时重算指针形状。
+    private var lastCommandFlag = NSEvent.modifierFlags.contains(.command)
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -378,6 +386,156 @@ final class EditorTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
+    // MARK: 指针形状（issue #8）
+
+    /// 按住 ⌘ 时，落在引用上的指针变成手型，提示「可跳转」。
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard NSEvent.modifierFlags.contains(.command) else { return }
+        for rect in wikiLinkCursorRects() {
+            addCursorRect(rect, cursor: .pointingHand)
+        }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        refreshCursorForCommandKey()
+    }
+
+    /// ⌘ 只是按下 / 松开、鼠标不动时，AppKit 不会重算光标矩形，这里手动推一次。
+    private func refreshCursorForCommandKey() {
+        guard let window else { return }
+        let command = NSEvent.modifierFlags.contains(.command)
+        guard command != lastCommandFlag else { return }
+        lastCommandFlag = command
+        window.invalidateCursorRects(for: self)
+
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard bounds.contains(point) else { return }
+        guard wikiTarget(at: point) != nil else { return }
+        (command ? NSCursor.pointingHand : NSCursor.iBeam).set()
+    }
+
+    /// 每个引用区间按视觉行切开的矩形（视图坐标）。
+    ///
+    /// `resetCursorRects` 用它注册手型指针；测试直接量这些矩形。
+    func wikiLinkCursorRects() -> [NSRect] {
+        guard let manager = textLayoutManager,
+              let storage = textStorage, storage.length > 0 else { return [] }
+        let document = manager.documentRange
+        let origin = textContainerOrigin
+        var out: [NSRect] = []
+        for (range, _) in wikiHitRects {
+            guard range.length > 0,
+                  range.location >= 0,
+                  range.location + range.length <= storage.length,
+                  let start = manager.location(document.location, offsetBy: range.location),
+                  let end = manager.location(start, offsetBy: range.length),
+                  let textRange = NSTextRange(location: start, end: end) else { continue }
+            manager.ensureLayout(for: textRange)
+            manager.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
+                // 空片段不加矩形，否则鼠标落在行尾也会变手型。
+                guard frame.width > 1 else { return true }
+                out.append(frame.offsetBy(dx: origin.x, dy: origin.y))
+                return true
+            }
+        }
+        return out
+    }
+
+    #if DEBUG
+    /// 仅取证：报告「鼠标是否停在引用上、当前指针是不是手型」。
+    ///
+    /// 指针形状截不进图（`screencapture -C` 在本机不画光标），只能读运行时的真值。
+    func debugCursorReport() -> String {
+        guard let window else { return "no-window" }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let overLink = bounds.contains(point) && wikiTarget(at: point) != nil
+        let cursor: String
+        if NSCursor.current === NSCursor.pointingHand {
+            cursor = "hand"
+        } else if NSCursor.current === NSCursor.iBeam {
+            cursor = "ibeam"
+        } else {
+            cursor = "other"
+        }
+        let hits = wikiHitRects.map { "\($0.0.location)+\($0.0.length)" }.joined(separator: ",")
+        return "cmd=\(NSEvent.modifierFlags.contains(.command)) overLink=\(overLink)"
+            + " cursor=\(cursor) rects=\(wikiLinkCursorRects().count)"
+            + " point=\(Int(point.x)),\(Int(point.y)) bounds=\(Int(bounds.width))x\(Int(bounds.height))"
+            + " hits=\(hits)"
+    }
+    #endif
+
+    private static func sameWikiRects(_ a: [(NSRange, String)], _ b: [(NSRange, String)]) -> Bool {
+        guard a.count == b.count else { return false }
+        for (lhs, rhs) in zip(a, b) where lhs.0 != rhs.0 || lhs.1 != rhs.1 { return false }
+        return true
+    }
+
+    /// 光标停在自动补出的空 `[]` 中间时退格，两个一起删。
+    override func deleteBackward(_ sender: Any?) {
+        let selection = selectedRange()
+        let ns = string as NSString
+        if isEditable, selection.length == 0, selection.location >= 1, selection.location < ns.length,
+           ns.character(at: selection.location - 1) == 0x5B,   // [
+           ns.character(at: selection.location) == 0x5D {      // ]
+            let pair = NSRange(location: selection.location - 1, length: 2)
+            guard shouldChangeText(in: pair, replacementString: "") else { return }
+            textStorage?.replaceCharacters(in: pair, with: "")
+            didChangeText()
+            setSelectedRange(NSRange(location: pair.location, length: 0))
+            return
+        }
+        super.deleteBackward(sender)
+    }
+
+    // MARK: 括号配对（issue #8）
+
+    /// 输入 `[` 自动补 `]`；再输入 `]` 时跨过已补的那个。
+    ///
+    /// 只处理单字符输入，粘贴与输入法提交都走 `super`。
+    /// 中文输入法组合期间（`hasMarkedText`）不介入，避免打乱候选。
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard isEditable, !hasMarkedText(),
+              let typed = string as? String, typed.count == 1 else {
+            super.insertText(string, replacementRange: replacementRange)
+            return
+        }
+
+        let selection = selectedRange()
+        let ns = self.string as NSString
+
+        if typed == "[" {
+            // 有选区：包住选区，选区留在里面
+            if selection.length > 0 {
+                let inner = ns.substring(with: selection)
+                let replacement = "[\(inner)]"
+                guard shouldChangeText(in: selection, replacementString: replacement) else { return }
+                textStorage?.replaceCharacters(in: selection, with: replacement)
+                didChangeText()
+                setSelectedRange(NSRange(location: selection.location + 1, length: selection.length))
+                return
+            }
+            let insert = NSRange(location: selection.location, length: 0)
+            guard shouldChangeText(in: insert, replacementString: "[]") else { return }
+            textStorage?.replaceCharacters(in: insert, with: "[]")
+            didChangeText()
+            setSelectedRange(NSRange(location: selection.location + 1, length: 0))
+            return
+        }
+
+        // 空的一对 `[]` 退格：两个一起删，不留孤零零的 `]`
+        if typed == "]", selection.length == 0,
+           selection.location < ns.length,
+           ns.character(at: selection.location) == 0x5D {
+            setSelectedRange(NSRange(location: selection.location + 1, length: 0))
+            return
+        }
+
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains([.command, .shift]),
            event.charactersIgnoringModifiers?.lowercased() == "k",
@@ -401,7 +559,11 @@ final class EditorTextView: NSTextView {
     }
 
     private func wikiTarget(at event: NSEvent) -> String? {
-        let point = convert(event.locationInWindow, from: nil)
+        wikiTarget(at: convert(event.locationInWindow, from: nil))
+    }
+
+    /// 视图坐标命中的引用目标。
+    private func wikiTarget(at point: NSPoint) -> String? {
         let index = characterIndexForInsertion(at: point)
         guard index != NSNotFound else { return nil }
         for (range, target) in wikiHitRects {
@@ -557,6 +719,8 @@ struct NoteEditorView: NSViewRepresentable {
         private var lastQuoteMarkers: [NSRange] = []
         /// 上一次算出来的表格块。光标换行时要在「露源码 / 渲染」之间切换。
         private var lastTableBlocks: [TableBlock] = []
+        /// 上一次算出来的标题前缀区间（`#` 加其后空格）。光标换行时重算压宽。
+        private var lastHeadingMarkers: [NSRange] = []
         /// 上一次的分桶依据，避免同段落内的每次光标移动都重设属性。
         private var lastCaretParagraph: NSRange?
 
@@ -663,6 +827,8 @@ struct NoteEditorView: NSViewRepresentable {
             storage.setAttributes(Theme.baseAttributes(), range: fullRange)
 
             applyHeadings(spans, storage, fullRange)
+            // 标题前缀与列表标记同一套：隐藏态压到 0 宽（issue #8）。
+            applyHeadingMarkers(spans.headingMarkers, caretParagraph: caretParagraph, storage: storage)
             // 表格先写等宽 + kern，`applyInline` 的加粗 / 斜体再叠在它上面。
             applyTables(tableBlocks, in: text, caretParagraph: caretParagraph, storage: storage)
             applyInline(spans, storage, fullRange)
@@ -679,6 +845,7 @@ struct NoteEditorView: NSViewRepresentable {
             lastListMarkers = listMarkers
             lastQuoteMarkers = quoteMarkers
             lastTableBlocks = tableBlocks
+            lastHeadingMarkers = spans.headingMarkers
             lastCaretParagraph = caretParagraph
             // 块底色由视图自绘，区间变了要重画。
             textView.codeBlockRanges = spans.codeBlocks
@@ -724,7 +891,7 @@ struct NoteEditorView: NSViewRepresentable {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles, !textView.hasMarkedText() else { return }
             guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarkers.isEmpty
-                    || !lastTableBlocks.isEmpty else {
+                    || !lastTableBlocks.isEmpty || !lastHeadingMarkers.isEmpty else {
                 return
             }
             let caretParagraph = parent.editable ? paragraphRange(at: textView.selectedRange().location) : nil
@@ -737,6 +904,7 @@ struct NoteEditorView: NSViewRepresentable {
             applySyntaxMarks(marks, storage)
             // 标记宽度随光标段落切换：新段落恢复可读宽度，旧段落重新压到 ∹0。
             applyLists(lastListMarkers, quotes: lastQuoteMarkers, caretParagraph: caretParagraph, storage: storage)
+            applyHeadingMarkers(lastHeadingMarkers, caretParagraph: caretParagraph, storage: storage)
             // 表格同理：光标行撤 kern 露源码，其他行恢复对齐。
             applyTables(lastTableBlocks, in: storage.string, caretParagraph: caretParagraph, storage: storage)
             storage.endEditing()
@@ -828,7 +996,30 @@ struct NoteEditorView: NSViewRepresentable {
                     .paragraphStyle: Theme.headingParagraph(level: level),
                 ], range: r)
             }
-            // `#` 前缀的颜色统一在 `applySyntaxMarks` 里按光标段落处理。
+            // 前缀宽度与颜色由 `applyHeadingMarkers` 与 `applySyntaxMarks` 按光标段落处理。
+        }
+
+        /// 标题前缀（`#` 加其后空格）：隐藏态压到 0 宽，光标段落恢复原标题字号。
+        ///
+        /// 只改属性不改字符。压宽之前正文被 `#` 顶出一个缩进（issue #8）。
+        /// 属性构造在 `HeadingLayout`（纯函数，有单测）。
+        private func applyHeadingMarkers(
+            _ ranges: [NSRange],
+            caretParagraph: NSRange?,
+            storage: NSTextStorage
+        ) {
+            guard !ranges.isEmpty else { return }
+            let ns = storage.string as NSString
+            guard ns.length > 0 else { return }
+            for range in ranges {
+                guard let r = clamp(range, storage.length) else { continue }
+                let marker = ns.substring(with: r)
+                storage.removeAttribute(.kern, range: r)
+                storage.addAttributes(
+                    HeadingLayout.attributes(forMarker: marker, range: r, caretParagraph: caretParagraph),
+                    range: r
+                )
+            }
         }
 
         private func applyInline(_ spans: EditorSpans, _ storage: NSTextStorage, _ full: NSRange) {
@@ -1067,7 +1258,8 @@ struct NoteEditorView: NSViewRepresentable {
             }
 
             let replacement = "[[\(title)]]"
-            let full = NSRange(location: range.location, length: range.length)
+            // 自动补的 `]]` 还在光标后面时一起替换掉，否则写成 `[[标题]]]]`。
+            let full = WikiScanner.commitReplacementRange(range, in: textView.string)
             if textView.shouldChangeText(in: full, replacementString: replacement) {
                 textView.textStorage?.replaceCharacters(in: full, with: replacement)
                 textView.didChangeText()

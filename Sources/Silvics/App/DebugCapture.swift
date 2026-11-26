@@ -753,6 +753,33 @@ enum DebugCapture {
         }
     }
 
+    /// 仅取证：`SILVICS_CURSOR_PROBE=1` 时每 0.5 秒打印一次指针状态。
+    ///
+    /// 指针形状截不进图（`screencapture -C` 在本机不画光标），
+    /// 只能把「⌘ 按下 / 松开时指针是不是手型」写成日志当证据。
+    @MainActor
+    static func startCursorProbe(interval: TimeInterval = 0.5, ticks: Int = 600) {
+        guard ProcessInfo.processInfo.environment["SILVICS_CURSOR_PROBE"] != nil else { return }
+        var remaining = ticks
+        Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
+            remaining -= 1
+            if remaining <= 0 { timer.invalidate() }
+            Task { @MainActor in
+                var reports: [String] = []
+                for window in NSApp.windows where window.isVisible {
+                    guard let content = window.contentView else { continue }
+                    var views: [NSTextView] = []
+                    textViews(in: content, into: &views)
+                    for case let editor as EditorTextView in views {
+                        reports.append(editor.debugCursorReport())
+                    }
+                }
+                // 写文件不用 print：stdout 重定向到文件是块缓冲，探针会看不到。
+                DebugLog.write("[cursor-probe] " + reports.joined(separator: " | "))
+            }
+        }
+    }
+
     /// 延迟后把所有可见窗口写成 PNG。
     @MainActor
     static func schedule(after delay: TimeInterval = 2.2) {
