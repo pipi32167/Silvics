@@ -118,18 +118,22 @@ struct ModuleNavView: View {
                     .font(.system(size: 11.5, weight: active ? .medium : .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Spacer(minLength: 4)
-                Text("\(moduleCount(module))")
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                // 快捷键直接写在行尾，不用去菜单里找。
-                Text(module.shortcutLabel)
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(active ? Color.accentColor : Color.secondary)
-                    .accessibilityIdentifier("module-shortcut-\(module.rawValue)")
+                    // 标题优先占位：模块栏压到 132 px 时先保住标题，不先退化成省略号。
+                    .layoutPriority(1)
+                Spacer(minLength: 2)
+                // 条数与快捷键当成一个不压缩的尾巴，中间留 6 px，避免读成「22⌘1」。
+                HStack(spacing: 6) {
+                    Text("\(moduleCount(module))")
+                        .foregroundStyle(.tertiary)
+                    Text(module.shortcutLabel)
+                        .foregroundStyle(active ? Color.accentColor : Color.secondary.opacity(0.75))
+                        .accessibilityIdentifier("module-shortcut-\(module.rawValue)")
+                }
+                .font(.system(size: 10).monospacedDigit())
+                .fixedSize()
             }
             .padding(.vertical, 3)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 5)
             .background(selectionBackground(active))
             .contentShape(Rectangle())
         }

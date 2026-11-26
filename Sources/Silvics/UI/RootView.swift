@@ -58,8 +58,8 @@ struct RootView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             ModuleNavView()
                 .navigationSplitViewColumnWidth(
-                    min: app.isNavCollapsed ? 46 : 132,
-                    ideal: app.isNavCollapsed ? 46 : 152,
+                    min: app.isNavCollapsed ? 46 : 140,
+                    ideal: app.isNavCollapsed ? 46 : 156,
                     max: app.isNavCollapsed ? 46 : 200
                 )
         } detail: {
