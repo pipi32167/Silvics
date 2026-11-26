@@ -104,8 +104,15 @@ enum ClipPDFImport {
     /// 读到截断提示文案。返回 nil 表示没被截断。
     static func truncationWarning(_ value: Extract, bytes: Int) -> String? {
         guard value.truncated else { return nil }
-        let size = String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
-        return "这份 PDF \(size)、共 \(value.pageCount) 页，只取了前 \(value.usedPages) 页。"
+        return "这份 PDF \(sizeText(bytes))、共 \(value.pageCount) 页，只取了前 \(value.usedPages) 页。"
+    }
+
+    /// 体积文案。不到 1 MB 说 KB，免得写成「0.0 MB」。
+    static func sizeText(_ bytes: Int) -> String {
+        if bytes < 1024 * 1024 {
+            return "\(max(1, Int((Double(bytes) / 1024).rounded()))) KB"
+        }
+        return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
     }
 
     /// 统一的字形。中文 PDF 常把「工具」抽成康熙部首、把「，。」抽成半角形式，

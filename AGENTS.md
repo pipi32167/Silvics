@@ -11,6 +11,28 @@ Silvics：单人用的 macOS 原生笔记应用。笔记正文是 Markdown 纯�
 - `docs/笔记类型与元数据.md` —— 类型注册表、frontmatter 分层、未知键保留、sqlite 定位
 - `docs/日记编辑器边界用例.md` —— 日记编辑器的边界用例（页内 77 条 + 端到端 28 条），实现时按编号写 XCTest
 
+## 工作流：一个 issue 一个 worktree
+
+**每个新 issue 开工前先开独立 worktree，不在主工作区动手。**
+
+```bash
+cd ~/work/dev/Silvics
+git worktree add ~/work/dev/Silvics-<issue关键字> -b <type>/<issue关键字> main
+cd ~/work/dev/Silvics-<issue关键字>
+# 构建、测试、取证、提交全在这个目录里做；用完 git worktree remove 清掉
+```
+
+为什么：主工作区会同时有别的 agent 或另一条线在写。踩过的坑：
+
+- 同一工作区里别人未提交的 `DebugCapture.swift` 被整文件 `git add` 带进了 PDF 剪藏那次提交，其中引用了尚未提交的 `EditorTextView.debugFlagsChangedCount`，**main 直接编不过**，只好补一次「撤回误并入」的提交。
+- 别人的未提交改动会在主工作区里凭空出现又消失，`git status` 一会儿干净一会儿脏，验收截图与构建结果都无法信任。
+
+配套纪律：
+
+- **只 `git add` 自己写过的路径**，不要 `git add -A` / `git add .`。提交前 `git status --short` 逐行确认。
+- 新 worktree 没有代理变量，SPM 会卡在 `Fetching from https://github.com/...`。构建前把 `DEVELOPER_DIR`、`HTTPS_PROXY`、`GIT_CONFIG_*` 按「环境」一节设好。
+- 收尾删掉 worktree：`git worktree remove ~/work/dev/Silvics-<issue关键字>`（分支留着，等合并后再删）。
+
 ## 环境
 
 | 项 | 值 |
@@ -179,6 +201,12 @@ open .build/Build/Products/Debug/Silvics.app \
 冲突演练：`scripts/conflict-drill.sh`（两台设备改同一段 → diff3 冲突 → magpie 合并，打印耗时与结果）。
 
 真截屏：`screencapture -x -o -l<windowID> out.png`（窗口 ID 用 `CGWindowListCopyWindowInfo`；`-l` 抓 sheet 会连父窗口一起捕获）。**注意 TCC 在进程启动时判定**：给宿主 App 授权后，除界面进程外还要重启常驻的 supervisor / daemon 侧进程。
+
+窗口通道的三条实操：
+
+- **先 `caffeinate -d -u -t 1800`**：显示器一睡，`screencapture` 拍出来是全黑的（或锁屏壁纸），而进程仍然活着，很容易误判成「窗口没画出来」。
+- **避开本机正在用的 Silvics**：直接跑 Debug 产物会和用户那份抢焦点，`System Events` 按进程名找窗口会找到别人的。做法是把 `.app` 拷一份，改 `CFBundleName` / `CFBundleExecutable` / `CFBundleIdentifier`，`codesign --force --deep --sign - --identifier <新 id>` 重签，再按**自己的 pid** 找窗口（`CGWindowListCopyWindowInfo` 里有 `kCGWindowOwnerPID`）。
+- **`screencapture -l<sheet id>` 返回的是父窗口画面**（含 sheet）。所以要先把主窗口 resize 到目标尺寸（`System Events` 设 `size of window 1`），再抓 sheet 的 id，出来的就是「主窗口 + 面板」的整块。
 
 截图默认放 `/tmp/reports/silvics-*`。要贴进 issue 时，把报告与截图拷到 `docs/acceptance/<功能>-v<版本>/`（`report.md` + `artifacts/*.png`，图先 `sips -Z 1280` 压一遍），再链 GitHub 地址。
 

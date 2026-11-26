@@ -116,6 +116,9 @@ final class ClipPDFImportTests: XCTestCase {
 
         let note = ClipPDFImport.truncationWarning(extract, bytes: 5 * 1024 * 1024)
         XCTAssertEqual(note, "这份 PDF 5.0 MB、共 3 页，只取了前 2 页。")
+
+        XCTAssertEqual(ClipPDFImport.sizeText(59 * 1024), "59 KB")
+        XCTAssertEqual(ClipPDFImport.sizeText(1536 * 1024), "1.5 MB")
     }
 
     func testBrokenDataIsUnreadable() {

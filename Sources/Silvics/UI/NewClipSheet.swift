@@ -32,6 +32,8 @@ struct NewClipSheet: View {
     @State private var isSaving = false
     /// 扫描件、加密件改成粘贴后显示的提示。
     @State private var fallbackNote: String?
+    /// 正在往上拖东西。
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -54,6 +56,14 @@ struct NewClipSheet: View {
         }
         .padding(18)
         .frame(width: 620, height: phase == .input ? 380 : 560, alignment: .topLeading)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(isDropTargeted ? 0.8 : 0), lineWidth: 2)
+        )
+        // 拖拽落点覆盖整个面板：提示写的是「拖到这里」，落在任何位置都该生效。
+        .onDrop(of: [.fileURL, .url, .plainText], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
         .onAppear {
             #if DEBUG
             applyDebugStateIfRequested()
@@ -199,9 +209,6 @@ struct NewClipSheet: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onDrop(of: [.fileURL, .url, .plainText], isTargeted: nil) { providers in
-            handleDrop(providers)
-        }
     }
 
     // MARK: - 进行中
@@ -531,6 +538,9 @@ struct NewClipSheet: View {
 
     /// 拖进来：文件走文件流程，网址走网址流程，长文本直接进粘贴框。
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        #if DEBUG
+        print("[drop] \(providers.count) 个：\(providers.map { $0.registeredTypeIdentifiers.first ?? "?" }.joined(separator: ", "))")
+        #endif
         for provider in providers {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
