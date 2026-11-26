@@ -83,6 +83,12 @@ enum DebugCapture {
         // 先切 vault 再播种 / 开面板：`SILVICS_VAULT` 换目录后，后面的写入要落到新目录。
         applySyncFlags(app)
 
+        // `SILVICS_AI_PROVIDER=1`：预置一个假的对话服务商并绑到「对话」用途。
+        // 只影响界面状态（输入框可发送），不会真的发请求。
+        if ProcessInfo.processInfo.environment["SILVICS_AI_PROVIDER"] == "1" {
+            seedDemoProvider(app)
+        }
+
         // `SILVICS_JOURNAL_CARRY=<关键字>`：取证「承接插在当前行之前」。
         // 先备好上一篇日记与今天的正文（同步），等编辑区出来后把光标放进含关键字的段落，
         // 再走 `insertCarryAtCaret` 的真实链路。截图里要能看出承接段不在最前。
@@ -197,6 +203,8 @@ enum DebugCapture {
             case "sync": SettingsWindowController.show(app: app, tab: .sync)
             case "ai", "ai-empty":
                 app.setAIPanel(.ai)
+            case "ai-details", "details":
+                app.setAIPanel(.details)
             case "ai-chat":
                 seedAIConversation(app)
                 app.setAIPanel(.ai)
@@ -207,6 +215,14 @@ enum DebugCapture {
                     noteTitle: app.current?.title ?? "剪藏标题",
                     text: "稀疏重复优于集中突击：同样的总时长拆成多次，每次之间留出遗忘，回忆本身就在加固记忆。"
                 )
+            case "ai-sending":
+                seedAIConversation(app)
+                app.setAIPanel(.ai)
+                app.aiIsSending = true
+            case "ai-error":
+                seedAIConversation(app)
+                app.setAIPanel(.ai)
+                app.aiError = "模型响应超时"
             case "ai-evidence":
                 app.setAIPanel(.ai)
                 app.aiEvidences = [

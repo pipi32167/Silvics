@@ -73,7 +73,11 @@ struct RootView: View {
                     ContentPane()
                         .frame(minWidth: 320, idealWidth: 680, maxWidth: .infinity)
                     ContextPanelView()
-                        .frame(minWidth: 200, idealWidth: 292, maxWidth: 380)
+                        .frame(
+                            minWidth: contextPanelWidth.min,
+                            idealWidth: contextPanelWidth.ideal,
+                            maxWidth: contextPanelWidth.max
+                        )
                 }
             }
         }
@@ -95,6 +99,17 @@ struct RootView: View {
                 .help(app.isListPaneVisible ? "隐藏列表栏 ⌘⌥L" : "显示列表栏 ⌘⌥L")
             }
         }
+    }
+
+    /// 右栏宽度。取证时可用 `SILVICS_CONTEXT_WIDTH=200` 压到最窄，验证窄栏布局。
+    private var contextPanelWidth: (min: CGFloat, ideal: CGFloat, max: CGFloat) {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_CONTEXT_WIDTH"],
+           let width = Double(raw), width > 0 {
+            return (width, width, width)
+        }
+        #endif
+        return (200, 292, 380)
     }
 
     #if DEBUG

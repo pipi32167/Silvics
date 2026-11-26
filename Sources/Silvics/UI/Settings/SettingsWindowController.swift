@@ -57,8 +57,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameAutosaveName("SilvicsSettingsWindow")
         window.contentMinSize = NSSize(width: 620, height: 520)
         window.minSize = NSSize(width: 620, height: 520)
-        window.setContentSize(NSSize(width: 680, height: 600))
+        window.setContentSize(Self.debugContentSize)
         window.center()
+    }
+
+    /// 取证用：`SILVICS_SETTINGS_SIZE=680x1200` 把设置窗撑高，好一屏截完长表单。
+    private static var debugContentSize: NSSize {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_SETTINGS_SIZE"] {
+            let parts = raw.lowercased().split(separator: "x")
+            if parts.count == 2,
+               let width = Double(parts[0]), let height = Double(parts[1]),
+               width >= 620, height >= 520 {
+                return NSSize(width: width, height: height)
+            }
+        }
+        #endif
+        return NSSize(width: 680, height: 600)
     }
 
     override func showWindow(_ sender: Any?) {

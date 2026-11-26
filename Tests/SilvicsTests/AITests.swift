@@ -188,6 +188,25 @@ final class AIConversationTests: XCTestCase {
         XCTAssertEqual(trimmed.last?.content, "第249条")
     }
 
+    func testTrimCapsFileBytes() {
+        // 每条 ~12 KB，40 条远超 200 KB 上限。
+        let big = String(repeating: "字", count: 4000)
+        let messages = (0..<40).map {
+            AIMessage(id: "m\($0)", at: Int64($0), role: AIMessage.roleUser, content: big)
+        }
+        let trimmed = AIConversation.trim(messages)
+        let bytes = AIConversation.encode(trimmed).utf8.count
+        XCTAssertLessThanOrEqual(bytes, AISettings.maxFileBytes)
+        XCTAssertLessThan(trimmed.count, messages.count)
+        XCTAssertEqual(trimmed.last?.id, "m39", "丢的是最早的")
+    }
+
+    func testTrimKeepsAtLeastOneMessage() {
+        let huge = AIMessage(id: "only", at: 1, role: AIMessage.roleUser,
+                             content: String(repeating: "字", count: 200_000))
+        XCTAssertEqual(AIConversation.trim([huge]).count, 1, "不能裁到一条不剩")
+    }
+
     func testFileNameRoundTrip() {
         XCTAssertEqual(AIConversation.fileName(for: "n123"), "n123.jsonl")
         XCTAssertEqual(AIConversation.noteID(fromFileName: "n123.jsonl"), "n123")
@@ -393,5 +412,115 @@ final class AIConversationStoreTests: XCTestCase {
         try store.append(.user("一", at: 1000), noteID: "n1")
         try store.remove(noteID: "n1")
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL(noteID: "n1").path))
+    }
+}
+
+// MARK: - 会话跨设备同步
+
+/// 用本机 bare 仓库当远端，两个 vault 当两台设备，验证会话是并集而不是互相覆盖。
+final class AIConversationSyncTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("silvics-ai-sync-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func git(_ args: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = args
+        process.currentDirectoryURL = root
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_AUTHOR_NAME"] = "测试"
+        env["GIT_AUTHOR_EMAIL"] = "t@example.com"
+        env["GIT_COMMITTER_NAME"] = "测试"
+        env["GIT_COMMITTER_EMAIL"] = "t@example.com"
+        process.environment = env
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        _ = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            throw NSError(domain: "git", code: Int(process.terminationStatus))
+        }
+    }
+
+    private func makeDevice(_ name: String, remote: URL) throws -> (sync: VaultSync, vault: URL) {
+        let vault = root.appendingPathComponent(name, isDirectory: true)
+        let repo = GRDBNoteRepository(db: try AppDatabase.makeInMemory(), vaultURL: vault)
+        var settings = SyncSettings()
+        settings.vaultPath = vault.path
+        settings.remoteURL = remote.path
+        settings.authorName = name
+        settings.authorEmail = "\(name)@example.com"
+        return (VaultSync(repo: repo, settings: settings), vault)
+    }
+
+    func testBothDevicesAppendAndBothSurvive() throws {
+        let remote = root.appendingPathComponent("remote.git", isDirectory: true)
+        try git(["init", "--bare", "-q", "-b", "main", remote.path])
+
+        let a = try makeDevice("device-a", remote: remote)
+        let b = try makeDevice("device-b", remote: remote)
+        let noteID = "n-shared"
+
+        // A 先写一条并推上去，B 拉下来。
+        try AIConversationStore(vaultURL: a.vault).save(
+            [AIMessage(id: "a1", at: 1000, role: AIMessage.roleUser, content: "A 的提问")],
+            noteID: noteID
+        )
+        _ = try a.sync.sync()
+        _ = try b.sync.sync()
+
+        // 两端各自再追加一条，互不知道对方。
+        let storeA = AIConversationStore(vaultURL: a.vault)
+        let storeB = AIConversationStore(vaultURL: b.vault)
+        _ = try storeA.append(
+            AIMessage(id: "a2", at: 2000, role: AIMessage.roleAssistant, content: "A 的回答"),
+            noteID: noteID
+        )
+        _ = try storeB.append(
+            AIMessage(id: "b2", at: 3000, role: AIMessage.roleUser, content: "B 的提问"),
+            noteID: noteID
+        )
+
+        // A 先推，B 再同步（B 落后一条）。
+        _ = try a.sync.sync()
+        _ = try b.sync.sync()
+        // B 推上去，A 再拉一次，两端都该看到三条。
+        _ = try b.sync.sync()
+        _ = try a.sync.sync()
+
+        let onA = storeA.load(noteID: noteID).messages
+        let onB = storeB.load(noteID: noteID).messages
+        XCTAssertEqual(onA.map(\.id).sorted(), ["a1", "a2", "b2"], "A 不能丢 B 的消息")
+        XCTAssertEqual(onB.map(\.id).sorted(), ["a1", "a2", "b2"], "B 不能丢 A 的消息")
+        XCTAssertEqual(onA.map(\.content), ["A 的提问", "A 的回答", "B 的提问"], "按时间排序")
+    }
+
+    func testManifestCarriesConversationHash() throws {
+        let remote = root.appendingPathComponent("remote.git", isDirectory: true)
+        try git(["init", "--bare", "-q", "-b", "main", remote.path])
+        let a = try makeDevice("device-a", remote: remote)
+        _ = try AIConversationStore(vaultURL: a.vault).save(
+            [AIMessage(id: "x1", at: 1000, role: AIMessage.roleUser, content: "内容")],
+            noteID: "n-1"
+        )
+        _ = try a.sync.exportAll()
+        let data = try Data(contentsOf: a.vault.appendingPathComponent(VaultFormat.manifestName))
+        let manifest = try XCTUnwrap(VaultFormat.decodeManifest(data))
+        XCTAssertEqual(manifest.schema, VaultFormat.manifestSchema)
+        XCTAssertEqual(manifest.conversations.map(\.id), ["n-1"])
+        XCTAssertNotNil(manifest.conversations.first?.hash)
     }
 }

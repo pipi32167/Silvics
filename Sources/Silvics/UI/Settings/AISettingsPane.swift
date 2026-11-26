@@ -108,9 +108,9 @@ struct AISettingsPane: View {
     private func promptRow(_ template: Binding<AIPromptTemplate>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(template.wrappedValue.title)
-                    .font(.system(size: 12, weight: .medium))
                 if template.wrappedValue.builtin {
+                    Text(template.wrappedValue.title)
+                        .font(.system(size: 12, weight: .medium))
                     Text("内置")
                         .font(.system(size: 9))
                         .padding(.horizontal, 4)
@@ -120,7 +120,9 @@ struct AISettingsPane: View {
                 } else {
                     TextField("标题", text: template.title)
                         .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
                         .font(.system(size: 11))
+                        .frame(maxWidth: 200)
                 }
                 Spacer(minLength: 0)
                 if !template.wrappedValue.builtin {
@@ -136,6 +138,7 @@ struct AISettingsPane: View {
             }
             TextField("提示词正文", text: template.body, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
+                .labelsHidden()
                 .font(.system(size: 11))
                 .lineLimit(1...3)
         }

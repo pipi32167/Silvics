@@ -15,7 +15,9 @@ struct AIChatPanelView: View {
             sessionHeader
             Divider()
             messageList
-            composer
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            composer.fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -125,7 +127,7 @@ struct AIChatPanelView: View {
                 if let model = message.model, !model.isEmpty {
                     Text(model)
                         .font(.system(size: 8.5))
-                        .foregroundStyle(.quaternary)
+                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
             }
@@ -230,8 +232,6 @@ struct AIChatPanelView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Divider()
-
             if let quote = app.aiQuote {
                 activeQuoteCard(quote)
             }
@@ -247,7 +247,7 @@ struct AIChatPanelView: View {
             TextEditor(text: $app.aiInput)
                 .font(.system(size: 11.5))
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: 52, maxHeight: 120)
+                .frame(height: 64)
                 .padding(5)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -294,7 +294,7 @@ struct AIChatPanelView: View {
         }
         .padding(.horizontal, 10)
         .padding(.top, 7)
-        .padding(.bottom, 10)
+        .padding(.bottom, 12)
     }
 
     private func activeQuoteCard(_ quote: AIQuote) -> some View {

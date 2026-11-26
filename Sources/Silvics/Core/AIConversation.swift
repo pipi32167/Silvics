@@ -158,10 +158,33 @@ enum AIConversation {
         return trim(messages.filter { $0.isClear ? $0.id == latest.id : $0.at > latest.at })
     }
 
-    /// 超出上限时丢最早的消息。清空标记与它之后的消息优先保留。
+    /// 超出上限时丢最早的消息。
+    ///
+    /// 两道闸：先按条数，再按字节。字节这道按「每条编码后的长度」累加，
+    /// 不反复编码整个数组，所以 200 条也能一次算完。
     static func trim(_ messages: [AIMessage]) -> [AIMessage] {
-        guard messages.count > AISettings.maxMessages else { return messages }
-        return Array(messages.suffix(AISettings.maxMessages))
+        var out = messages.count > AISettings.maxMessages
+            ? Array(messages.suffix(AISettings.maxMessages))
+            : messages
+        guard !out.isEmpty else { return out }
+
+        let sizes = out.map { encodeOne($0).utf8.count }
+        var total = sizes.reduce(0, +)
+        var start = 0
+        while start < out.count - 1, total > AISettings.maxFileBytes {
+            total -= sizes[start]
+            start += 1
+        }
+        if start > 0 { out = Array(out[start...]) }
+        return out
+    }
+
+    /// 单条消息的 JSON 行（含换行）。
+    static func encodeOne(_ message: AIMessage) -> String {
+        guard let data = try? encoder.encode(message),
+              let line = String(data: data, encoding: .utf8)
+        else { return "" }
+        return line + "\n"
     }
 
     /// 当前可见的对话（去掉清空标记）。

@@ -425,6 +425,40 @@ final class VaultSync {
         return report.inserted + report.updated
     }
 
+    // MARK: - AI 会话合并
+
+    /// 把远端改过的 `ai/*.jsonl` 与本地的三方合并，结果写回本地。
+    ///
+    /// base 取 merge-base 那一版，所以两边各自追加的消息会并到一起，
+    /// 清空标记也按时间生效。返回合并过的会话数。
+    @discardableResult
+    func mergeRemoteConversations(
+        git: GitClient,
+        baseRev: String,
+        branch: String,
+        changed: [String]
+    ) -> Int {
+        let store = AIConversationStore(vaultURL: vaultURL)
+        var merged = 0
+        for path in changed {
+            guard path.hasPrefix(VaultFormat.aiDir + "/") else { continue }
+            guard let name = path.split(separator: "/").last.map(String.init),
+                  let noteID = AIConversation.noteID(fromFileName: name)
+            else { continue }
+
+            let remoteText = git.fileContent(path: path, ref: "origin/\(branch)") ?? ""
+            let baseText = git.fileContent(path: path, ref: baseRev) ?? ""
+            let local = store.load(noteID: noteID).messages
+            let remote = AIConversation.decode(remoteText).messages
+            let base = AIConversation.decode(baseText).messages
+
+            let result = AIConversation.merge(base: base, local: local, remote: remote)
+            guard !result.isEmpty, result != local else { continue }
+            if (try? store.save(result, noteID: noteID)) != nil { merged += 1 }
+        }
+        return merged
+    }
+
     // MARK: - 冲突解决
 
     private struct Resolution {
@@ -439,6 +473,10 @@ final class VaultSync {
         let git = self.git
         let baseRev = git.mergeBase("origin/\(branch)") ?? "HEAD"
         let changed = git.changedPaths(from: baseRev, to: "origin/\(branch)")
+
+        // AI 会话按消息 id 三方合并，写回本地。
+        // `beginMergeKeepingOurs` 会让 git 保留我们的版本，所以必须先合完再交给 git。
+        mergeRemoteConversations(git: git, baseRev: baseRev, branch: branch, changed: changed)
 
         var localById: [String: VaultFormat.Note] = [:]
         for note in try repo.vaultNotes() { localById[note.id] = note }
