@@ -300,6 +300,91 @@ final class ClipExtractorTests: XCTestCase {
         XCTAssertFalse(body.contains("下一页"))
     }
 
+    func testDropsAccountNameDuplicatedByPublishLine() {
+        let html = """
+        <html><body><article class="article-body">
+          <h1>中国银行，发布风险提示</h1>
+          <p>长安街知事</p>
+          <p>2026-11-26 07:49发布于北京长安街知事官方账号</p>
+          <p>问AI · 国际金价下跌意味着什么？</p>
+          <p>近日，国际金价连续下行。11月25日，现货黄金价格一度跌破3500美元/盎司整数关口。</p>
+        </article></body></html>
+        """
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertFalse(body.contains("长安街知事"))
+        XCTAssertFalse(body.contains("发布于"))
+        XCTAssertFalse(body.contains("问AI"))
+        XCTAssertTrue(body.contains("近日，国际金价连续下行"))
+    }
+
+    func testDropsProductionCreditsAndRelatedBlocks() {
+        let html = """
+        <html><body><article class="article-body">
+          <p>2026-11-24 09:33:15</p>
+          <p>2026年11月24日 09:33　来源：中国新闻网</p>
+          <p>大字体</p><p>小字体</p>
+          <p>中新网11月24日电 题：正文从这里开始。</p>
+          <p>第一段正文。</p>
+          <p>｜总策划：俞岚</p>
+          <p>｜策划：周锐</p>
+          <p>【编辑:曹子健】</p>
+          <p>更多精彩内容请进入国内新闻</p>
+          <h2>国内新闻精选：</h2>
+          <ul><li><a href="/a">推荐文章一</a></li><li><a href="/b">推荐文章二</a></li></ul>
+        </article></body></html>
+        """
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("第一段正文。"))
+        for noise in ["09:33", "大字体", "小字体", "总策划", "【编辑", "更多精彩内容", "国内新闻精选", "推荐文章"] {
+            XCTAssertFalse(body.contains(noise), "不该保留：\(noise)\n\(body)")
+        }
+    }
+
+    func testFallsBackToDescriptionForJSRenderedPage() {
+        let html = """
+        <html><head>
+          <meta name="description" content="90多年前，中国工农红军开启了一场伟大远征，是什么支撑着这支队伍闯过一道道生死关，最终走向胜利？">
+        </head><body><article class="article-body">
+          <p>增值电信业务经营许可证：沪B2-2017116</p>
+          <p>© 2014-2026 上海东方报业有限公司</p>
+        </article></body></html>
+        """
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("90多年前"))
+        XCTAssertFalse(body.contains("许可证"))
+        XCTAssertFalse(body.contains("东方报业"))
+    }
+
+    func testRootClassListDoesNotNukeWholePage() {
+        let html = """
+        <html class="client-nojs vector-feature-language-in-header-enabled vector-toc-available">
+        <body class="skin-theme-clientpref-day sticky-header-enabled">
+          <div class="mw-parser-output"><p>这一整页都应该保留，不能因为 html 的 class 里有 header/sticky 就删掉。</p></div>
+        </body></html>
+        """
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("这一整页都应该保留"))
+    }
+
+    func testDropsTrailingNavLabels() {
+        let html = """
+        <html><body><article class="article-body">
+          <p>正文结尾是一句完整的话。</p>
+          <p>间隔重复</p><p>概念</p><p>学习软件</p><p>践行和研究者</p>
+        </article></body></html>
+        """
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("正文结尾是一句完整的话。"))
+        XCTAssertFalse(body.contains("学习软件"))
+        XCTAssertFalse(body.contains("践行和研究者"))
+    }
+
+    func testKeepsShortClosingSentence() {
+        let html = "<html><body><article class=\"article-body\"><p>正文。</p><p>谢谢阅读！</p></article></body></html>"
+        let body = ClipExtractor.text(fromHTML: html)
+        XCTAssertTrue(body.contains("谢谢阅读！"))
+    }
+
     func testCollapsesBlankLines() {
         let body = ClipExtractor.normalizeWhitespace("一\n\n\n\n二\n\n三")
         XCTAssertEqual(body, "一\n\n二\n\n三")
