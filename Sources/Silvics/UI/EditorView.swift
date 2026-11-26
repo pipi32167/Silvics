@@ -76,6 +76,65 @@ final class EditorTextView: NSTextView {
     /// `⌘⇧K`：把光标所在提及转成引用。返回 true 表示已处理。
     var onConvertMention: (() -> Bool)?
 
+    /// 撤销/重做交给 `Coordinator` 的自管撤销栈（issue #35）。
+    ///
+    /// `NSTextView` 自己不实现 `undo:`，不接管就会沿响应链落到窗口那个共享的
+    /// `undoManager` 上 —— 那个栈换笔记也不换，会把上一篇的动作执行到这一篇。
+    var onUndo: (() -> Bool)?
+    var onRedo: (() -> Bool)?
+    /// 菜单项可用状态：撤销栈里有没有东西。
+    var canUndoAction: (() -> Bool)?
+    var canRedoAction: (() -> Bool)?
+
+    @objc func undo(_ sender: Any?) {
+        _ = onUndo?()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        _ = onRedo?()
+    }
+
+    /// 菜单项的可用状态由本篇笔记的栈决定。
+    ///
+    /// 两个方法都要：`NSMenu` 走 `validateMenuItem:`，工具栏与快捷键走
+    /// `validateUserInterfaceItem(_:)`。少一个就会出现「能点但点了没反应」。
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)):
+            return canUndoAction?() ?? false
+        case #selector(redo(_:)):
+            return canRedoAction?() ?? false
+        default:
+            return super.validateMenuItem(menuItem)
+        }
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            return canUndoAction?() ?? false
+        case #selector(redo(_:)):
+            return canRedoAction?() ?? false
+        default:
+            return super.validateUserInterfaceItem(item)
+        }
+    }
+
+    /// 任何一次正文改动开始前通知：记下「改之前的光标位置」与这次插入的文字。
+    ///
+    /// 插入文字要看 `replacementString`，不能靠「改完比改前长多少」——
+    /// 在段落中间插入时，正文末尾那几个字跟这次插入无关。
+    var onWillChange: ((NSRange, String?) -> Void)?
+
+    override func shouldChangeText(
+        in affectedCharRange: NSRange,
+        replacementString: String?
+    ) -> Bool {
+        let allowed = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        if allowed { onWillChange?(selectedRange(), replacementString) }
+        return allowed
+    }
+
     /// 代码块区间（含首尾围栏行）。块底色由 `drawBackground(in:)` 整块画。
     var codeBlockRanges: [NSRange] = [] {
         didSet {
@@ -693,7 +752,9 @@ struct NoteEditorView: NSViewRepresentable {
         textView.allowsImageEditing = false
         textView.isEditable = editable
         textView.isSelectable = true
-        textView.allowsUndo = editable
+        // 撤销由 Coordinator 自管（issue #35）：系统的分组在真实事件循环里不闭合，
+        // 整篇输入会合成一步。这里关掉它，避免两套栈互相打架。
+        textView.allowsUndo = false
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -712,7 +773,7 @@ struct NoteEditorView: NSViewRepresentable {
         textView.font = Theme.bodyFont
         textView.typingAttributes = Theme.typingAttributes()
         textView.string = initialText
-        textView.delegate = context.coordinator
+        context.coordinator.wire(textView: textView)
         textView.onOpenWikiLink = { [weak coordinator = context.coordinator] title in
             coordinator?.handleOpenLink(title)
         }
@@ -741,11 +802,7 @@ struct NoteEditorView: NSViewRepresentable {
 
         // 外部改过正文（批量转换、改名、启用别名、撤销）时同步进来。
         if textView.string != text {
-            let caret = min(textView.selectedRange().location, (text as NSString).length)
-            textView.string = text
-            textView.setSelectedRange(NSRange(location: caret, length: 0))
-            context.coordinator.didReceiveExternalText(text)
-            context.coordinator.restyle(force: true)
+            context.coordinator.applyExternalText(text, to: textView)
         } else if context.coordinator.lastResolvedKeys != resolvedKeys
                     || context.coordinator.lastMentions != mentions
                     || context.coordinator.lastAppearance != appearance {
@@ -765,7 +822,36 @@ struct NoteEditorView: NSViewRepresentable {
         private weak var scrollView: NSScrollView?
         private let completion = CompletionPanelController()
 
+        /// 这篇笔记专用的撤销栈（issue #35）。换笔记即随视图一起丢弃。
+        private var undoStack = EditorUndoStack()
+
         private var isApplyingStyles = false
+        /// 正在执行撤销/重做：此时正文变化不再记成新操作。
+        private var isApplyingUndo = false
+        /// 上一次改动后的正文。新操作的第一步拿它当 before。
+        private var lastChangeLength = 0
+        /// 自本次操作开始以来改动过的字符数（取绝对值）。
+        private var charactersSinceBreak = 0
+        /// 停笔后提交本次操作的定时器。
+        private var idleCommitWork: DispatchWorkItem?
+        /// 最后一次键入所在的段落。光标换段落时提交本次操作。
+        private var lastEditParagraph: NSRange?
+        /// 正在进行中的一次修改操作。
+        private struct PendingEdit {
+            var before: String
+            var caretBefore: Int
+            var name: String
+        }
+        private var pendingEdit: PendingEdit?
+        /// 上一次改完的正文，用于下一次的 before。
+        private var lastKnownText: String = ""
+        /// 改动前记录的光标位置（`shouldChangeText` 里取）。
+        private var caretBeforeChange: Int = 0
+        /// 本次改动插入的文字（删除时为空）。步长判定用它。
+        private var insertedTail: String = ""
+
+        var canUndo: Bool { undoStack.canUndo || pendingEdit != nil }
+        var canRedo: Bool { pendingEdit == nil && undoStack.canRedo }
         private var completionRange: NSRange?
         private var currentQuery: String = ""
         /// 上一次算出来的语法标记（与光标无关的部分），光标移动时只需重新分桶。
@@ -800,17 +886,182 @@ struct NoteEditorView: NSViewRepresentable {
             lastPublishedText = text
         }
 
+        /// 外部整体替换正文（改名、别名、批量转换、冲突合并）。
+        ///
+        /// 替换前必须清空撤销栈（issue #35）：旧栈里的键入动作带着旧正文的 range，
+        /// 替换后接着 ⌘Z 会删到别的位置（实测旧代码抛 `NSRangeException`）。
+        /// 清完以新正文作为新的起点，与「从磁盘重新载入文档」的语义一致。
+        func applyExternalText(_ text: String, to textView: EditorTextView) {
+            #if DEBUG
+            DebugLog.write("[editor] 外部正文覆盖：旧=\(textView.string.count) 新=\(text.count)"
+                + " 有撤销=\(undoStack.canUndo.description)")
+            #endif
+            resetUndoState(text: text)
+            let caret = min(textView.selectedRange().location, (text as NSString).length)
+            // `textView.string =` 会走一次 `textDidChange`，别把它记成一步（issue #35）。
+            isApplyingUndo = true
+            textView.string = text
+            textView.setSelectedRange(NSRange(location: caret, length: 0))
+            isApplyingUndo = false
+            didReceiveExternalText(text)
+            restyle(force: true)
+        }
+
         /// 视图被销毁（切换笔记、窗口关闭）时收掉浮层，断开代理。
         func teardown() {
             completion.hide()
+            idleCommitWork?.cancel()
+            idleCommitWork = nil
+            pendingEdit = nil
+            undoStack.removeAll()
+            textView?.onUndo = nil
+            textView?.onRedo = nil
+            textView?.onWillChange = nil
             textView?.delegate = nil
             textView = nil
             scrollView = nil
         }
 
+        /// 接线：代理与撤销/重做四个回调。测试也走这里，避免测试另写一份。
+        func wire(textView: EditorTextView) {
+            textView.delegate = self
+            textView.onWillChange = { [weak self] caret, inserted in
+                self?.willChangeText(caret: caret, inserted: inserted)
+            }
+            textView.onUndo = { [weak self] in self?.performUndo() ?? false }
+            textView.onRedo = { [weak self] in self?.performRedo() ?? false }
+            textView.canUndoAction = { [weak self] in self?.canUndo ?? false }
+            textView.canRedoAction = { [weak self] in self?.canRedo ?? false }
+        }
+
         func attach(textView: EditorTextView, scrollView: NSScrollView) {
             self.textView = textView
             self.scrollView = scrollView
+            resetUndoState(text: textView.string, clearStack: false)
+        }
+
+        // MARK: 撤销（issue #35）
+
+        /// 重置撤销状态。外部整体替换正文时连栈一起清。
+        private func resetUndoState(text: String, clearStack: Bool = true) {
+            if clearStack { undoStack.removeAll() }
+            pendingEdit = nil
+            lastKnownText = text
+            lastChangeLength = (text as NSString).length
+            charactersSinceBreak = 0
+            lastEditParagraph = nil
+            idleCommitWork?.cancel()
+            idleCommitWork = nil
+        }
+
+        /// `shouldChangeText` 回调：记下改动前光标与这次插入的文字。
+        func willChangeText(caret: NSRange, inserted: String?) {
+            guard !isApplyingUndo, parent.editable else { return }
+            caretBeforeChange = caret.location
+            insertedTail = String((inserted ?? "").suffix(4))
+            if pendingEdit == nil {
+                pendingEdit = PendingEdit(
+                    before: lastKnownText,
+                    caretBefore: caret.location,
+                    name: "打字"
+                )
+            }
+        }
+
+        /// 一次正文改动之后：更新本次操作、按规则决定是否收尾。由 `textDidChange` 调。
+        private func noteEdit(text: String) {
+            guard !isApplyingUndo, parent.editable else { return }
+            if pendingEdit == nil {
+                pendingEdit = PendingEdit(
+                    before: lastKnownText,
+                    caretBefore: caretBeforeChange,
+                    name: "打字"
+                )
+            }
+            let newLength = (text as NSString).length
+            charactersSinceBreak += abs(newLength - lastChangeLength)
+            lastChangeLength = newLength
+            lastKnownText = text
+            if UndoPolicy.shouldBreak(tail: insertedTail, charactersSinceBreak: charactersSinceBreak) {
+                commitPendingEdit()
+            } else {
+                scheduleIdleCommit()
+            }
+            if let textView {
+                lastEditParagraph = paragraphRange(at: textView.selectedRange().location)
+            }
+        }
+
+        /// 给正在进行的操作换个名字（勾选待办、转换提及……），并立刻收尾。
+        private func commitPendingEdit(named name: String? = nil) {
+            if let name { pendingEdit?.name = name }
+            commitPendingEdit()
+        }
+
+        /// 把进行中的一次操作压进撤销栈。
+        func commitPendingEdit() {
+            idleCommitWork?.cancel()
+            idleCommitWork = nil
+            charactersSinceBreak = 0
+            guard let pending = pendingEdit, let textView else { return }
+            pendingEdit = nil
+            let after = textView.string
+            undoStack.record(EditorUndoStep(
+                before: pending.before,
+                after: after,
+                caretBefore: pending.caretBefore,
+                caretAfter: textView.selectedRange().location,
+                name: pending.name
+            ))
+            lastKnownText = after
+            lastChangeLength = (after as NSString).length
+        }
+
+        /// 停笔一会儿也算一步：长句中间没有标点时，不该把整段合成一步。
+        private func scheduleIdleCommit() {
+            idleCommitWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.commitPendingEdit()
+            }
+            idleCommitWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + UndoPolicy.idleInterval, execute: work)
+        }
+
+        /// `⌘Z`。先收掉正在打的这一段，再退一步。
+        func performUndo() -> Bool {
+            commitPendingEdit()
+            guard let textView, let step = undoStack.takeUndo() else { return false }
+            apply(text: step.before, caret: step.caretBefore, to: textView)
+            return true
+        }
+
+        /// `⌘⇧Z`。
+        func performRedo() -> Bool {
+            commitPendingEdit()
+            guard let textView, let step = undoStack.takeRedo() else { return false }
+            apply(text: step.after, caret: step.caretAfter, to: textView)
+            return true
+        }
+
+        /// 把一步撤销/重做写回编辑器。
+        ///
+        /// 整体替换正文，不走 `NSTextView` 的撤销栈：快照不会失效，
+        /// 外部改过正文也不会删错位置。
+        private func apply(text: String, caret: Int, to textView: EditorTextView) {
+            isApplyingUndo = true
+            let location = min(max(0, caret), (text as NSString).length)
+            textView.string = text
+            textView.setSelectedRange(NSRange(location: location, length: 0))
+            isApplyingUndo = false
+            lastKnownText = text
+            lastChangeLength = (text as NSString).length
+            charactersSinceBreak = 0
+            pendingEdit = nil
+            lastEditParagraph = paragraphRange(at: location)
+            didReceiveExternalText(text)
+            restyle(force: true)
+            parent.onChange(text)
         }
 
         /// `⌘⇧K`：把光标所在提及转成 `[[引用]]`。走 `shouldChangeText`，可撤销。
@@ -828,6 +1079,8 @@ struct NoteEditorView: NSViewRepresentable {
                 location: range.location + (replacement as NSString).length,
                 length: 0
             ))
+            // 一次转换 = 一步撤销（issue #35）。
+            commitPendingEdit(named: "转换提及")
             return true
         }
 
@@ -877,8 +1130,6 @@ struct NoteEditorView: NSViewRepresentable {
             )
 
             let selection = textView.selectedRanges
-            let undoManager = textView.undoManager
-            undoManager?.disableUndoRegistration()
             storage.beginEditing()
 
             storage.setAttributes(Theme.baseAttributes(), range: fullRange)
@@ -896,7 +1147,6 @@ struct NoteEditorView: NSViewRepresentable {
             applySyntaxMarks(marks, storage)
 
             storage.endEditing()
-            undoManager?.enableUndoRegistration()
 
             lastSyntaxMarkers = marks.all
             lastListMarkers = listMarkers
@@ -955,8 +1205,6 @@ struct NoteEditorView: NSViewRepresentable {
             guard caretParagraph != lastCaretParagraph else { return }
 
             let marks = MarkdownStyler.split(lastSyntaxMarkers, caretParagraph: caretParagraph)
-            let undoManager = textView.undoManager
-            undoManager?.disableUndoRegistration()
             storage.beginEditing()
             applySyntaxMarks(marks, storage)
             // 标记宽度随光标段落切换：新段落恢复可读宽度，旧段落重新压到 ∹0。
@@ -965,7 +1213,6 @@ struct NoteEditorView: NSViewRepresentable {
             // 表格同理：光标行撤 kern 露源码，其他行恢复对齐。
             applyTables(lastTableBlocks, in: storage.string, caretParagraph: caretParagraph, storage: storage)
             storage.endEditing()
-            undoManager?.enableUndoRegistration()
             lastCaretParagraph = caretParagraph
             textView.caretParagraph = caretParagraph
         }
@@ -1222,6 +1469,10 @@ struct NoteEditorView: NSViewRepresentable {
             restyle(force: false)
             parent.onChange(text)
             refreshCompletionIfNeeded()
+            // 输入法组合期间不记：组合完成后一次记成一步，撤销才不会退到半截拼音。
+            if !textView.hasMarkedText() {
+                noteEdit(text: text)
+            }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -1230,6 +1481,13 @@ struct NoteEditorView: NSViewRepresentable {
             // 光标移动时刷新补全的候选（在同一条引用内左右移动）
             if completion.isVisible {
                 refreshCompletionIfNeeded()
+            }
+            // 光标跳到别的段落：一次撤销不该跨段落（issue #35）。
+            guard parent.editable, !isApplyingStyles, !isApplyingUndo, let textView else { return }
+            let caret = paragraphRange(at: textView.selectedRange().location)
+            if let last = lastEditParagraph, caret?.location != last.location {
+                commitPendingEdit()
+                lastEditParagraph = caret
             }
         }
 
@@ -1321,6 +1579,8 @@ struct NoteEditorView: NSViewRepresentable {
                 textView.textStorage?.replaceCharacters(in: full, with: replacement)
                 textView.didChangeText()
                 textView.setSelectedRange(NSRange(location: full.location + (replacement as NSString).length, length: 0))
+                // 一次补全 = 一步撤销（issue #35）。
+                commitPendingEdit(named: "插入引用")
             }
             completionRange = nil
         }
