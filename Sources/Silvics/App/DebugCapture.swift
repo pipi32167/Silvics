@@ -483,10 +483,11 @@ enum DebugCapture {
         return rep.representation(using: .png, properties: [:])
     }
 
-    /// `SILVICS_SELFTEST=convert|tables`：走真实链路跑一次自检。
+    /// `SILVICS_SELFTEST=convert|tables|ime`：走真实链路跑一次自检。
     ///
     /// - `convert`：把光标放进第一条提及，合成一次 `⌘⇧K`。
     /// - `tables`：量出每个表格每行 pipe 的 x，打印列偏差（验收需要具体数字）。
+    /// - `ime`：模拟中文输入法连敲几个词，打印每步正文与期望是否一致。
     @MainActor
     static func runSelfTest(_ app: AppState) {
         switch ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] {
@@ -494,6 +495,8 @@ enum DebugCapture {
         case "tables": runTableSelfTest()
         case "link-jump": runLinkJumpSelfTest(app)
         case "cursor-unfocused": runUnfocusedCursorSelfTest()
+
+        case "ime": runIMESelfTest(app)
         default: return
         }
     }
@@ -581,6 +584,87 @@ enum DebugCapture {
         }
     }
 
+    /// `SILVICS_SELFTEST=ime`：模拟系统中文输入法连敲几个词，逐步打印各层正文。
+    ///
+    /// 输入法在 AppKit 层只做两件事：`setMarkedText`（组合态）与 `insertText`（上屏）。
+    /// 按这个接口驱动真实的 `EditorTextView`，就会走 `textDidChange` → 重排样式 →
+    /// 防抖保存 → SwiftUI 回灌这一整条链路，和真人敲拼音同路。
+    ///
+    /// 步间隔默认 0.8 s，比 500 ms 的防抖保存宽，好让保存与回灌落在两步之间。
+    /// `SILVICS_IME_GAP` 可改间隔（秒）。
+    @MainActor
+    private static func runIMESelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        let gap = Double(ProcessInfo.processInfo.environment["SILVICS_IME_GAP"] ?? "") ?? 0.8
+        let words = ["你好", "世界", "输入法", "吞字", "复现"]
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            app.openTitle("中文输入是笔记应用的关键路径")
+            var waited = 0
+            while (app.current == nil || app.current?.type == NoteTypes.clipID) && waited < 40 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findEditorTextView(in: window.contentView!) else {
+                print("[ime] 找不到编辑区 标题=\(app.current?.title ?? "nil") 笔记数=\(app.summaries.count)")
+                return
+            }
+            window.makeFirstResponder(textView)
+            let base = textView.string
+            textView.setSelectedRange(NSRange(location: (base as NSString).length, length: 0))
+            print("[ime] 起始 长度=\((base as NSString).length) 尾部=\(tail(base))"
+                + " 标题=\(app.current?.title ?? "nil") 建视图次数=\(NoteEditorView.makeCount)")
+
+            for (index, word) in words.enumerated() {
+                // 每步取当前树上的编辑区，别拿到已被替换掉的旧视图。
+                let live = findEditorTextView(in: window.contentView!) ?? textView
+                if live.window?.firstResponder !== live { window.makeFirstResponder(live) }
+                let pinyin = "nihao"
+                live.setMarkedText(
+                    pinyin,
+                    selectedRange: NSRange(location: (pinyin as NSString).length, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0)
+                )
+                let markedTail = tail(live.string)
+                let marked = live.hasMarkedText()
+                live.insertText(word, replacementRange: NSRange(location: NSNotFound, length: 0))
+
+                let viewNow = live.string
+                let appBody = app.current?.body ?? ""
+                let expected = base + words[0...index].joined()
+                print("[ime] 第 \(index + 1) 步 组合态 marked=\(marked) 尾部=\(markedTail)")
+                print("[ime] 第 \(index + 1) 步 上屏「\(word)」 视图长度=\((viewNow as NSString).length)"
+                    + " 视图一致=\(viewNow == expected)"
+                    + " 应用长度=\((appBody as NSString).length) 应用一致=\(appBody == expected)"
+                    + " 光标=\(live.selectedRange().location) 尾部=\(tail(viewNow))")
+                try? await Task.sleep(nanoseconds: UInt64(gap * 1_000_000_000))
+            }
+
+            // 等最后一轮防抖保存与回灌走完，再判最终结果。
+            try? await Task.sleep(nanoseconds: UInt64(max(gap, 0.8) * 1_000_000_000))
+            let expected = base + words.joined()
+            let live = findEditorTextView(in: window.contentView!) ?? textView
+            let viewNow = live.string
+            let appBody = app.current?.body ?? ""
+            print("[ime] 结果 期望长度=\((expected as NSString).length) 视图长度=\((viewNow as NSString).length)"
+                + " 应用长度=\((appBody as NSString).length)"
+                + " 视图一致=\(viewNow == expected) 应用一致=\(appBody == expected)"
+                + " 建视图次数=\(NoteEditorView.makeCount)")
+            if let diff = firstDiff(expected, viewNow) {
+                print("[ime] 视图首个差异 期望=\(tailDiff(expected, diff)) 实际=\(tailDiff(viewNow, diff))")
+            }
+            if let diff = firstDiff(expected, appBody) {
+                print("[ime] 应用首个差异 期望=\(tailDiff(expected, diff)) 实际=\(tailDiff(appBody, diff))")
+            }
+            print("[ime] 末段 视图=\(tail(viewNow)) 应用=\(tail(appBody))")
+            // 取证：打完这几个词再截图，图上就是「词在不在」的直接证据。
+            if let path {
+                let stem = path.hasSuffix(".png") ? String(path.dropLast(4)) : path
+                captureAll(to: stem + "-ime.png")
+            }
+        }
+    }
+
     /// 把鼠标挪到第一条引用上，往窗口发一个 `flagsChanged`，再读当前指针。
     @MainActor
     private static func measureCursor(tag: String, editor: EditorTextView, window: NSWindow) {
@@ -618,6 +702,26 @@ enum DebugCapture {
                     + " 指针=\(cursor) \(editor.debugCursorReport())")
             }
         }
+    }
+
+    private static func tail(_ text: String, _ count: Int = 12) -> String {
+        let ns = text as NSString
+        let start = max(0, ns.length - count)
+        return ns.substring(with: NSRange(location: start, length: ns.length - start))
+            .replacingOccurrences(of: "\n", with: "⏎")
+    }
+
+    private static func firstDiff(_ a: String, _ b: String) -> Int? {
+        let lhs = Array(a.utf16)
+        let rhs = Array(b.utf16)
+        for index in 0..<min(lhs.count, rhs.count) where lhs[index] != rhs[index] { return index }
+        return lhs.count == rhs.count ? nil : min(lhs.count, rhs.count)
+    }
+
+    private static func tailDiff(_ text: String, _ offset: Int) -> String {
+        let ns = text as NSString
+        let start = max(0, min(offset, ns.length) - 4)
+        return ns.substring(with: NSRange(location: start, length: min(12, ns.length - start)))
     }
 
     /// `SILVICS_SELFTEST=tables`：把每行 pipe 的 x 量出来，打印列偏差。
@@ -870,6 +974,15 @@ enum DebugCapture {
         if let textView = view as? NSTextView { return textView }
         for sub in view.subviews {
             if let found = findTextView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    /// 只找编辑区的 `EditorTextView`，不要拿列表栏搜索框的 field editor 充数。
+    private static func findEditorTextView(in view: NSView) -> EditorTextView? {
+        if let textView = view as? EditorTextView { return textView }
+        for sub in view.subviews {
+            if let found = findEditorTextView(in: sub) { return found }
         }
         return nil
     }

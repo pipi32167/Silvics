@@ -96,6 +96,12 @@ final class AppState: ObservableObject {
     private var saveTask: Task<Void, Never>?
     /// 最近一次落库的正文，用于跳过无变化的保存。
     var lastSavedBody: String = ""
+
+    /// 正文被**外部**改写的次数（改名、批量转换、撤销转换、日记承接、冲突合并、重载）。
+    ///
+    /// 编辑器只在它变化时接受外部正文。用户自己敲的字走 `bodyDidChange`，不动这个值。
+    /// 不用它的话，`updateNSView` 拿到一次旧快照就会把刚敲的字整段冲掉（issue #34）。
+    @Published private(set) var bodyRevision: Int = 0
     /// 上次批量转换前的正文。按笔记 id 存。
     private var conversionUndo: [String: String]?
     // 定时同步
@@ -399,6 +405,8 @@ final class AppState: ObservableObject {
             }
             current = note
             lastSavedBody = note.body
+            // 从库里重新读出来 = 外部改写，编辑器要接收这次正文。
+            bodyRevision &+= 1
             backlinks = try repo.backlinks(to: id)
             outgoing = try repo.outgoing(from: id)
             danglingTargets = try repo.danglingTargets()

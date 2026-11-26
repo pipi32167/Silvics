@@ -232,6 +232,8 @@ private struct EditorPane: View {
                     NoteEditorView(
                         initialText: note.body,
                         text: note.body,
+                        textRevision: app.bodyRevision,
+                        liveText: { app.current?.body ?? note.body },
                         resolvedKeys: app.resolvedKeys,
                         mentions: app.mentionDecorations(),
                         appearance: app.appearance,
