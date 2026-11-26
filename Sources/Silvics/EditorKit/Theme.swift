@@ -222,6 +222,7 @@ enum Theme {
         // 与列表同一套缩进：标记压缩后正文从 `ListLayout.indent` 开始，换行也对齐。
         p.firstLineHeadIndent = ListLayout.indent
         p.headIndent = ListLayout.indent
+        collapseTabStops(in: p)
         return p
     }
 
@@ -236,7 +237,22 @@ enum Theme {
         p.lineBreakMode = .byWordWrapping
         p.firstLineHeadIndent = ListLayout.indent
         p.headIndent = ListLayout.indent
+        collapseTabStops(in: p)
         return p
+    }
+
+    /// 把列表 / 引用段落里的制表位压到最小。
+    ///
+    /// tab 缩进（`\t- 甲`）按制表位跳格走，跟字号、kern 都无关，压宽压不住它：
+    /// 默认制表位每隔 28 pt 一格，行首那个 tab 白白占 6 pt（5 + 缩进 22 → 下一个格 28）。
+    /// 这里清空自定义制表位、把默认间隔压到 0.1 pt，行首 tab 只剩 0.1 pt。
+    ///
+    /// 不能写 0：实测制表位间隔为 0 时 TextKit 2 不再为这一段产出 `textLineFragments`，
+    /// 整段量不到位置（`EditorIndentTests` 的 tab 用例会直接量不到 x）。
+    /// 代价：这两类段落里行中间的 tab 不再对到制表位——列表正文里几乎不会用到。
+    static func collapseTabStops(in paragraph: NSMutableParagraphStyle) {
+        paragraph.tabStops = []
+        paragraph.defaultTabInterval = 0.1
     }
 
     // MARK: - 行首标记的两种宽度

@@ -226,6 +226,21 @@ enum MarkdownStyler {
         scanLineMarkers(in: text).compactMap(\.quote)
     }
 
+    /// 全部「带块级标记的行」的行首缩进区间，按位置升序（issue #41）。
+    ///
+    /// 覆盖标题 / 三种列表 / 引用。这些缩进只影响 Markdown 的层级语义，
+    /// 编辑器里没有任何排版价值：露出来只会让正文在进出编辑态时左右跳。
+    /// 普通段落前面的空格不在内——那是正文的一部分。
+    static func lineIndentRanges(in text: String) -> [NSRange] {
+        guard !text.isEmpty else { return [] }
+        var out: [NSRange] = []
+        for markers in scanLineMarkers(in: text) {
+            guard let indent = markers.indent, indent.length > 0 else { continue }
+            out.append(indent)
+        }
+        return out
+    }
+
     /// 某处所在行里 `[ ]` / `[x]` 中间那个字符的区间（勾选切换用，S39）。
     ///
     /// 只认行首待办：先找到该行，再用同一条 `todoRegex` 匹配。`]` 后无空格不算（S09）。
@@ -378,6 +393,8 @@ enum MarkdownStyler {
         var fence: NSRange?
         var list: ListMarker?
         var quote: NSRange?
+        /// 行首缩进（只在这行确实带块级标记时才有）。编辑器里永远不占宽（issue #41）。
+        var indent: NSRange?
     }
 
     /// 逐行一次扫描，同时维护围栏状态。
@@ -419,18 +436,26 @@ enum MarkdownStyler {
                 return
             }
 
-            // 2. 标题前缀：1–3 个 `#` 后必须有空格（S02 / S03 / S21）
+            // 2. 标题前缀：≤3 个前导空格 + 1–maxLevel 个 `#` + 空格（S02 / S03 / S21 / S53）
+            //
+            // 前导空格按 CommonMark 最多 3 个：4 个空格是缩进代码块，`    ## 甲` 仍是原文。
+            // 前缀区间从 `#` 起算，缩进单独记在 `markers.indent`，交给「永不占宽」那一组。
+            let leadingSpaces = line.prefix { $0 == " " }.count
+            let afterSpaces = line.dropFirst(leadingSpaces)
             var hashes = 0
-            for ch in line {
+            for ch in afterSpaces {
                 if ch == "#" { hashes += 1 } else { break }
             }
-            if hashes >= 1, hashes <= maxLevel {
+            if leadingSpaces <= 3, hashes >= 1, hashes <= maxLevel {
                 var spaces = 0
-                for ch in line.dropFirst(hashes) {
+                for ch in afterSpaces.dropFirst(hashes) {
                     if ch == " " { spaces += 1 } else { break }
                 }
                 if spaces >= 1 {
-                    markers.heading = NSRange(location: offset, length: hashes + spaces)
+                    markers.heading = NSRange(location: offset + leadingSpaces, length: hashes + spaces)
+                    if leadingSpaces > 0 {
+                        markers.indent = NSRange(location: offset, length: leadingSpaces)
+                    }
                 }
             }
 
@@ -451,6 +476,7 @@ enum MarkdownStyler {
                     markers.list = ListMarker(
                         kind: .todo(checked: mark == "x" || mark == "X"),
                         indent: indentWidth,
+                        indentChars: indentChars.count,
                         markerRange: NSRange(location: offset, length: end)
                     )
                 }
@@ -460,6 +486,7 @@ enum MarkdownStyler {
                 markers.list = ListMarker(
                     kind: .unordered,
                     indent: indentWidth,
+                    indentChars: indentChars.count,
                     markerRange: NSRange(location: offset, length: end)
                 )
             } else if let match = orderedListRegex.firstMatch(in: raw, range: whole),
@@ -472,8 +499,14 @@ enum MarkdownStyler {
                 markers.list = ListMarker(
                     kind: .ordered(number),
                     indent: indentWidth,
+                    indentChars: indentChars.count,
                     markerRange: NSRange(location: offset, length: end)
                 )
+            }
+
+            // 列表行：行首缩进单独记一条，交给「永不占宽」那一组（issue #41）。
+            if markers.list != nil, !indentChars.isEmpty {
+                markers.indent = NSRange(location: offset, length: indentChars.count)
             }
 
             // 4. 引用前缀：`>` 后允许一个空格
@@ -484,6 +517,9 @@ enum MarkdownStyler {
                 let rest = Array(afterIndent.dropFirst(quotes))
                 if rest.first == " " { length += 1 }
                 markers.quote = NSRange(location: offset, length: length)
+                if !indentChars.isEmpty {
+                    markers.indent = NSRange(location: offset, length: indentChars.count)
+                }
             }
 
             out.append(markers)
