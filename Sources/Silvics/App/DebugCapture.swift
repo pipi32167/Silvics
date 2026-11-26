@@ -614,6 +614,15 @@ enum DebugCapture {
             log("\(tag) 当前=\(title) 可见=\(visible.count) 尾=\(tail) current=\(bodyCount)"
                 + " canUndo=\(canUndo) canRedo=\(canRedo) 状态=\(status) 文件=\(files)")
         }
+        /// 截图前清掉状态提示条：它浮在正文上，会挡住要看的字。
+        @MainActor func shot(_ tag: String, window: NSWindow?) {
+            guard let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] else { return }
+            app.statusMessage = nil
+            // 窗口不激活时侧栏会变暗，截图之间会多出整块差异。截前先激活。
+            NSApp.activate(ignoringOtherApps: true)
+            window?.makeKeyAndOrderFront(nil)
+            captureNow(prefix: shots, tag: tag)
+        }
         @MainActor func menuProbe(_ title: String) -> String {
             let item = NSApp.mainMenu?.items
                 .compactMap { $0.submenu?.items }
@@ -650,11 +659,11 @@ enum DebugCapture {
             for ch in "【撤销测试】" {
                 textView.insertText(String(ch), replacementRange: textView.selectedRange())
             }
+            // 截图要能看见刚键入的那一段：滚到正文末尾（撤销前后都以末尾为锚，便于逐像素对比）。
+            scrollToEnd(textView)
             dump("键入后", window: window, textView: textView)
             log("菜单 \(menuProbe("Undo")) | \(menuProbe("Redo"))")
-            if let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] {
-                captureNow(prefix: shots, tag: "01-键入后")
-            }
+            shot("01-键入后", window: window)
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 MainActor.assumeIsolated {
@@ -683,25 +692,20 @@ enum DebugCapture {
                             MainActor.assumeIsolated {
                                 var currentText: EditorTextView? = findTextView(in: window.contentView!) as? EditorTextView
                                 dump("换到B", window: window, textView: currentText)
-                                if let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] {
-                                    captureNow(prefix: shots, tag: "04-换到B")
-                                }
+                                shot("04-换到B", window: window)
                                 for i in 1...10 {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.3) {
                                         MainActor.assumeIsolated {
                                             _ = pressUndo(window)
                                             currentText = findTextView(in: window.contentView!) as? EditorTextView
                                             dump("⌘Z#\(i)", window: window, textView: currentText)
-                                            if i == 1, let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"] {
-                                                captureNow(prefix: shots, tag: "05-B上撤销")
-                                            }
+                                            if i == 1 { shot("05-B上撤销", window: window) }
                                         }
                                     }
                                 }
                             }
                         }
                     default:
-                        let shots = ProcessInfo.processInfo.environment["SILVICS_UNDO_SHOTS"]
                         func editorNow() -> EditorTextView? {
                             findTextView(in: window.contentView!) as? EditorTextView
                         }
@@ -715,7 +719,8 @@ enum DebugCapture {
                             dump("⌘Z#1", window: window, textView: editorNow())
                         }
                         step(0.8) {
-                            if let shots { captureNow(prefix: shots, tag: "02-撤销后") }
+                            if let editor = editorNow() { scrollToEnd(editor) }
+                            shot("02-撤销后", window: window)
                         }
                         step(1.4) {
                             _ = pressUndo(window)
@@ -729,7 +734,8 @@ enum DebugCapture {
                             dump("⌘⇧Z", window: window, textView: editorNow())
                         }
                         step(2.4) {
-                            if let shots { captureNow(prefix: shots, tag: "03-重做后") }
+                            if let editor = editorNow() { scrollToEnd(editor) }
+                            shot("03-重做后", window: window)
                             log("菜单 \(menuProbe("Undo")) | \(menuProbe("Redo"))")
                         }
                         step(2.9) {
@@ -1173,6 +1179,13 @@ enum DebugCapture {
                 DebugLog.write("[cursor-probe] " + reports.joined(separator: " | "))
             }
         }
+    }
+
+    /// 把编辑区滚到正文末尾。撤销前后都用同一个锚点，截图才能逐像素对比。
+    @MainActor
+    static func scrollToEnd(_ textView: NSTextView) {
+        let end = (textView.string as NSString).length
+        textView.scrollRangeToVisible(NSRange(location: end, length: 0))
     }
 
     /// 立刻把主窗口写成 PNG。撤销演练用它取「键入后 / 撤销后 / 重做后」三张图。
