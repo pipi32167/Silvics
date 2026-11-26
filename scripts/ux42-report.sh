@@ -16,9 +16,14 @@ RAW="$REPORT/artifacts/raw"
 SC=~/.local/bin/shot-compare
 COMMIT="$(git rev-parse --short HEAD)"
 
-rm -rf "$REPORT"
-"$ROOT/scripts/ux42-shots.sh" >/tmp/ux42-shots.log 2>&1 || { tail -20 /tmp/ux42-shots.log; exit 1; }
-grep -c '^ok' /tmp/ux42-shots.log | xargs echo "截图："
+# `--skip-shots`：只重排报告，复用 artifacts/raw 里已有的截图（调文案时用）。
+if [ "${1:-}" != "--skip-shots" ]; then
+  rm -rf "$REPORT"
+  "$ROOT/scripts/ux42-shots.sh" >/tmp/ux42-shots.log 2>&1 || { tail -20 /tmp/ux42-shots.log; exit 1; }
+  grep -c '^ok' /tmp/ux42-shots.log | xargs echo "截图："
+else
+  rm -f "$REPORT"/report.md "$REPORT"/artifacts/*.png "$REPORT"/.shot-compare.json
+fi
 
 # 性能数字：120 篇 × 24k 字，修复前后（探针实测，见 issue #42 评论）
 python3 - "$RAW/13-perf-before-after.png" <<'PY'
@@ -92,6 +97,11 @@ PY
 "$SC" crop "$RAW/04-nav-collapsed.png" --box 0,58,60,110 --zoom 3 --dir "$REPORT" --out 10-collapsed-rail-3x.png --report \
   --case "收起态图标栏仍保留选中色（3x）" --criterion "收成一列图标后选中模块仍有 accent 底色与描边，与展开态同一色阶" --result 通过 >/dev/null
 
+"$SC" pair "$RAW/07-ai-large.png" "$RAW/14-narrow-ai-18.png" \
+  --labels "右栏 292 px × 18 pt" "右栏 200 px × 18 pt（最窄）" --align 2 --tolerance 8 \
+  --dir "$REPORT" --out 12-narrow-200-18pt.png --report \
+  --case "最窄右栏 × 最大字号" --criterion "200 px 宽 + 18 pt 下，消息、引用、证据、输入框与发送按钮都不截断、不重叠" --result 通过 >/dev/null
+
 "$SC" grid "$RAW/13-perf-before-after.png" --labels 探针实测 --cols 1 --dir "$REPORT" --out 11-perf-before-after.png --report \
   --case "切剪藏耗时（探针实测）" --criterion "列表查询不再解码正文：120 篇时切到剪藏从约 200 ms 降到 22 ms 以内" --result 通过 >/dev/null
 
@@ -102,13 +112,13 @@ PY
 
 "$SC" deviation --dir "$REPORT" --area "列表底部新建行" \
   --design "issue #42：支持用光标添加文档，可以放在底部" \
-  --impl "放在 List 之外的固定条带：不随列表滚动、不参与列表选中高亮" \
-  --verdict 待确认 --evidence "artifacts/03-list-new-row-3x.png" >/dev/null
+  --impl "固定在 List 之外的条带（列表再长也点得到）；侧栏材质与列表同色、1 px 细线分隔、左缘对齐图标列、悬停高亮" \
+  --verdict 已修复 --evidence "artifacts/03-list-new-row-3x.png" >/dev/null
 
-"$SC" deviation --dir "$REPORT" --area "右栏 18 pt 档" \
-  --design "右栏宽度 200–380 px（设计文档）" \
-  --impl "18 pt 下消息换行明显增多；本次只在 292 px 宽验收" \
-  --verdict 待确认 --evidence "artifacts/06-ai-font-matrix.png" >/dev/null
+"$SC" deviation --dir "$REPORT" --area "右栏 18 pt 档的最窄宽度" \
+  --design "右栏宽度 200–380 px（设计文档），未规定最大字号下的最小宽度" \
+  --impl "200 px + 18 pt 实测可用：消息与引用换行增多，输入框与「发送」不截断" \
+  --verdict 已修复 --evidence "artifacts/12-narrow-200-18pt.png" >/dev/null
 
 "$SC" uncovered --dir "$REPORT" --case "真实键盘 ⌘1/⌘2/⌘3" \
   --reason "自动化按键需要辅助功能授权；本次只验按钮路径与快捷键绑定代码" >/dev/null
@@ -116,8 +126,9 @@ PY
   --reason "摘要/标签预览要真实抓取正文后才出现，本次未造抓取数据；预览与右栏共用 PanelFont" >/dev/null
 "$SC" uncovered --dir "$REPORT" --case "待办总览 / 模板范围隐藏底部新建行" \
   --reason "两页占满中栏，列表中栏不出现；本次未单独截图" >/dev/null
-"$SC" uncovered --dir "$REPORT" --case "200 px 窄右栏 × 18 pt" \
-  --reason "只验了 292 px 宽；窄宽需另开 900x700 窗口" >/dev/null
+
+"$SC" uncovered --dir "$REPORT" --case "底部新建行的悬停态" \
+  --reason "悬停需要指针停在行上，脚本驱动不了鼠标；实现见 ListPaneView.newRow 的 onHover" >/dev/null
 "$SC" uncovered --dir "$REPORT" --case "多语言与断点" \
   --reason "应用只有中文界面，没有语言切换" >/dev/null
 

@@ -62,4 +62,5 @@ shot 09-dark-clips      $W SILVICS_SHOW=clips-all SILVICS_DARK=1
 shot 10-dark-ai         $W SILVICS_SEED=1 SILVICS_SHOW=ai-chat SILVICS_DARK=1
 shot 11-newclip         SILVICS_SEED=1 SILVICS_SHOW=new-clip SILVICS_WINDOW=980x760
 shot 12-journal-scope   $W SILVICS_SEED=1 SILVICS_SHOW=journal
+shot 14-narrow-ai-18    $W SILVICS_SEED=1 SILVICS_SHOW=ai-chat SILVICS_APPEARANCE=panel=18 SILVICS_CONTEXT_WIDTH=200
 ls -1 "$OUT"

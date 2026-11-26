@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 第二栏：当前模块 + 当前范围的列表。搜索框在顶部。
@@ -5,6 +6,9 @@ import SwiftUI
 /// 范围切换在 `ModuleNavView`，这里只负责把选中的范围渲染出来。
 struct ListPaneView: View {
     @EnvironmentObject private var app: AppState
+
+    /// 底部新建行的悬停态。按钮才有按下反馈，行高亮得自己画。
+    @State private var isNewRowHovering = false
 
     private var query: String {
         app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -75,8 +79,15 @@ struct ListPaneView: View {
             .environment(\.defaultMinListRowHeight, 30)
 
             if showsNewRow {
-                Divider()
+                // 条带与列表同为侧栏材质，分隔靠这条 1 px 细线，不靠色差。
+                // 线画在材质之上：画在材质下面会被窗口底色冲淡到看不见。
                 newRow
+                    .background(SidebarMaterial())
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.12))
+                            .frame(height: 1)
+                    }
             }
         }
     }
@@ -115,11 +126,15 @@ struct ListPaneView: View {
                 Spacer(minLength: 0)
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
+            // 左缘对齐列表里的图标列，右缘留 12：看起来是列表的续行，不是另一块控件。
+            .padding(.leading, 20)
+            .padding(.trailing, 12)
             .padding(.vertical, 8)
+            .background(isNewRowHovering ? Color.primary.opacity(0.06) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isNewRowHovering = $0 }
         .help("\(newRowTitle)（⌘N）")
         .accessibilityIdentifier("list-new-item")
     }
@@ -405,4 +420,22 @@ private struct ClipRow: View {
         formatter.dateFormat = "MM-dd"
         return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
+}
+
+// MARK: - 侧栏材质
+
+/// 底部新建条带的底。要跟上面的 `List(.sidebar)` 同色。
+///
+/// `.thinMaterial` / `.bar` 在浅色下都偏白，和侧栏的灰差一档；
+/// 直接用 `NSVisualEffectView(.sidebar)` 才能两种外观下都对上。
+private struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
