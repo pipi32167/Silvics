@@ -462,7 +462,113 @@ enum DebugCapture {
         switch ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] {
         case "convert": runConvertSelfTest(app)
         case "tables": runTableSelfTest()
+        case "link-jump": runLinkJumpSelfTest(app)
+        case "cursor-unfocused": runUnfocusedCursorSelfTest()
         default: return
+        }
+    }
+
+    /// `SILVICS_SELFTEST=link-jump`：查「换笔记之后指针还认不认 ⌘」。
+    @MainActor
+    private static func runLinkJumpSelfTest(_ app: AppState, after delay: TimeInterval = 2.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let content = window.contentView,
+                  let old = findTextView(in: content) as? EditorTextView else {
+                DebugLog.write("[link-jump] 找不到编辑区")
+                return
+            }
+            let links = WikiScanner.scan(old.string)
+            DebugLog.write("[link-jump] 跳转前：第一响应者=\(window.firstResponder === old) 引用数=\(links.count)")
+            measureCursor(tag: "跳转前", editor: old, window: window)
+            guard let link = links.first else {
+                DebugLog.write("[link-jump] 这篇没有引用，换一篇测")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                app.openTitle(link.target)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    guard let fresh = findTextView(in: content) as? EditorTextView else {
+                        DebugLog.write("[link-jump] 跳转后找不到编辑区")
+                        return
+                    }
+                    DebugLog.write("[link-jump] 跳转后：同一视图=\(fresh === old) 第一响应者=\(window.firstResponder === fresh)")
+                    measureCursor(tag: "跳转后", editor: fresh, window: window)
+                }
+            }
+        }
+    }
+
+    /// `SILVICS_SELFTEST=cursor-unfocused`：编辑视图没有焦点时，按 ⌘ 指针还变不变手型。
+    ///
+    /// 等价于「⌘ 点击链接跳转到新笔记，新编辑视图还没拿到焦点」。
+    /// 事件走 `NSApp.postEvent`，会被 App 的事件循环取出，窗口级监听能收到；
+    /// 旧实现只靠第一响应者收 `flagsChanged`，这里应当完全没反应。
+    @MainActor
+    private static func runUnfocusedCursorSelfTest(after delay: TimeInterval = 2.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let content = window.contentView,
+                  let editor = findTextView(in: content) as? EditorTextView else {
+                DebugLog.write("[cursor-unfocused] 找不到编辑区")
+                return
+            }
+            window.makeFirstResponder(nil)
+            DebugLog.write("[cursor-unfocused] 编辑视图第一响应者=\(window.firstResponder === editor)"
+                + " 手型矩形=\(editor.wikiLinkCursorRects().count)")
+
+            guard let rect = editor.wikiLinkCursorRects().first else {
+                DebugLog.write("[cursor-unfocused] 没有手型矩形，跳过")
+                return
+            }
+            let inWindow = editor.convert(rect, to: nil)
+            let onScreen = window.convertToScreen(inWindow)
+            let screenHeight = NSScreen.screens.first?.frame.height ?? 0
+            CGWarpMouseCursorPosition(CGPoint(x: onScreen.midX, y: screenHeight - onScreen.midY))
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                let flags = NSEvent.modifierFlags
+                if let event = NSEvent.keyEvent(
+                    with: .flagsChanged, location: .zero, modifierFlags: flags,
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    characters: "", charactersIgnoringModifiers: "",
+                    isARepeat: false, keyCode: 55
+                ) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    DebugLog.write("[cursor-unfocused] 系统修饰键=\(flags.contains(.command)) \(editor.debugCursorReport())")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private static func measureCursor(tag: String, editor: EditorTextView, window: NSWindow) {
+        let rects = editor.wikiLinkCursorRects()
+        guard let rect = rects.first else {
+            DebugLog.write("[link-jump] \(tag)：没有手型矩形，跳过")
+            return
+        }
+        let inWindow = editor.convert(rect, to: nil)
+        let onScreen = window.convertToScreen(inWindow)
+        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
+        CGWarpMouseCursorPosition(CGPoint(x: onScreen.midX, y: screenHeight - onScreen.midY))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let flags = NSEvent.modifierFlags
+            if let event = NSEvent.keyEvent(
+                with: .flagsChanged, location: .zero, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: 55
+            ) {
+                window.sendEvent(event)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                DebugLog.write("[link-jump] \(tag)：系统修饰键=\(flags.contains(.command)) \(editor.debugCursorReport())")
+            }
         }
     }
 
