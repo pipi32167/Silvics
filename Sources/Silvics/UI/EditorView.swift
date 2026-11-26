@@ -856,6 +856,8 @@ struct NoteEditorView: NSViewRepresentable {
         private var currentQuery: String = ""
         /// 上一次算出来的语法标记（与光标无关的部分），光标移动时只需重新分桶。
         private var lastSyntaxMarkers: [NSRange] = []
+        /// 上一次算出来的「带标记行的行首缩进」。光标移动不走它，但它必须一直压着（issue #41）。
+        private var lastLineIndents: [NSRange] = []
         /// 上一次算出来的列表行（含缩进与标记区间），光标移动时重算压宽。
         private var lastListMarkers: [ListMarker] = []
         /// 上一次算出来的引用前缀。
@@ -1118,6 +1120,7 @@ struct NoteEditorView: NSViewRepresentable {
             let spans = MarkdownStyler.analyze(text)
             let wikis = parent.rendersWikiLinks ? WikiScanner.scan(text) : []
             let listMarkers = MarkdownStyler.listMarkers(in: text)
+            let lineIndents = MarkdownStyler.lineIndentRanges(in: text)
             let quoteMarkers = MarkdownStyler.quoteMarkerRanges(in: text)
             let tableBlocks = MarkdownStyler.tableBlocks(in: text)
             let fullRange = NSRange(location: 0, length: storage.length)
@@ -1145,11 +1148,14 @@ struct NoteEditorView: NSViewRepresentable {
             applyWikiLinks(wikis, in: text, storage, fullRange)
             applyMentions(storage)
             applySyntaxMarks(marks, storage)
+            // 放在最后：`applyLists` 在光标段落会把整段前缀恢复原宽，缩进要再压回去。
+            applyLineIndents(lineIndents, storage: storage)
 
             storage.endEditing()
 
             lastSyntaxMarkers = marks.all
             lastListMarkers = listMarkers
+            lastLineIndents = lineIndents
             lastQuoteMarkers = quoteMarkers
             lastTableBlocks = tableBlocks
             lastHeadingMarkers = spans.headingMarkers
@@ -1198,7 +1204,8 @@ struct NoteEditorView: NSViewRepresentable {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles, !textView.hasMarkedText() else { return }
             guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarkers.isEmpty
-                    || !lastTableBlocks.isEmpty || !lastHeadingMarkers.isEmpty else {
+                    || !lastTableBlocks.isEmpty || !lastHeadingMarkers.isEmpty
+                    || !lastLineIndents.isEmpty else {
                 return
             }
             let caretParagraph = parent.editable ? paragraphRange(at: textView.selectedRange().location) : nil
@@ -1212,6 +1219,8 @@ struct NoteEditorView: NSViewRepresentable {
             applyHeadingMarkers(lastHeadingMarkers, caretParagraph: caretParagraph, storage: storage)
             // 表格同理：光标行撤 kern 露源码，其他行恢复对齐。
             applyTables(lastTableBlocks, in: storage.string, caretParagraph: caretParagraph, storage: storage)
+            // 行首缩进与光标无关：换段落也压着（issue #41）。
+            applyLineIndents(lastLineIndents, storage: storage)
             storage.endEditing()
             lastCaretParagraph = caretParagraph
             textView.caretParagraph = caretParagraph
@@ -1269,6 +1278,19 @@ struct NoteEditorView: NSViewRepresentable {
                     guard let r = clamp(item.range, storage.length) else { continue }
                     storage.addAttributes(item.attributes, range: r)
                 }
+            }
+        }
+
+        /// 行首缩进：**永远**不占宽，光标在不在这一段都一样（issue #41）。
+        ///
+        /// 原来光标段落会把整段前缀（含缩进）恢复原宽，`  - 甲` 一进编辑态正文就右移 8 pt。
+        /// 缩进对流式排版没有意义，藏起来；光标段落只露语法标记本身。
+        private func applyLineIndents(_ ranges: [NSRange], storage: NSTextStorage) {
+            guard !ranges.isEmpty else { return }
+            let ns = storage.string as NSString
+            for range in ranges {
+                guard let r = clamp(range, storage.length) else { continue }
+                storage.addAttributes(ListLayout.indentAttributes(for: ns.substring(with: r)), range: r)
             }
         }
 

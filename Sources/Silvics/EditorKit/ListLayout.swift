@@ -17,15 +17,17 @@ struct ListMarker: Equatable {
     }
 
     var kind: Kind
-    /// 行首缩进量（空格数，制表符记 4）。只记录，不参与缩进布局。
+    /// 行首缩进量（视觉宽度：空格记 1，制表符记 4）。只记录，不参与缩进布局。
     var indent: Int
+    /// 行首缩进的字符数。区间计算只能用它：一个 tab 是 1 个字符、4 个宽度（issue #41）。
+    var indentChars: Int
     /// 整段前缀区间：缩进 + 项目符号 / 序号 / 勾选框 + 后随空格。
     /// 隐藏（非光标段落）时整段压到宽度 ≈ 0，正文因此从 `ListLayout.indent` 处开始。
     var markerRange: NSRange
 
     /// 去掉缩进后的前缀区间。语法标记（`-`、`1.`、`- [ ] `）用这个。
     var visibleRange: NSRange {
-        let drop = min(indent, markerRange.length)
+        let drop = min(indentChars, markerRange.length)
         return NSRange(location: markerRange.location + drop, length: markerRange.length - drop)
     }
 
@@ -66,6 +68,16 @@ enum ListLayout {
             guard marker.isTodo else { return false }
             return !isInCaretParagraph(marker, caretParagraph)
         }
+    }
+
+    /// 行首缩进：编辑器里永远不占宽。
+    ///
+    /// 光标段落原来会把整段前缀（含缩进）恢复原宽，于是 `  - 甲` 一进编辑态正文就右移 8 pt，
+    /// 光标移开又缩回去（issue #41）。缩进是排版噪声，改成无论光标在哪都不占宽，
+    /// 光标段落只恢复语法标记本身（`- `、`1. `、`- [ ] `）。
+    /// 缩进的压宽属性与标记同一套构造，只此一处。
+    static func indentAttributes(for indent: String) -> [NSAttributedString.Key: Any] {
+        Theme.compressedMarkerAttributes(for: indent)
     }
 
     /// 光标段落内的标记不隐藏、不画符号、不画复选框：那一段露源码。

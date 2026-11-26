@@ -166,6 +166,7 @@ enum DebugCapture {
             case "new-clip": app.selectModule(.clips); app.applyScope(.clip(.unread)); app.isShowingNewClip = true
             case "settings-clips": SettingsWindowController.show(app: app, tab: .clips)
             case "lists", "lists-demo": seedListsDemo(app)
+            case "indent", "indent-demo": seedIndentDemo(app)
             case "tables", "tables-demo": seedTablesDemo(app)
             case "journal-today": app.goToToday()
             case "settings":
@@ -305,6 +306,58 @@ enum DebugCapture {
 
         // `SILVICS_SELECT` 在 `applyShowFlag` 里跑得比这里早（那时笔记还不存在），
         // 所以这里再按同一个关键字选一次，截图才能指定截哪篇。
+        if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
+           let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
+            app.selectModule(.notes)
+            app.applyScope(.note(.all))
+            app.select(match.id)
+        }
+    }
+
+    /// 仅取证：`SILVICS_SHOW=indent` 建一篇「行首缩进」演示笔记（issue #41）。
+    ///
+    /// 一篇里放齐五类带行首空白的块级标记：无序 / 有序 / 待办 / 引用 / 标题，另加一个 tab 缩进项。
+    /// 配合 `SILVICS_CARET=<关键字>` 把光标放进其中一行，截「编辑态是否还留着行首空白」；
+    /// 光标放在收尾行就是渲染态对照。
+    @MainActor
+    private static func seedIndentDemo(_ app: AppState) {
+        let title = "缩进行编辑态演示"
+        let body = """
+        ## 锻炼
+        - [x] 跑步：3.2k × 2 + 1.2k + 2k 组休 2min
+
+        ## 日记
+        - 开始做自用的常青笔记 Silvics
+          - 晚上去内道跑步，最后一组跟了 C 组，2k 跑得累死。
+          1. 有序缩进两格
+        \t- tab 缩进一项
+
+        ## 待办
+        - [ ] 顶层待办
+          - [ ] 缩进两格待办
+
+        ## 引用
+        > 顶层引用
+          > 缩进两格引用
+
+        ## 标题
+          ## 缩进两格标题
+
+        ## 收尾
+        光标停在这一行，上面都保持渲染态。
+        """
+
+        if let existing = app.summaries.first(where: { $0.title == title }) {
+            app.select(existing.id)
+        } else if let note = app.createNote(title: title) {
+            app.select(note.id)
+        } else {
+            print("[Silvics] 缩进演示笔记没有建出来")
+            return
+        }
+        app.bodyDidChange(body)
+        app.flushPendingSave()
+
         if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT"],
            let match = app.summaries.first(where: { $0.title.contains(keyword) }) {
             app.selectModule(.notes)
