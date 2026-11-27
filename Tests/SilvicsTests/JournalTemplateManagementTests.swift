@@ -65,11 +65,11 @@ final class JournalTemplateManagementTests: XCTestCase {
         """
         XCTAssertEqual(JournalTemplates.skeleton(named: ["生活", "工作"], in: vault.url), expected)
 
-        // 走真实新建链路，落库正文与骨架一致；`- [ ]` 原样保留，承接扫得到。
+        // 走真实新建链路，落库正文与骨架一致；`- [ ]` 原样保留，融合扫得到。
         let repo = try makeRepo()
         let today = try repo.journalNote(on: "2026-11-24", using: ["生活", "工作"])
         XCTAssertEqual(today.body, expected)
-        XCTAssertEqual(JournalCarry.openTodos(in: today.body).count, 3)
+        XCTAssertEqual(JournalMerge.openTodos(in: today.body).count, 3)
     }
 
     // MARK: - 2. 无正文只有标题
@@ -283,7 +283,7 @@ final class JournalTemplateManagementTests: XCTestCase {
         XCTAssertEqual(JournalTemplates.newJournalNames(in: vault.url), [])
         XCTAssertEqual(JournalTemplates.skeleton(named: ["工作"], in: vault.url), "", "点名的模板文件没了就跳过")
 
-        // 上一篇没有未完成项，所以承接不会插东西：正文应当就是空的。
+        // 上一篇没有未完成项，所以融合不会补任何东西：正文应当就是空的。
         let second = try repo.journalNote(on: "2026-11-25", using: JournalTemplates.newJournalNames(in: vault.url))
         XCTAssertEqual(second.body, "")
         XCTAssertEqual(second.title, "2026-11-25")

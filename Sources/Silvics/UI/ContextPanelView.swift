@@ -549,7 +549,7 @@ struct ContextPanelView: View {
         }
     }
 
-    /// 日记右栏：当天统计 + 承接来源。
+    /// 日记右栏：当天统计 + 融合来源。
     private func journalSection(_ note: Note) -> some View {
         let entry = app.journalEntries.first { $0.id == note.id }
         let carried = note.metaFields["carryFrom"] ?? ""
@@ -559,7 +559,7 @@ struct ContextPanelView: View {
                 sourceRow("日期", entry?.date ?? note.title)
                 sourceRow("星期", entry?.weekday ?? "")
                 sourceRow("未完成", "\(entry?.openTodoCount ?? 0) 条")
-                sourceRow("承接自", carried.isEmpty ? "无" : carried)
+                sourceRow("融合自", carried.isEmpty ? "无" : carried)
                 sourceRow("字数", "\(note.body.count)")
             }
         }
