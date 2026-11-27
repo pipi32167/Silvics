@@ -4,7 +4,8 @@
 #
 # 用法：
 #   scripts/release.sh 0.1.1                  # 完整发布
-#   scripts/release.sh 0.1.1 --dry-run        # 只构建与打包，不提交、不打 tag、不上传
+#   scripts/release.sh 0.1.1 --dry-run        # 跑单测 + 构建 + 打包，不提交、不打 tag、不上传
+#   scripts/release.sh 0.1.1 --skip-tests     # 跳过发版前的单测门禁（需在发版记录里写原因）
 #   scripts/release.sh --check-upload         # 只验证 GitHub 上传通道（建 draft 再删）
 #   scripts/release.sh --rollback 0.1.1       # 删 release、删远端 tag、删本地 tag
 #
@@ -81,6 +82,26 @@ preflight() {
   command -v gh >/dev/null || die "缺 gh（brew install gh）"
   gh auth status >/dev/null 2>&1 || die "gh 未登录，先 gh auth login"
   ok "工具齐备，gh 已登录"
+}
+
+# 发版前必须过单测。发布出问题最常见的原因不是签名，是刚合进来的改动没跑过测试。
+# 确认某次只动打包相关的东西时，加 `--skip-tests` 跳过，并在发版记录里写清原因。
+run_tests() {
+  if [ "$SKIP_TESTS" = "1" ]; then
+    warn "按 --skip-tests 跳过单测"
+    return 0
+  fi
+  local log="${TMPDIR:-/tmp}/silvics-release-test.log"
+  say "跑单测（Debug，跳过签名）"
+  xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
+    -destination 'platform=macOS' -derivedDataPath "$DERIVED" \
+    CODE_SIGNING_ALLOWED=NO test > "$log" 2>&1 \
+    || {
+      grep -E 'Test Case.*failed' "$log" | tail -20
+      tail -20 "$log"
+      die "单测没过，不发布。日志：$log"
+    }
+  ok "$(grep -cE 'Test Case.*passed' "$log" || true) 项通过（日志：$log）"
 }
 
 check_upload_channel() {
@@ -243,11 +264,12 @@ rollback() {
 MODE="release"
 TARGET_VERSION=""
 DRY_RUN=0
+SKIP_TESTS=0
 RELEASE_SUMMARY="${RELEASE_SUMMARY:-}"
 
 case "${1:-}" in
   ""|-h|--help)
-    sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   --check-upload)
@@ -263,6 +285,7 @@ case "${1:-}" in
     for arg in "$@"; do
       case "$arg" in
         --dry-run) DRY_RUN=1 ;;
+        --skip-tests) SKIP_TESTS=1 ;;
         *) die "不认识的参数：$arg" ;;
       esac
     done
@@ -277,6 +300,8 @@ require_clean_tree
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   die "tag $TAG 已存在。要重发先跑 scripts/release.sh --rollback $TARGET_VERSION"
 fi
+
+run_tests
 
 BUILD_NUMBER="$(next_build_number)"
 say "目标版本 ${TARGET_VERSION}（构建号 ${BUILD_NUMBER}）"
