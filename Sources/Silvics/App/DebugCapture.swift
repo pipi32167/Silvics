@@ -82,6 +82,17 @@ enum DebugCapture {
             app.applyScope(.note(.all))
             app.select(match.id)
         }
+        // `SILVICS_CLIP_LONG=<段数>`：先造一篇长剪藏（issue #50 的性能取证）。
+        if let raw = ProcessInfo.processInfo.environment["SILVICS_CLIP_LONG"], let count = Int(raw), count > 0 {
+            seedLongClip(app, paragraphs: count)
+        }
+        // `SILVICS_SELECT_CLIP=<关键字>`：取证时选中某篇剪藏（剪藏不在 `summaries` 里，故单独一个开关）。
+        if let keyword = ProcessInfo.processInfo.environment["SILVICS_SELECT_CLIP"], !keyword.isEmpty {
+            app.selectModule(.clips)
+            if let match = app.clipSummaries.first(where: { $0.title.contains(keyword) }) {
+                app.select(match.id)
+            }
+        }
         // 先切 vault 再播种 / 开面板：`SILVICS_VAULT` 换目录后，后面的写入要落到新目录。
         applySyncFlags(app)
 
@@ -244,9 +255,133 @@ enum DebugCapture {
             }
     }
 
-    /// 仅取证：往当前会话写一组固定的提问与回答。
+    /// 仅取证：`SILVICS_SELFTEST=enter-continue`。
     ///
-    /// 不调模型：截图要的是布局，不是真实回答。
+    /// 在真编辑器上按三次回车：待办、无序、有序各续一行。截图里看得到新条目，
+    /// 正文里也能看到「前缀照搬、有序 +1、待办未勾选」三件事。
+    @MainActor
+    static func runEnterContinueProbe(_ app: AppState) {
+        let title = "回车续行演示"
+        let body = """
+        - [ ] 待办一：回车后应自动出现新的未勾选待办
+        - 无序一：回车后应自动出现下一个项目符号
+        1. 有序一：回车后序号应变成 2
+        """
+        if let existing = app.summaries.first(where: { $0.title == title }) {
+            app.select(existing.id)
+        } else if let note = app.createNote(title: title) {
+            app.select(note.id)
+        }
+        app.bodyDidChange(body)
+        app.flushPendingSave()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard let textView = findEditorTextView() else {
+                print("[enter-continue] 找不到编辑器，跳过")
+                fflush(stdout)
+                return
+            }
+            textView.window?.makeFirstResponder(textView)
+            // 逐行按内容定位（正文每回车一次都会变长，行号会漂）。
+            let anchors = [
+                "待办一：回车后应自动出现新的未勾选待办",
+                "无序一：回车后应自动出现下一个项目符号",
+                "有序一：回车后序号应变成 2",
+            ]
+            for anchor in anchors {
+                let now = textView.string as NSString
+                let found = now.range(of: anchor)
+                guard found.location != NSNotFound else { continue }
+                var end = found.location + found.length
+                let newline = now.range(
+                    of: "\n",
+                    range: NSRange(location: end, length: now.length - end)
+                )
+                if newline.location != NSNotFound { end = newline.location }
+                textView.setSelectedRange(NSRange(location: end, length: 0))
+                textView.insertNewline(nil)
+            }
+            print("[enter-continue] 结果正文：\(textView.string.replacingOccurrences(of: "\n", with: " ⏎ "))")
+            fflush(stdout)
+        }
+    }
+
+    /// 在所有窗口里找第一个 `EditorTextView`（取证脚本不依赖第一响应者是谁）。
+    @MainActor
+    private static func findEditorTextView() -> EditorTextView? {
+        func search(_ view: NSView) -> EditorTextView? {
+            if let editor = view as? EditorTextView { return editor }
+            for sub in view.subviews {
+                if let found = search(sub) { return found }
+            }
+            return nil
+        }
+        for window in NSApp.windows {
+            guard let content = window.contentView else { continue }
+            if let found = search(content) { return found }
+        }
+        return nil
+    }
+
+    /// 仅取证：`SILVICS_CLIP_LONG=<段数>` 造一篇长剪藏，用于量「长文切换」的耗时（issue #50）。
+    ///
+    /// 正文由七种块轮流拼：标题、无序、待办、引用、代码、表格、段落。
+    /// 和真实剪藏一样是「块多、行多」，不是纯大段落，因此解析与扫描的开销都在。
+    @MainActor
+    static func seedLongClip(_ app: AppState, paragraphs: Int) {
+        let title = "长文压测剪藏"
+        guard !app.clipSummaries.contains(where: { $0.title == title }) else { return }
+        var parts: [String] = []
+        for index in 0..<paragraphs {
+            switch index % 7 {
+            case 0: parts.append("## 第 \(index) 节：记忆与检索")
+            case 1: parts.append("- 列表项 \(index)：这是一段比较长的中文说明，模拟剪藏正文里的列表，含中英混排 mixed text。")
+            case 2: parts.append("- [ ] 待办 \(index)：把这件事做完，再看看下一步。")
+            case 3: parts.append("> 引用 \(index)：引用里也会有一段话，用来测引用竖线的布局与换行。")
+            case 4: parts.append("```swift\nlet gap = [1, 3, 7]\n// 注释：间隔三档\n```")
+            case 5: parts.append("| 列一 | 列二 |\n| --- | --- |\n| 甲 \(index) | 乙 \(index) |")
+            default: parts.append("正文段落 \(index)：The quick brown fox jumps over the lazy dog. 中英混排，测字距与换行。稀疏重复优于集中突击，同样的总时长拆成多次，每次之间留出遗忘。")
+            }
+        }
+        let draft = ClipDraft(
+            url: "https://example.com/long-article",
+            title: title,
+            site: "压测",
+            body: parts.joined(separator: "\n\n"),
+            summary: "长文压测：\(parts.count) 块",
+            tags: ["压测"],
+            status: .read,
+            aiState: .done
+        )
+        _ = try? app.saveClip(draft)
+    }
+
+    /// 仅取证：`SILVICS_SELFTEST=clip-switch`。
+    ///
+    /// 按字数从大到小依次打开剪藏，每次之间留 1.5 秒。真正的耗时看同一份日志里的
+    /// `[style] chars=… cache=… total=… ms`：每篇第一次打开必然是 `cache=miss`。
+    @MainActor
+    static func runClipSwitchProbe(_ app: AppState) {
+        let clips = app.clipSummaries.sorted { $0.charCount > $1.charCount }
+        guard !clips.isEmpty else {
+            print("[clip-switch] 没有剪藏可切")
+            fflush(stdout)
+            return
+        }
+        let targets = Array(clips.prefix(3))
+        // 两轮：第一轮每篇都是冷启动（cache=miss），第二轮走样式缓存（cache=hit）。
+        for round in 0..<2 {
+            for (index, clip) in targets.enumerated() {
+                let delay = 1.0 + Double(round * targets.count + index) * 1.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    print("[clip-switch] round=\(round + 1) -> \(clip.title)（\(clip.charCount) 字）")
+                    fflush(stdout)
+                    app.select(clip.id)
+                }
+            }
+        }
+    }
+
     @MainActor
     private static func seedAIConversation(_ app: AppState) {
         let noteID = app.aiSessionID
@@ -274,6 +409,25 @@ enum DebugCapture {
             AIMessage(
                 id: "demo-4", at: base + 12_000, role: AIMessage.roleAssistant,
                 content: "总时长相同时间隔更好。原因有两条：一是每次回忆都是一次检索练习，二是间隔让遗忘发生，重新提取的难度更高，留下的痕迹更深。集中复习的收益主要停在当时的熟悉感上。",
+                model: "deepseek-chat"
+            ),
+            // 带 Markdown 的回答：标题、列表、待办、引用、代码块、粗体、`[[ ]]` 都要按编辑器渲染。
+            AIMessage(
+                id: "demo-5", at: base + 18_000, role: AIMessage.roleAssistant,
+                content: """
+                ## 三档间隔怎么排
+                - **第 1 档**：学完当天睡前回忆一次
+                - 第 2 档：第 3 天
+                  1. 先不看笔记复述
+                  2. 再对照原文补漏
+                - [ ] 第 3 档排到第 7 天
+                > 判据是「有点费力但仍能想起来」，太轻松说明间隔偏短。
+
+                ```swift
+                let gap = [1, 3, 7]  // 天数
+                ```
+                这套排法与 [[稀疏重复优于集中突击]] 一致。
+                """,
                 model: "deepseek-chat"
             ),
         ]
@@ -411,6 +565,26 @@ enum DebugCapture {
             - [ ] 光标行露源码，其余行渲染
 
             光标停在最后一行，三条待办都保持渲染态。
+            """),
+            ("多级列表演示", """
+            ## 两级
+            - 一级：正文与标题同左缘
+              - 二级：右移一格
+                - 三级：再右移一格
+              - 二级有序
+                1. 第一项
+                2. 第二项
+
+            ## 待办层级
+            - [ ] 一级待办
+              - [ ] 二级待办
+                - [x] 三级待办（已完成）
+
+            ## 引用
+            > 一级引用
+              > 二级引用
+
+            光标停在这里，上面都保持渲染态。
             """),
         ]
 
@@ -685,6 +859,8 @@ enum DebugCapture {
         case "undo": runUndoSelfTest(app)
         case "undo-same": runUndoSameNoteSelfTest(app)
         case "undo-switch": runUndoSwitchSelfTest(app)
+        case "clip-switch": runClipSwitchProbe(app)
+        case "enter-continue": runEnterContinueProbe(app)
         case "undo-rename": runUndoRenameSelfTest(app)
         case "undo-spaced": runUndoSpacedSelfTest(app)
         default: return
@@ -1793,7 +1969,7 @@ enum DebugCapture {
         if let caret = textView.caretParagraph {
             print("[ime-render] \(label) 光标段落=\(NSStringFromRange(caret))")
         }
-        print("[ime-render] \(label) 引用区间=\(textView.quoteRanges.map(NSStringFromRange).joined(separator: ","))"
+        print("[ime-render] \(label) 引用区间=\(textView.quoteMarks.map { NSStringFromRange($0.range) }.joined(separator: ","))"
             + " 代码块区间=\(textView.codeBlockRanges.map(NSStringFromRange).joined(separator: ","))")
         // 第一条待办的行首标记：字号 0.1 表示压宽（渲染态），16.5 表示露源码。
         if let first = parsed.first(where: { $0.isTodo }) {

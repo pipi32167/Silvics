@@ -1,5 +1,37 @@
 import SwiftUI
 
+/// 一条消息的正文：复用编辑器的只读渲染（issue #50）。
+///
+/// 直接用 `NoteEditorView` 的只读模式，而不是另写一套 Markdown 渲染：
+/// 语法标记压宽、列表符号、待办复选框、代码块底色、表格对齐都在同一处，
+/// 聊天记录与正文才不会出现两种排版。
+private struct MarkdownMessageText: View {
+    @EnvironmentObject private var app: AppState
+    let text: String
+
+    var body: some View {
+        NoteEditorView(
+            initialText: text,
+            text: text,
+            resolvedKeys: app.resolvedKeys,
+            mentions: [],
+            appearance: app.appearance,
+            editable: false,
+            rendersWikiLinks: false,
+            onChange: { _ in },
+            completionProvider: { _, _ in [] },
+            onCreateNote: { _ in nil },
+            onOpenLink: { _ in },
+            onCompletionVisibilityChange: { _ in },
+            compact: true,
+            autoHeight: true
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("ai-message-body")
+    }
+}
+
 /// 右栏「AI」页：会话、引用卡片、网页证据、输入框。
 ///
 /// 布局按 200 px 宽设计。窄窗口下右栏最小就是这个宽度，
@@ -131,12 +163,9 @@ struct AIChatPanelView: View {
                         .lineLimit(1)
                 }
             }
-            Text(message.content)
-                .font(PanelFont.text())
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // 回答按编辑器同一套规则渲染（标题、列表、待办、引用、代码块、粗体、`[[ ]]`），
+            // 而不是把 Markdown 原文直接贴出来（issue #50）。
+            MarkdownMessageText(text: message.content)
 
             if let quote = message.quote, !quote.text.isEmpty {
                 quoteRow(quote)

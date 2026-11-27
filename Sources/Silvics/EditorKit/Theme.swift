@@ -215,13 +215,14 @@ enum Theme {
         return p
     }
 
-    static func quoteParagraph() -> NSParagraphStyle {
+    static func quoteParagraph(level: Int = 1) -> NSParagraphStyle {
         let p = NSMutableParagraphStyle()
         p.lineSpacing = 4
         p.paragraphSpacing = 8
-        // 与列表同一套缩进：标记压缩后正文从 `ListLayout.indent` 开始，换行也对齐。
-        p.firstLineHeadIndent = ListLayout.indent
-        p.headIndent = ListLayout.indent
+        // 与列表同一套缩进：标记压缩后正文从 `ListLayout.offset(level:)` 开始，换行也对齐。
+        let indent = ListLayout.offset(level: level)
+        p.firstLineHeadIndent = indent
+        p.headIndent = indent
         collapseTabStops(in: p)
         return p
     }
@@ -230,13 +231,15 @@ enum Theme {
     ///
     /// `firstLineHeadIndent` 与 `headIndent` 相同：首行与软换行后的行左缘一致。
     /// 标记字符由 `compressedMarkerAttributes(for:)` 压到宽度 ≈ 0，空出来的位置交给自绘符号。
-    static func listParagraph() -> NSParagraphStyle {
+    static func listParagraph(level: Int = 1) -> NSParagraphStyle {
         let p = NSMutableParagraphStyle()
         p.lineSpacing = CGFloat(appearance.lineSpacing)
         p.paragraphSpacing = 9
         p.lineBreakMode = .byWordWrapping
-        p.firstLineHeadIndent = ListLayout.indent
-        p.headIndent = ListLayout.indent
+        // 每深一级右移 `ListLayout.levelStep`，第 1 级与标题、正文同左缘（issue #50）。
+        let indent = ListLayout.offset(level: level)
+        p.firstLineHeadIndent = indent
+        p.headIndent = indent
         collapseTabStops(in: p)
         return p
     }

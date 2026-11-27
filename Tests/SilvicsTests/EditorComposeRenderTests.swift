@@ -339,7 +339,8 @@ final class EditorComposeRenderTests: XCTestCase {
         let caret = lineStart(text, 1) + ("结尾段落。" as NSString).length
         let editor = makeEditor(text, caret: caret)
         let before = MarkdownStyler.analyze(text)
-        XCTAssertEqual(editor.textView.quoteRanges, before.blockQuotes, "前置条件：初始状态就对得上")
+        XCTAssertEqual(editor.textView.quoteMarks.map(\.blockRange), before.blockQuotes,
+                       "前置条件：初始状态就对得上")
 
         compose(editor.textView, String(repeating: "zhongguoren", count: 6))
         editor.textView.layoutSubtreeIfNeeded()
@@ -347,7 +348,8 @@ final class EditorComposeRenderTests: XCTestCase {
         let now = editor.textView.string
         XCTAssertTrue(editor.textView.hasMarkedText())
         let spans = MarkdownStyler.analyze(now)
-        XCTAssertEqual(editor.textView.quoteRanges, spans.blockQuotes, "组字期间引用竖线区间过期")
+        XCTAssertEqual(editor.textView.quoteMarks.map(\.blockRange), spans.blockQuotes,
+                       "组字期间引用竖线区间过期")
         XCTAssertEqual(editor.textView.codeBlockRanges, spans.codeBlocks, "组字期间代码块底色区间过期")
         XCTAssertEqual(editor.textView.listMarkers, MarkdownStyler.listMarkers(in: now),
                        "组字期间列表标记区间过期")

@@ -107,12 +107,16 @@ final class EditorIndentTests: XCTestCase {
         return characterX(textView, at: start + prefix)
     }
 
-    /// 列表正文的理论左缘：容器左缘 + 行片段留白 + 列表缩进 + 可见标记宽度。
+    /// 列表正文的理论左缘：容器左缘 + 行片段留白 + 该层缩进 + 可见标记宽度。
+    ///
+    /// 第 1 级 `ListLayout.indent` 是 0，与标题、正文同左缘；每深一级加 `levelStep`（issue #50）。
     private func expectedBodyStart(
         _ textView: EditorTextView,
-        visiblePrefix: String
+        visiblePrefix: String,
+        level: Int = 1
     ) -> CGFloat {
-        textView.textContainerOrigin.x + 5 + ListLayout.indent + Theme.visibleMarkerWidth(visiblePrefix)
+        textView.textContainerOrigin.x + 5 + ListLayout.offset(level: level)
+            + Theme.visibleMarkerWidth(visiblePrefix)
     }
 
     private func assertClose(
@@ -132,13 +136,16 @@ final class EditorIndentTests: XCTestCase {
         let text = "- 顶层\n  - 缩进两格"
         let (textView, _, _) = makeEditor(text, caretLine: 1)
 
-        assertClose(bodyStartX(textView, line: 1), expectedBodyStart(textView, visiblePrefix: "- "),
+        // 两个空格 = 第 2 级：缩进不占字符宽度，但层级本身要右移一格（issue #50）。
+        assertClose(bodyStartX(textView, line: 1),
+                   expectedBodyStart(textView, visiblePrefix: "- ", level: 2),
                    "光标在缩进行，正文只让出 `- ` 的宽度，行首两个空格不占宽")
 
         // 对照：整段前缀（含缩进）都露出来时会更靠右，证明上面不是恒真
-        let raw = textView.textContainerOrigin.x + 5 + ListLayout.indent
+        let raw = textView.textContainerOrigin.x + 5 + ListLayout.offset(level: 2)
             + Theme.visibleMarkerWidth("  - ")
-        XCTAssertGreaterThan(raw, expectedBodyStart(textView, visiblePrefix: "- "), "对照值要比期望值大")
+        XCTAssertGreaterThan(raw, expectedBodyStart(textView, visiblePrefix: "- ", level: 2),
+                             "对照值要比期望值大")
         XCTAssertGreaterThan(abs((bodyStartX(textView, line: 1) ?? 0) - raw), 5,
                              "实际位置不能等于「缩进也占宽」的位置")
 
@@ -156,8 +163,9 @@ final class EditorIndentTests: XCTestCase {
             ("- [x] 顶层\n  - [x] 缩进两格", 1, "- [x] "),
         ] {
             let (textView, _, _) = makeEditor(text, caretLine: line)
-            assertClose(bodyStartX(textView, line: line), expectedBodyStart(textView, visiblePrefix: mark),
-                       "「\(text.components(separatedBy: "\n")[line])」行首缩进不占宽")
+            assertClose(bodyStartX(textView, line: line),
+                       expectedBodyStart(textView, visiblePrefix: mark, level: 2),
+                       "「\(text.components(separatedBy: "\n")[line])」行首缩进不占宽，只按层级右移一格")
         }
     }
 
@@ -173,8 +181,9 @@ final class EditorIndentTests: XCTestCase {
         XCTAssertEqual((text as NSString).substring(with: marker!.visibleRange), "- ")
 
         let (textView, _, _) = makeEditor(text, caretLine: 1)
-        assertClose(bodyStartX(textView, line: 1), expectedBodyStart(textView, visiblePrefix: "- "),
-                   "tab 缩进同样不占宽")
+        assertClose(bodyStartX(textView, line: 1),
+                   expectedBodyStart(textView, visiblePrefix: "- ", level: 2),
+                   "tab 缩进同样不占宽，只按层级右移一格")
     }
 
     // MARK: - S52 引用：缩进同样藏起来
@@ -184,9 +193,9 @@ final class EditorIndentTests: XCTestCase {
         let (textView, _, _) = makeEditor(text, caretLine: 1)
         let lineStart = paragraphStart(text, line: 1)
 
-        // 引用段落本身有 22pt 缩进（`Theme.quoteParagraph`），缩进在这里是「行首额外空格」。
-        // 光标在引用行：`>` 落在引用缩进处（行首两个空格不占宽），正文让出 `> ` 的宽度。
-        let quoteIndent = textView.textContainerOrigin.x + 5 + ListLayout.indent
+        // 引用段落按层级留缩进（第 2 级 = 18pt），行首那两个空格本身不占宽。
+        // 光标在引用行：`>` 落在该层缩进处，正文再让出 `> ` 的宽度。
+        let quoteIndent = textView.textContainerOrigin.x + 5 + ListLayout.offset(level: 2)
         assertClose(characterX(textView, at: lineStart + 2), quoteIndent,
                    "`>` 应落在引用缩进处，行首两个空格不占宽")
         assertClose(characterX(textView, at: lineStart + 4),
@@ -216,15 +225,17 @@ final class EditorIndentTests: XCTestCase {
         XCTAssertEqual(textView.string, text)
     }
 
-    // MARK: - S54 渲染态（光标不在这一段）不受影响
+    // MARK: - S54 渲染态（光标不在这一段）：同一层对齐，不同层按层级排
 
     func testS54RenderedLinesStayAlignedWhateverTheIndent() {
         let text = "- 零个缩进\n  - 两个空格\n\t- 一个 tab\n    - 四个空格\n收尾"
         let (textView, _, _) = makeEditor(text, caretLine: 4)
-        let expected = textView.textContainerOrigin.x + 5 + ListLayout.indent
-        for line in 0...3 {
+        // 0 个空格 = 第 1 级；2 空格与 tab = 第 2 级；4 空格 = 第 3 级（issue #50）。
+        let levels = [1, 2, 2, 3]
+        for (line, level) in levels.enumerated() {
+            let expected = textView.textContainerOrigin.x + 5 + ListLayout.offset(level: level)
             assertClose(bodyStartX(textView, line: line), expected,
-                       "第 \(line) 行渲染态的正文左缘都落在缩进处")
+                       "第 \(line) 行（第 \(level) 级）渲染态的正文左缘落在该层缩进处")
         }
     }
 
