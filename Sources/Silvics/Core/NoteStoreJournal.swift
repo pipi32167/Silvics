@@ -23,10 +23,10 @@ extension GRDBNoteRepository {
             .first?.note
     }
 
-    /// 取某天的日记；不存在就按模板与承接新建并保存。
+    /// 取某天的日记；不存在就按模板与待办融合新建并保存。
     ///
-    /// 已存在时直接返回已有那篇：不覆盖正文、不重复插入承接。
-    /// 新建顺序：拼模板骨架 → 找上一个有日记的日子 → 未完成项插到正文最前。
+    /// 已存在时直接返回已有那篇：不覆盖正文、不重复融合。
+    /// 新建顺序：拼模板骨架 → 找上一个有日记的日子 → 未完成项按标题路径并进同名段。
     @discardableResult
     func journalNote(on date: String, using templates: [String] = []) throws -> Note {
         let day = try JournalDate.normalized(date)
@@ -39,10 +39,10 @@ extension GRDBNoteRepository {
         var meta = ["date": day]
 
         if let previous = try previousJournal(before: day), let previousDay = previous.metaFields["date"] {
-            let items = JournalCarry.openTodos(in: previous.body)
-            let carried = JournalCarry.insert(into: body, from: previousDay, items: items)
-            if carried != body {
-                body = carried
+            let items = JournalMerge.openTodos(in: previous.body)
+            let merged = JournalMerge.merge(into: body, from: items)
+            if merged.added > 0 {
+                body = merged.body
                 meta["carryFrom"] = previousDay
             }
         }

@@ -14,7 +14,7 @@ struct JournalTodo: Identifiable, Equatable, Hashable {
 
     var id: String { text }
 
-    /// 总览副标题：`最早 11-21 · 最近 11-24 · 共 3 天`。日期取后 5 位，和承接段一致。
+    /// 总览副标题：`最早 11-21 · 最近 11-24 · 共 3 天`。日期取后 5 位，和右栏显示口径一致。
     var detail: String {
         "最早 \(Self.short(firstDate)) · 最近 \(Self.short(lastDate)) · 共 \(dayCount) 天"
     }
@@ -36,8 +36,8 @@ struct JournalEntry: Identifiable, Equatable, Hashable {
 
 /// 日记正文里的待办解析与跨日聚合。
 ///
-/// 与 `JournalCarry` 同一条行解析规则（`[-*+] [ ]`，代码块内不算），
-/// 但不改 `JournalCarry`：承接只要「未完成 + 文本」，总览还要行区间与完成状态。
+/// 与 `JournalMerge` 同一条行解析规则（`[-*+] [ ]`，代码块内不算），
+/// 但各算各的：融合只要「未完成 + 整块原文」，总览还要行区间与完成状态。
 enum JournalTodos {
 
     struct Item: Equatable {
@@ -123,7 +123,7 @@ enum JournalTodos {
 
     // MARK: - 行解析
 
-    /// 解析 `[-*+] [ ] 文本`。与 `JournalCarry` 的规则一致：`]` 后必须有一个空白。
+    /// 解析 `[-*+] [ ] 文本`。与 `JournalMerge.todoText` 的规则一致：`]` 后必须有一个空白。
     private static func parse(_ line: String) -> (done: Bool, text: String)? {
         var rest = Substring(line)
         while let c = rest.first, c == " " || c == "\t" { rest = rest.dropFirst() }

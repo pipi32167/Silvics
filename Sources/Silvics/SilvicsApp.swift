@@ -11,7 +11,7 @@ struct SilvicsApp: App {
         InvertDrill.runIfRequested()
         // 仅 DEBUG：`SILVICS_VAULT_SWITCH_DRILL=<dir>` 跑「换 vault 目录 + 删库重建」的三次启动演练。
         VaultSwitchDrill.runIfRequested()
-        // 仅 DEBUG：`SILVICS_JOURNAL_DRILL=<dir>` 跑「模板 + 承接 + journal/ 落盘」的命令行演练。
+        // 仅 DEBUG：`SILVICS_JOURNAL_DRILL=<dir>` 跑「模板 + 待办融合 + journal/ 落盘」的命令行演练。
         JournalDrill.runIfRequested()
         // 离屏截图：`@NSApplicationDelegateAdaptor` 的 `applicationDidFinishLaunching`
         // 在「一个可见窗口都没有」的会话里实测不触发，所以入口放在 init，投一次主队列。
@@ -100,8 +100,8 @@ struct SilvicsApp: App {
                 }
                 .keyboardShortcut("p", modifiers: .command)
 
-                Button("插入承接（当前行之前）") {
-                    app.insertCarryAtCaret()
+                Button("融合上次未完成（按模块）") {
+                    app.mergePreviousTodos()
                 }
                 .disabled(app.current?.type != NoteTypes.journalID)
 

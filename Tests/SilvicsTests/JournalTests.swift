@@ -1,9 +1,10 @@
 import XCTest
 @testable import Silvics
 
-/// 批次 3：模板与承接。
+/// 批次 3：模板与待办融合（issue #48）。
 ///
-/// 文档编号对应 `docs/日记编辑器边界用例.md` 第 4 节 C01–C06 与第 3 节 T01–T06。
+/// 文档编号对应 `docs/日记编辑器边界用例.md` 第 4 节 M01–M12 与第 3 节 T01–T06。
+/// 细则用例在 `JournalMergeTests`，这里只验收新建链路与日期来源。
 final class JournalTests: XCTestCase {
 
     // 日记提及开关存在真实 UserDefaults 里，测试必须用独立 suite，
@@ -57,36 +58,38 @@ final class JournalTests: XCTestCase {
         return try repo.save(journal)
     }
 
-    // MARK: - C01 承接块结构
+    // MARK: - M13 新建日记：未完成项并进同名段
 
-    func testC01CarryBlockStructure() throws {
+    func testM13NewJournalMergesOpenTodosIntoSections() throws {
+        try writeTemplate("工作", order: 1)
+        try writeTemplate("生活", order: 2)
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: """
         ## 工作
         - [ ] 把保存链路倒过来
         - [x] 已经做完的一件事
-        - [ ] 写承接的测试
+        ## 生活
+        - [ ] 买咖啡豆
         """)
 
-        let today = try repo.journalNote(on: "2026-11-24", using: [])
-
-        // 标题固定：`## 承接（来自 MM-DD）`，日期取后 5 位。
+        let today = try repo.journalNote(on: "2026-11-24", using: ["工作", "生活"])
         XCTAssertEqual(today.body, """
-        ## 承接（来自 11-21）
+        ## 工作
         - [ ] 把保存链路倒过来
-        - [ ] 写承接的测试
 
-        """, "承接块必须是标题 + 每条一行 `- [ ]`，末尾一个空行")
+        ## 生活
+        - [ ] 买咖啡豆
 
-        let lines = today.body.components(separatedBy: "\n")
-        XCTAssertEqual(lines.first, "## 承接（来自 11-21）")
-        XCTAssertTrue(lines.dropFirst().filter { $0.hasPrefix("- [ ] ") }.count == 2, today.body)
-        XCTAssertFalse(today.body.contains("- [x]"), "已完成项不该被搬过来")
+        """, today.body)
+        XCTAssertFalse(today.body.contains("承接"), "不再有独立承接段")
+        XCTAssertFalse(today.body.contains("已经做完的一件事"), "已完成的不搬")
+        XCTAssertEqual(today.metaFields["carryFrom"], "2026-11-21")
     }
 
-    // MARK: - C02 条数等于来源未完成数
+    // MARK: - M14 条数等于来源未完成数
 
-    func testC02CarryCountMatchesSourceOpenTodos() throws {
+    func testM14MergeCountMatchesSourceOpenTodos() throws {
+        try writeTemplate("工作", order: 1)
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: """
         - [ ] 一
@@ -99,25 +102,20 @@ final class JournalTests: XCTestCase {
         ```
         """)
         let source = try XCTUnwrap(repo.note(id: NoteTypes.journalID(for: "2026-11-21")))
-        let open = JournalCarry.openTodos(in: source.body)
-        XCTAssertEqual(open.count, 3, "\(open)")
+        let open = JournalMerge.openTodos(in: source.body)
+        XCTAssertEqual(open.map(\.text), ["一", "三", "五"], "\(open)")
 
-        let today = try repo.journalNote(on: "2026-11-24", using: [])
-        let carried = today.body
-            .components(separatedBy: "\n")
-            .filter { $0.hasPrefix("- [ ] ") }
-        XCTAssertEqual(carried.count, open.count)
-        XCTAssertEqual(carried, ["- [ ] 一", "- [ ] 三", "- [ ] 五"])
-        XCTAssertEqual(today.metaFields["carryFrom"], "2026-11-21")
+        let today = try repo.journalNote(on: "2026-11-24", using: ["工作"])
+        let merged = JournalMerge.openTodos(in: today.body)
+        XCTAssertEqual(merged.map(\.text), ["一", "三", "五"], "条数等于来源未完成数：\(today.body)")
+        XCTAssertTrue(today.body.contains("- [ ] 一"), "标记与缩进按原文搬：\(today.body)")
+        XCTAssertFalse(today.body.contains("代码块里的不算"))
     }
 
-    // MARK: - C03 上一个有日记的日子不是「昨天」
-
+    // MARK: - M15 上一个有日记的日子不是「昨天」
 
     /// 用**真实日期**走一遍「昨天 → 今天」，验证不是只有合成日期能过。
-    ///
-    /// 前一天留两条未完成、一条已完成；今天新建时应当带过来两条，且来源日期是昨天。
-    func testCarryFromYesterdayIntoTodayWithRealDates() throws {
+    func testMergeFromYesterdayIntoTodayWithRealDates() throws {
         let repo = try makeRepo()
         let today = JournalDate.today()
         let yesterday = JournalDate.today(Date().addingTimeInterval(-24 * 3600))
@@ -132,16 +130,15 @@ final class JournalTests: XCTestCase {
         _ = try repo.save(prev)
 
         let todayNote = try repo.journalNote(on: today, using: [])
-        XCTAssertTrue(todayNote.body.contains("## 承接（来自 \(JournalTodo.short(yesterday))）"),
-                      todayNote.body)
         XCTAssertTrue(todayNote.body.contains("- [ ] 昨天没做完 A"), todayNote.body)
         XCTAssertTrue(todayNote.body.contains("- [ ] 昨天没做完 B"), todayNote.body)
         XCTAssertFalse(todayNote.body.contains("昨天已经做完 C"), "已完成的不能带过来")
+        XCTAssertFalse(todayNote.body.contains("承接"))
         XCTAssertEqual(todayNote.metaFields["carryFrom"], yesterday)
-        XCTAssertEqual(try JournalCarry.openTodos(in: todayNote.body).count, 2)
+        XCTAssertEqual(JournalTodos.openCount(in: todayNote.body), 2)
     }
 
-    func testC03CarryComesFromMostRecentJournalNotYesterday() throws {
+    func testMergeComesFromMostRecentJournalNotYesterday() throws {
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: "- [ ] 二十一号的事")
         _ = try seedJournal(repo, date: "2026-11-23", body: "- [ ] 二十三号的事")
@@ -149,9 +146,7 @@ final class JournalTests: XCTestCase {
         XCTAssertEqual(try repo.previousJournal(before: "2026-11-24")?.metaFields["date"], "2026-11-23")
 
         let today = try repo.journalNote(on: "2026-11-24", using: [])
-        XCTAssertTrue(today.body.hasPrefix("## 承接（来自 11-23）"), today.body)
-        XCTAssertTrue(today.body.contains("- [ ] 二十三号的事"), today.body)
-        XCTAssertFalse(today.body.contains("二十一号的事"), today.body)
+        XCTAssertEqual(today.body, "- [ ] 二十三号的事\n", today.body)
         XCTAssertEqual(today.metaFields["carryFrom"], "2026-11-23")
 
         // 中间那天不存在时，跨过空缺取最近的 11-21。
@@ -159,21 +154,22 @@ final class JournalTests: XCTestCase {
         let gapRepo = try makeRepo(gapVault)
         _ = try seedJournal(gapRepo, date: "2026-11-21", body: "- [ ] 二十一号的事")
         let gapToday = try gapRepo.journalNote(on: "2026-11-24", using: [])
-        XCTAssertTrue(gapToday.body.hasPrefix("## 承接（来自 11-21）"), gapToday.body)
+        XCTAssertEqual(gapToday.body, "- [ ] 二十一号的事\n", gapToday.body)
         XCTAssertEqual(gapToday.metaFields["carryFrom"], "2026-11-21")
     }
 
-    func testC03DoesNotCarryFromFutureJournal() throws {
+    func testDoesNotMergeFromFutureJournal() throws {
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-25", body: "- [ ] 未来的事")
         let today = try repo.journalNote(on: "2026-11-24", using: [])
         XCTAssertNil(try repo.previousJournal(before: "2026-11-24"))
-        XCTAssertFalse(today.body.contains("承接"), today.body)
+        XCTAssertEqual(today.body, "")
+        XCTAssertNil(today.metaFields["carryFrom"])
     }
 
-    // MARK: - C04 已有同名承接不重复插入
+    // MARK: - M16 同一天重复新建不重复融合
 
-    func testC04ExistingCarrySectionIsNotDuplicated() throws {
+    func testM16ExistingJournalIsNotMergedTwice() throws {
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: "- [ ] 只搬一次")
 
@@ -181,21 +177,20 @@ final class JournalTests: XCTestCase {
         let second = try repo.journalNote(on: "2026-11-24", using: [])
 
         XCTAssertEqual(second.id, first.id, "同一天只应有一篇日记")
-        XCTAssertEqual(second.body, first.body, "已存在时返回原笔记，不覆盖、不重复承接")
-        XCTAssertEqual(
-            first.body.components(separatedBy: "## 承接（来自 11-21）").count - 1,
-            1,
-            first.body
-        )
+        XCTAssertEqual(second.body, first.body, "已存在时返回原笔记，不覆盖、不重复融合")
+        let text = "- [ ] 只搬一次"
+        XCTAssertEqual(first.body.components(separatedBy: text).count - 1, 1, first.body)
 
-        // 正文里已经有同名承接段时，插入函数原样返回。
-        let withCarry = first.body
-        XCTAssertEqual(JournalCarry.insert(into: withCarry, from: "2026-11-21", items: ["再来一次"]), withCarry)
+        // 再融合一次：全部已存在，正文一个字都不改。
+        let again = JournalMerge.merge(into: first.body, from: JournalMerge.openTodos(in: "- [ ] 只搬一次"))
+        XCTAssertEqual(again.added, 0)
+        XCTAssertEqual(again.skipped, 1)
+        XCTAssertEqual(again.body, first.body)
     }
 
-    // MARK: - C05 来源那天没有未完成项
+    // MARK: - M17 来源那天没有未完成项
 
-    func testC05NoCarryWhenSourceHasNoOpenTodos() throws {
+    func testM17NoMergeWhenSourceHasNoOpenTodos() throws {
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: """
         ## 工作
@@ -206,10 +201,9 @@ final class JournalTests: XCTestCase {
         let today = try repo.journalNote(on: "2026-11-24", using: [])
         XCTAssertEqual(today.body, "")
         XCTAssertNil(today.metaFields["carryFrom"])
-        XCTAssertFalse(today.body.contains("承接"))
     }
 
-    func testC05NoCarryWhenNoPreviousJournal() throws {
+    func testM17NoMergeWhenNoPreviousJournal() throws {
         let repo = try makeRepo()
         let today = try repo.journalNote(on: "2026-11-24", using: [])
         XCTAssertEqual(today.body, "")
@@ -253,17 +247,16 @@ final class JournalTests: XCTestCase {
         XCTAssertEqual(today.body, "## a\n\n## b\n")
     }
 
-    func testTemplateAndCarryCombineWithCarryFirst() throws {
+    func testTemplateAndMergeCombineInsideSection() throws {
         try writeTemplate("工作", order: 1)
         let repo = try makeRepo()
         _ = try seedJournal(repo, date: "2026-11-21", body: "- [ ] 昨天没做完的事")
 
+        // 来源没有标题，条目落到当天第一个标题所在段。
         let today = try repo.journalNote(on: "2026-11-24", using: ["工作"])
         XCTAssertEqual(today.body, """
-        ## 承接（来自 11-21）
-        - [ ] 昨天没做完的事
-
         ## 工作
+        - [ ] 昨天没做完的事
 
         """, today.body)
     }
@@ -281,140 +274,24 @@ final class JournalTests: XCTestCase {
         XCTAssertEqual(today.body, "## 没有名字\n")
     }
 
-    // MARK: - C06 承接插在当前行之前
+    // MARK: - 行号与 UTF-16 偏移
 
-    func testC06CarryInsertsBeforeThirdLine() throws {
-        let repo = try makeRepo()
-        _ = try seedJournal(repo, date: "2026-11-21", body: """
-        ## 工作
-        - [ ] 承接下来的第一件事
-        - [ ] 承接下来的第二件事
-        """)
-        let today = try seedJournal(repo, date: "2026-11-24", body: """
-        ## 工作
-        - [ ] 今天自己的事
-        ## 生活
-        - [ ] 买咖啡豆
-        """)
-
-        let source = try XCTUnwrap(repo.note(id: NoteTypes.journalID(for: "2026-11-21")))
-        let result = JournalCarry.insertion(
-            into: today.body,
-            beforeLine: 2,
-            from: "2026-11-21",
-            items: JournalCarry.openTodos(in: source.body)
-        )
-        XCTAssertTrue(result.didInsert)
-
-        // 原第 3 行（1-based，`## 生活`）顺延到承接块之后，一个字符都不丢。
-        let lines = result.body.components(separatedBy: "\n")
-        XCTAssertEqual(Array(lines[0...1]), ["## 工作", "- [ ] 今天自己的事"])
-        XCTAssertEqual(lines[2], "", "上一行非空，插之前补一个空行")
-        XCTAssertEqual(lines[3], "## 承接（来自 11-21）", "承接段落在第 3 行之前")
-        XCTAssertEqual(lines[4], "- [ ] 承接下来的第一件事")
-        XCTAssertEqual(lines[5], "- [ ] 承接下来的第二件事")
-        XCTAssertEqual(lines[6], "", "下一行非空，插之后补一个空行")
-        XCTAssertEqual(Array(lines[7...]), ["## 生活", "- [ ] 买咖啡豆"], "原第 3 行及之后全部顺延")
-        XCTAssertEqual(lines.filter { $0.hasPrefix("## 承接") }.count, 1)
-    }
-
-    func testC06CarryAtLineZeroMatchesFrontInsert() throws {
-        // 行 0 就是旧行为：承接在最前，不补前置空行，末尾留一个空行。
-        let legacy = JournalCarry.insert(into: "## 工作\n", from: "2026-11-21", items: ["一", "二"])
-        let lineZero = JournalCarry.insertion(into: "## 工作\n", beforeLine: 0, from: "2026-11-21", items: ["一", "二"])
-        XCTAssertTrue(lineZero.didInsert)
-        XCTAssertEqual(lineZero.body, legacy, "文首插入只能有一条实现路径")
-        XCTAssertEqual(lineZero.body, """
-        ## 承接（来自 11-21）
-        - [ ] 一
-        - [ ] 二
-
-        ## 工作
-
-        """)
-
-        // 空正文也走同一条路径，不多出空行。
-        XCTAssertEqual(JournalCarry.insert(into: "", from: "2026-11-21", items: ["一"]),
-                       JournalCarry.insertion(into: "", beforeLine: 0, from: "2026-11-21", items: ["一"]).body)
-        XCTAssertEqual(JournalCarry.insert(into: "", from: "2026-11-21", items: ["一"]),
-                       "## 承接（来自 11-21）\n- [ ] 一\n")
-    }
-
-    func testC06DuplicateCarryIsNotInsertedAtAnyLine() throws {
-        let body = """
-        ## 承接（来自 11-21）
-        - [ ] 已经在正文里了
-
-        ## 工作
-        - [ ] 别的事
-        """
-        XCTAssertTrue(JournalCarry.hasCarry(in: body, from: "2026-11-21"))
-
-        for line in 0...4 {
-            let result = JournalCarry.insertion(into: body, beforeLine: line, from: "2026-11-21", items: ["重复一条"])
-            XCTAssertFalse(result.didInsert, "第 \(line) 行之前不该插入")
-            XCTAssertEqual(result.body, body, "已有同名承接段时正文一个字都不改")
-        }
-
-        // 换一天就不算重复。
-        XCTAssertTrue(JournalCarry.insertion(into: body, beforeLine: 3, from: "2026-11-22", items: ["新一天"]).didInsert)
-    }
-
-    func testC06BlankLineRulesOnBothSides() throws {
-        // 上一行非空 → 补一个空行。
-        let noBlank = JournalCarry.insertion(into: "引言\n正文\n## 生活", beforeLine: 2,
-                                             from: "2026-11-21", items: ["一"])
-        XCTAssertEqual(noBlank.body, "引言\n正文\n\n## 承接（来自 11-21）\n- [ ] 一\n\n## 生活")
-
-        // 上一行已经是空行 → 不重复补，结果里没有连续两个空行。
-        let withBlank = JournalCarry.insertion(into: "引言\n正文\n\n## 生活", beforeLine: 3,
-                                               from: "2026-11-21", items: ["一"])
-        XCTAssertEqual(withBlank.body, "引言\n正文\n\n## 承接（来自 11-21）\n- [ ] 一\n\n## 生活")
-        for body in [noBlank.body, withBlank.body] {
-            XCTAssertFalse(body.contains("\n\n\n"), "不产生连续两个空行：\(body)")
-        }
-
-        // 两边都已经是空行 → 两边都不补。
-        let spaced = JournalCarry.insertion(into: "引言\n\n\n## 生活", beforeLine: 2,
-                                           from: "2026-11-21", items: ["一"])
-        XCTAssertEqual(spaced.body, "引言\n\n## 承接（来自 11-21）\n- [ ] 一\n\n## 生活")
-    }
-
-    func testC06CaretLinePointsRightAfterCarryBlock() throws {
-        let body = """
-        ## 工作
-        - [ ] a
-        - [ ] b
-        ## 生活
-        """
-        let result = JournalCarry.insertion(into: body, beforeLine: 3, from: "2026-11-21", items: ["承接下来"])
-        XCTAssertTrue(result.didInsert)
-        let lines = result.body.components(separatedBy: "\n")
-        XCTAssertEqual(lines[result.caretLine], "## 生活", "光标落在承接块之后的那一行")
-        let expectedOffset = (lines[0...result.caretLine - 1].joined(separator: "\n") as NSString).length + 1
-        XCTAssertEqual(JournalCarry.utf16Offset(ofLine: result.caretLine, in: result.body), expectedOffset)
-        // 没插入时光标行等于传入行，调用方不需要分支。
-        let skipped = JournalCarry.insertion(into: body, beforeLine: 2, from: "2026-11-21", items: [])
-        XCTAssertFalse(skipped.didInsert)
-        XCTAssertEqual(skipped.caretLine, 2)
-    }
-
-    func testC06LineHelpersUseUTF16Offsets() throws {
+    func testCaretLineHelpersUseUTF16Offsets() throws {
         // 一行里有中文与 emoji：按 UTF-16 数才和 NSTextView 的光标位置一致。
         let body = "第一行😀\n第二行\n第三行"
-        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: 0, in: body), 0)
-        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: (body as NSString).range(of: "第二行").location, in: body), 1)
-        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: (body as NSString).length, in: body), 2)
-        XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: 9_999, in: body), 2, "越界夹到末行")
+        XCTAssertEqual(JournalCaret.lineIndex(ofUTF16Offset: 0, in: body), 0)
+        XCTAssertEqual(JournalCaret.lineIndex(ofUTF16Offset: (body as NSString).range(of: "第二行").location, in: body), 1)
+        XCTAssertEqual(JournalCaret.lineIndex(ofUTF16Offset: (body as NSString).length, in: body), 2)
+        XCTAssertEqual(JournalCaret.lineIndex(ofUTF16Offset: 9_999, in: body), 2, "越界夹到末行")
 
-        XCTAssertEqual(JournalCarry.utf16Offset(ofLine: 0, in: body), 0)
-        XCTAssertEqual(JournalCarry.utf16Offset(ofLine: 1, in: body), ("第一行😀\n" as NSString).length)
-        XCTAssertNil(JournalCarry.utf16Offset(ofLine: 3, in: body))
+        XCTAssertEqual(JournalCaret.utf16Offset(ofLine: 0, in: body), 0)
+        XCTAssertEqual(JournalCaret.utf16Offset(ofLine: 1, in: body), ("第一行😀\n" as NSString).length)
+        XCTAssertNil(JournalCaret.utf16Offset(ofLine: 3, in: body))
 
         // 行号 → 偏移 → 行号 往返一致。
         for line in 0..<3 {
-            let offset = try XCTUnwrap(JournalCarry.utf16Offset(ofLine: line, in: body))
-            XCTAssertEqual(JournalCarry.lineIndex(ofUTF16Offset: offset, in: body), line)
+            let offset = try XCTUnwrap(JournalCaret.utf16Offset(ofLine: line, in: body))
+            XCTAssertEqual(JournalCaret.lineIndex(ofUTF16Offset: offset, in: body), line)
         }
     }
 
