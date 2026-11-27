@@ -482,7 +482,7 @@ open -a .build/Build/Products/Debug/Silvics.app \
 - 取证钩子：`SILVICS_STYLE_TRACE=1`（每次重排打 `[style] chars=… cache=hit|miss total=… ms`）、
   `SILVICS_CLIP_LONG=<段数>`（造一篇长剪藏）、`SILVICS_SELFTEST=clip-switch|enter-continue`、
   `SILVICS_SELECT_CLIP=<关键字>`。
-- 验收：`docs/acceptance/ux-issue50/report.md`。
+- 验收：`docs/acceptance/ux-issue50-v0.9.0/report.md`。
 
 ## 9. 下一步：P5
 
