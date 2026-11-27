@@ -327,18 +327,18 @@ private struct EditorPane: View {
         .frame(height: 34)
     }
 
-    /// 日记专用：把上一篇的未完成项插到当前行之前、选下次新建的模板。
+    /// 日记专用：把上一篇的未完成项并进同名段、选下次新建的模板。
     private var journalActions: some View {
         HStack(spacing: 2) {
             Button {
-                app.insertCarryAtCaret()
+                app.mergePreviousTodos()
             } label: {
-                Label("承接", systemImage: "arrow.turn.down.right")
+                Label("融合", systemImage: "arrow.down.to.line")
                     .font(.system(size: 11))
             }
             .buttonStyle(.borderless)
-            .help("把上一个有日记的日子的未完成项插到光标所在行之前。")
-            .accessibilityIdentifier("journal-carry")
+            .help("把上一个有日记的日子的未完成待办并进同名段。")
+            .accessibilityIdentifier("journal-merge")
 
             Button {
                 app.applyScope(.journal(.templates))

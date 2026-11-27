@@ -227,17 +227,21 @@ Silvics/
 | --- | --- | --- |
 | 1 | 类型注册表 + frontmatter 分层 | 已合入 |
 | 2 | 保存链路倒转（先写文件，再写库） | 已合入 |
-| 3 | 模板与承接、按类型落目录 | 本分支待合（`feat/journal-batch3`） |
+| 3 | 模板与待办融合、按类型落目录 | 已合入（融合在 issue #48 里改成按段并入） |
 | 4 | 日记编辑器（光标行露源码） | 已合入 |
 | 5 | 代码高亮 | 已合入 |
-| 6 | 交叉影响与待办总览 | 已合入（余项：承接按行插入、模板记忆在本分支 `feat/journal-b6-rest`） |
+| 6 | 交叉影响与待办总览 | 已合入（余项：模板记忆在本分支 `feat/journal-b6-rest`） |
 | 7 | 发布 | 未做 |
 
 批次 6 余项（分支 `feat/journal-b6-rest`）：
 
-- **承接按行插入**：`JournalCarry.insertion(into:beforeLine:from:items:)`。新建日记传 `beforeLine: 0`；
-  日记里点「承接」（编辑区标题栏，日记才出现）按光标所在行插入，插完光标落在承接块之后。
-  判重只认 `## 承接（来自 MM-DD）` 标题；已有同名承接段就只给提示，不改正文。
+- **待办融合（issue #48，替换原先的「承接段」）**：`JournalMerge.merge(into:from:)`。
+  用 `swift-markdown` 的 AST 定位，取上一篇里 `checkbox == .unchecked` 的条目，
+  按标题路径（`["工作","部署"]`）并进当天同名段的最后一个非空行之后。
+  判重按整篇待办文本，出现过就跳过；缺段按来源层级在文末补标题链。
+  写入是纯文本按行插入，**不重新序列化整篇**（否则表格对齐、行内样式、git diff 全变）。
+  界面上点「融合」（编辑区标题栏，日记才出现），或新建日记时自动跑一次。
+  `journal.carryFrom` 记来源日，右栏显示「融合自」。
 - **模板记忆**：`JournalTemplateMemory`（`UserDefaults` 键 `silvics.journal.templateNames`）。
   新建时 `JournalTemplates.newJournalNames` 先按记忆取（按当前 order 排序，文件没了的跳过），
   一个都不剩才退回 order 最小的前两个。编辑区标题栏「模板…」勾选即覆盖记忆，只影响下次新建。

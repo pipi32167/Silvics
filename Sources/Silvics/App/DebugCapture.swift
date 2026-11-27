@@ -91,17 +91,13 @@ enum DebugCapture {
             seedDemoProvider(app)
         }
 
-        // `SILVICS_JOURNAL_CARRY=<关键字>`：取证「承接插在当前行之前」。
-        // 先备好上一篇日记与今天的正文（同步），等编辑区出来后把光标放进含关键字的段落，
-        // 再走 `insertCarryAtCaret` 的真实链路。截图里要能看出承接段不在最前。
-        if let keyword = ProcessInfo.processInfo.environment["SILVICS_JOURNAL_CARRY"], !keyword.isEmpty {
-            seedCarryDemo(app)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                guard app.debugPlaceCaret(atKeyword: keyword) else {
-                    print("[carry-demo] 编辑区里找不到「\(keyword)」")
-                    return
-                }
-                print("[carry-demo] 插入前光标在含「\(keyword)」的段落，结果：\(app.insertCarryAtCaret())")
+        // `SILVICS_JOURNAL_MERGE=1`：取证「未完成待办按标题路径并进同名段」。
+        // 先备好上一篇日记与今天的骨架（同步），再走 `mergePreviousTodos` 的真实链路。
+        // 截图里要能看出昨天那两条分别落在今天的「工作」「生活」下，顶上没有承接段。
+        if ProcessInfo.processInfo.environment["SILVICS_JOURNAL_MERGE"] == "1" {
+            seedMergeDemo(app)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                print("[merge-demo] 结果：\(app.mergePreviousTodos())")
             }
         }
 
@@ -285,11 +281,11 @@ enum DebugCapture {
         app.reloadAIConversation()
     }
 
-    /// 仅取证：备好「上一篇日记 + 今天日记」，供 `SILVICS_JOURNAL_CARRY` 演示中间插入。
+    /// 仅取证：备好「上一篇日记 + 今天日记」，供 `SILVICS_JOURNAL_MERGE` 演示按段融合。
     ///
-    /// 今天的正文固定 6 行，`## 生活` 在第 4 行（1-based），承接段插在它之前。
+    /// 今天的正文只有模块骨架，跑完融合后每条未完成项落在同名段末尾。
     @MainActor
-    private static func seedCarryDemo(_ app: AppState) {
+    private static func seedMergeDemo(_ app: AppState) {
         let today = JournalDate.today()
         let previous = JournalDate.offset(today, by: -1)
         app.debugSeedJournal(on: previous, body: """
@@ -302,10 +298,8 @@ enum DebugCapture {
         app.debugSeedJournal(on: today, body: """
         ## 工作
         - [ ] 写批次 6 的测试
-        - [ ] 把日记接到界面上
         ## 生活
         - [ ] 买咖啡豆
-        今天重读 稀疏重复优于集中突击 的论证，集中突击只能短期见效。
         """)
         _ = app.openJournal(on: today, using: [])
     }

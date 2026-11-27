@@ -1,10 +1,10 @@
 #if DEBUG
 import Foundation
 
-/// 仅 DEBUG：`SILVICS_JOURNAL_DRILL=<dir>` 跑模板 + 承接的命令行演练。
+/// 仅 DEBUG：`SILVICS_JOURNAL_DRILL=<dir>` 跑模板 + 待办融合的命令行演练。
 ///
 /// 临时库 + 临时 vault：写两份模板 → 建 11-21 日记（2 条未完成）→ 建 11-24 日记。
-/// 打印两篇的文件路径与 11-24 的正文，验证承接生效、文件落在 `journal/`。
+/// 打印两篇的文件路径与 11-24 的正文，验证未完成项并进同名段、文件落在 `journal/`。
 /// 走真实的 `AppDatabase` + `GRDBNoteRepository` + `VaultSync`，没有测试替身。对不上退出码 2。
 enum JournalDrill {
 
@@ -73,14 +73,27 @@ enum JournalDrill {
                 !fm.fileExists(atPath: vault.appendingPathComponent("notes/2026-11-24.md").path),
                 "notes/ 里没有 2026-11-24.md"
             )
-            check(second.body.hasPrefix("## 承接（来自 11-21）"), "承接段插在正文最前，来源是 11-21")
-            let carried = second.body.components(separatedBy: "\n").filter { $0.hasPrefix("- [ ] ") }
-            check(carried == ["- [ ] 把保存链路倒过来", "- [ ] 买咖啡豆"], "承接 2 条未完成：\(carried)")
-            check(second.body.contains("## 工作\n\n## 生活\n"), "模板按 order 拼成骨架")
+            check(!second.body.contains("承接"), "正文里没有独立的承接段")
+            check(
+                second.body.contains("## 工作\n- [ ] 把保存链路倒过来"),
+                "工作段末尾有 11-21 的未完成项"
+            )
+            check(
+                second.body.contains("## 生活\n- [ ] 买咖啡豆"),
+                "生活段末尾有 11-21 的未完成项"
+            )
+            check(
+                !second.body.contains("已经做完的一件事"),
+                "已完成的不搬"
+            )
+            check(
+                second.body.range(of: "## 工作")!.lowerBound < second.body.range(of: "## 生活")!.lowerBound,
+                "模板按 order 拼成骨架"
+            )
             check(second.metaFields["carryFrom"] == "2026-11-21", "frontmatter 记了 carryFrom")
             check(fm.fileExists(atPath: exported), "导出副本也在 journal/ 下")
 
-            print("[drill] 结论：\(failures == 0 ? "承接 + 模板 + journal/ 落盘全部符合预期" : "有 \(failures) 项不符")")
+            print("[drill] 结论：\(failures == 0 ? "融合 + 模板 + journal/ 落盘全部符合预期" : "有 \(failures) 项不符")")
             return failures == 0 ? 0 : 2
         } catch {
             print("[drill] 失败：\(error)")

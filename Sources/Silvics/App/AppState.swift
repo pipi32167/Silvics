@@ -120,7 +120,7 @@ final class AppState: ObservableObject {
     /// 最近一次落库的正文，用于跳过无变化的保存。
     var lastSavedBody: String = ""
 
-    /// 正文被**外部**改写的次数（改名、批量转换、撤销转换、日记承接、冲突合并、重载）。
+    /// 正文被**外部**改写的次数（改名、批量转换、撤销转换、日记融合、冲突合并、重载）。
     ///
     /// 编辑器只在它变化时接受外部正文。用户自己敲的字走 `bodyDidChange`，不动这个值。
     /// 不用它的话，`updateNSView` 拿到一次旧快照就会把刚敲的字整段冲掉（issue #34）。
@@ -566,7 +566,7 @@ final class AppState: ObservableObject {
 
     // MARK: - 日记
 
-    /// 打开某天的日记；不存在就按模板与承接新建。`⌘⇧J` 与演示数据都走这里。
+    /// 打开某天的日记；不存在就按模板与待办融合新建。`⌘⇧J` 与演示数据都走这里。
     ///
     /// `templates` 传 nil 时按「模板…」记住的选择取，记忆失效才退回 order 最小的前两个。
     @discardableResult
@@ -593,41 +593,35 @@ final class AppState: ObservableObject {
         _ = openJournal(on: JournalDate.today())
     }
 
-    // MARK: - 日记承接（C02 / C06）
+    // MARK: - 日记待办融合（issue #48）
 
-    /// 「插入承接（当前行之前）」：把上一篇日记的未完成项插到光标所在行之前。
+    /// 「融合上次未完成」：把上一篇日记的未完成待办按标题路径并进当前日记。
     ///
-    /// 光标行从编辑区的 `NSTextView.selectedRange()` 换算；没有可用编辑区时按第 0 行（文首）。
-    /// 判重、空行规则、光标落点都在 `JournalCarry.insertion`，这里只负责取光标、落库、给提示。
+    /// 段归属、落点、判重、缺段补标题链都在 `JournalMerge.merge`。
+    /// 这里只负责取上一篇、落库、给提示；与光标无关，插入位置由标题决定。
     @discardableResult
-    func insertCarryAtCaret() -> Bool {
+    func mergePreviousTodos() -> Bool {
         flushPendingSave()
         guard let note = current, note.type == NoteTypes.journalID else {
-            statusMessage = "只有日记能插入承接。"
+            statusMessage = "只有日记能融合未完成待办。"
             return false
         }
         guard let day = note.metaFields["date"], !day.isEmpty else { return false }
         guard let previous = try? repo.previousJournal(before: day),
               let previousDay = previous.metaFields["date"] else {
-            statusMessage = "没有更早的日记可承接。"
+            statusMessage = "没有更早的日记可融合。"
             return false
         }
         let short = JournalTodo.short(previousDay)
-        if JournalCarry.hasCarry(in: note.body, from: previousDay) {
-            statusMessage = "\(short) 的承接已经在正文里了，不重复插入。"
-            return false
-        }
-        let items = JournalCarry.openTodos(in: previous.body)
+        let items = JournalMerge.openTodos(in: previous.body)
         guard !items.isEmpty else {
             statusMessage = "\(short) 没有未完成项。"
             return false
         }
 
-        let body = note.body
-        let line = editorCaretLine(matching: body)
-        let result = JournalCarry.insertion(into: body, beforeLine: line, from: previousDay, items: items)
-        guard result.didInsert else {
-            statusMessage = "承接没有插入：\(short) 已经在正文里了。"
+        let result = JournalMerge.merge(into: note.body, from: items)
+        guard result.added > 0 else {
+            statusMessage = "\(short) 的未完成项已经在正文里了。"
             return false
         }
 
@@ -643,32 +637,11 @@ final class AppState: ObservableObject {
             searchQuery = ""
             selection = saved.id
             loadNote(id: saved.id)
-            statusMessage = "承接 \(items.count) 条，插在第 \(line + 1) 行之前。"
-            placeCaret(onLine: result.caretLine, in: result.body)
+            statusMessage = result.statusText
             return true
         } catch {
-            statusMessage = "插入承接失败：\(error.localizedDescription)"
+            statusMessage = "融合未完成待办失败：\(error.localizedDescription)"
             return false
-        }
-    }
-
-    /// 编辑区光标所在行（0-based）。找不到编辑区时退回第 0 行。
-    private func editorCaretLine(matching body: String) -> Int {
-        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
-              let textView = Self.editorTextView(in: window.contentView!, matching: body) else { return 0 }
-        return JournalCarry.lineIndex(ofUTF16Offset: textView.selectedRange().location, in: textView.string)
-    }
-
-    /// 插入后把光标放到承接块之后的那一行。
-    private func placeCaret(onLine line: Int, in body: String) {
-        guard let offset = JournalCarry.utf16Offset(ofLine: line, in: body) else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
-                  let textView = Self.editorTextView(in: window.contentView!, matching: body) else { return }
-            textView.window?.makeFirstResponder(textView)
-            let target = min(offset, (textView.string as NSString).length)
-            textView.setSelectedRange(NSRange(location: target, length: 0))
-            textView.scrollRangeToVisible(NSRange(location: target, length: 0))
         }
     }
 
