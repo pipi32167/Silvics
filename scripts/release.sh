@@ -101,7 +101,7 @@ run_tests() {
       tail -20 "$log"
       die "单测没过，不发布。日志：$log"
     }
-  ok "$(grep -cE 'Test Case.*passed' "$log" || true) 项通过（日志：$log）"
+  ok "$(grep -cE 'Test Case.*passed' "${log}" || true) 项通过（日志：${log}）"
 }
 
 check_upload_channel() {
