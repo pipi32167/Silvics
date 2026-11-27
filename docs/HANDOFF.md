@@ -466,6 +466,24 @@ open -a .build/Build/Products/Debug/Silvics.app \
 - 未做：流式输出、外部联网服务（DeepSeek Web Tools / Tavily 已核额度未接）、会话加密。
 - 验收：`docs/acceptance/ai-chat-v0.7.0/report.md`。取证钩子：`SILVICS_AI_PROVIDER=1`、`SILVICS_SHOW=ai-chat|ai-quote|ai-evidence|ai-sending|ai-error|ai-details|settings-ai`、`SILVICS_CONTEXT_WIDTH`、`SILVICS_SETTINGS_SIZE`。
 
+### 编辑器体验（issue #50，分支 `feat/ux-issue50`）
+
+- **左缘规则改了**：第 1 级列表 / 待办 / 引用的正文不再固定右移 22 pt，与标题、正文同左缘；
+  符号、复选框、引用竖线挂在左边留白（`ListLayout.gutter`）里。每深一级（2 空格或 1 tab）右移 18 pt，
+  符号 `•` / `◦` / `▪`。改这里要看 `ListLayout.offset(level:)` 与 `Theme.listParagraph(level:)` 两处。
+- **回车续行**：`EditorTextView.insertNewline` 在待办 / 无序 / 有序行上自动写下一项（待办强制未勾选、
+  有序序号 +1、缩进照搬）；空条目回车等于退出列表；围栏代码块里不续。
+- **AI 气泡复用编辑器渲染**：`MarkdownMessageText` 用 `NoteEditorView(editable:false, compact:true, autoHeight:true)`，
+  紧凑模式仍留 `ListLayout.gutter` 的左边距，否则悬挂符号会被气泡裁掉（踩过）。
+  高度由 `NoteEditorView.sizeThatFits` + `Coordinator.measuredHeight` 量（TextKit 2 用 `enumerateTextSegments`）。
+- **长文性能**：`restyle` 从「5 次逐行扫描 + 每次重解析」改成 `EditorStylePlan`（一次扫描 + 解析 + 表格识别，
+  按正文原文缓存 3 篇）。34k 字样本 Debug 冷启动 232 → 181 ms，命中缓存 53 ms；
+  65k 字 Release(-O) 冷 200 ms、热 71 ms。表格字宽测量也加了缓存（`TableLayout.measure`）。
+- 取证钩子：`SILVICS_STYLE_TRACE=1`（每次重排打 `[style] chars=… cache=hit|miss total=… ms`）、
+  `SILVICS_CLIP_LONG=<段数>`（造一篇长剪藏）、`SILVICS_SELFTEST=clip-switch|enter-continue`、
+  `SILVICS_SELECT_CLIP=<关键字>`。
+- 验收：`docs/acceptance/ux-issue50/report.md`。
+
 ## 9. 下一步：P5
 
 1. **P5 图**：局部图（当前笔记 2 跳内）与全局图。剪藏默认不进图。

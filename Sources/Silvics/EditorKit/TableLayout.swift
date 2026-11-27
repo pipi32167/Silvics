@@ -199,10 +199,21 @@ enum TableLayout {
     // MARK: - 度量
 
     /// 一段文本在指定字体下的排版宽度。
+    ///
+    /// 带缓存：`NSString.size` 每次都要走 CoreText，长文里每格调一次就成了可观开销
+    /// （issue #50 实测一篇 3.4 万字、128 张表的演示笔记里，表格属性占了属性的四成）。
+    /// 键里带字体名与字号，换外观不会拿到旧值。
     static func measure(_ text: String, _ font: NSFont) -> CGFloat {
         guard !text.isEmpty else { return 0 }
-        return (text as NSString).size(withAttributes: [.font: font]).width
+        let key = "\(font.fontName)|\(font.pointSize)|\(text)"
+        if let hit = measureCache[key] { return hit }
+        let width = (text as NSString).size(withAttributes: [.font: font]).width
+        if measureCache.count > 2048 { measureCache.removeAll(keepingCapacity: true) }
+        measureCache[key] = width
+        return width
     }
+
+    private static var measureCache: [String: CGFloat] = [:]
 
     /// 一个 ASCII 字宽（等宽字体下即「0」的宽度）。目标宽都以它为单位。
     static func unitWidth(font: NSFont = Theme.tableFont) -> CGFloat {

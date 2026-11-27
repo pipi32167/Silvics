@@ -15,6 +15,32 @@ struct EditorSpans {
     var headingMarkers: [NSRange] = []
 }
 
+/// 一段引用：每行前缀 `> `（压宽用）+ 整块区间（画竖线用）+ 嵌套层级。
+struct QuoteMark: Equatable {
+    /// 第一行的 `>` 加其后空格（允许前导缩进）的区间。语法标记压宽只碰这一段。
+    var range: NSRange
+    /// 连续同级引用行的整块区间（首行行首到末行行尾，不含换行）。竖线按它算高度。
+    var blockRange: NSRange
+    /// 缩进层级，从 1 起。2 空格或 1 个 tab 算一级。
+    var level: Int
+}
+
+/// 一次逐行扫描的全部结果（issue #50：性能与多级缩进）。
+///
+/// 原来 `restyle` 为了拿到列表、缩进、引用、标题、围栏五种区间，各调一次
+/// `scanLineMarkers`，同一篇正文扫五遍。长文（剪藏）切换时这是主要开销之一，
+/// 所以把逐行扫描收敛成一次，五个视图都从同一份结果里取。
+struct LineScan {
+    var listMarkers: [ListMarker]
+    var indents: [NSRange]
+    var quotes: [QuoteMark]
+    var headings: [NSRange]
+    var todos: [NSRange]
+    var fences: [NSRange]
+    /// 每行的原始标记，供「语法标记」再拼一遍。
+    var lines: [MarkdownStyler.LineMarkers]
+}
+
 /// 语法标记（`##`、`- [ ]`、`[[`、反引号）在「光标行露源码」模式下的两组区间。
 ///
 /// 两组都只是**颜色**差异，字符一个不动：宽度不变，行内位置不变。
@@ -184,7 +210,7 @@ enum MarkdownStyler {
     /// `maxLevel` 默认 3：日记只认 1–3 级标题（S03），`####` 当段落，标记也不淡化。
     /// 多空格（S04）整段算标记，避免隐藏后留下一个空档。
     static func headingMarkerRanges(in text: String, maxLevel: Int = 3) -> [NSRange] {
-        scanLineMarkers(in: text, maxLevel: maxLevel).compactMap(\.heading)
+        scan(text, maxLevel: maxLevel).headings
     }
 
     // MARK: - 语法标记可见性（光标行露源码）
@@ -198,10 +224,16 @@ enum MarkdownStyler {
         in text: String,
         caretParagraph: NSRange?,
         spans: EditorSpans? = nil,
-        links: [WikiLink]? = nil
+        links: [WikiLink]? = nil,
+        scan: LineScan? = nil
     ) -> SyntaxMarkVisibility {
         split(
-            syntaxMarkers(in: text, spans: spans ?? analyze(text), links: links),
+            syntaxMarkers(
+                in: text,
+                spans: spans ?? analyze(text),
+                links: links,
+                scan: scan ?? Self.scan(text)
+            ),
             caretParagraph: caretParagraph
         )
     }
@@ -228,12 +260,17 @@ enum MarkdownStyler {
     ///
     /// 覆盖：标题 `#`、待办 `- [ ] `、`[[` / `]]`、行内代码反引号、围栏行反引号、
     /// 强调 `**` / `*`。代码块与行内代码里的内容不算标记（S16 / S22 / S25）。
-    static func syntaxMarkers(in text: String, spans: EditorSpans, links: [WikiLink]? = nil) -> [NSRange] {
+    static func syntaxMarkers(
+        in text: String,
+        spans: EditorSpans,
+        links: [WikiLink]? = nil,
+        scan: LineScan? = nil
+    ) -> [NSRange] {
         guard !text.isEmpty else { return [] }
         let ns = text as NSString
         var out: [NSRange] = []
 
-        for markers in scanLineMarkers(in: text) {
+        for markers in (scan ?? Self.scan(text)).lines {
             if let heading = markers.heading { out.append(heading) }
             if let todo = markers.todo {
                 out.append(todo)
@@ -266,7 +303,7 @@ enum MarkdownStyler {
 
     /// 待办标记：`- [ ] ` / `* [x] `，从缩进后的项目符号到 `]` 后的空格（S06–S10）。
     static func todoMarkerRanges(in text: String) -> [NSRange] {
-        scanLineMarkers(in: text).compactMap(\.todo)
+        scan(text).todos
     }
 
     /// 全部列表行（无序 / 有序 / 待办），按位置升序（S28–S38）。
@@ -274,12 +311,17 @@ enum MarkdownStyler {
     /// 代码块内的 `- 甲` 不算列表（S33）：围栏状态在 `scanLineMarkers` 里维护。
     /// 待办优先于无序列表（S34）：`- [ ] 甲` 只产出 `.todo`，不产出 `.unordered`。
     static func listMarkers(in text: String) -> [ListMarker] {
-        scanLineMarkers(in: text).compactMap(\.list)
+        scan(text).listMarkers
     }
 
     /// 引用行前缀（`>` 加其后空格），S20 的渲染用。
     static func quoteMarkerRanges(in text: String) -> [NSRange] {
-        scanLineMarkers(in: text).compactMap(\.quote)
+        scan(text).quotes.map(\.range)
+    }
+
+    /// 引用行前缀 + 层级。
+    static func quoteMarks(in text: String) -> [QuoteMark] {
+        scan(text).quotes
     }
 
     /// 全部「带块级标记的行」的行首缩进区间，按位置升序（issue #41）。
@@ -289,12 +331,7 @@ enum MarkdownStyler {
     /// 普通段落前面的空格不在内——那是正文的一部分。
     static func lineIndentRanges(in text: String) -> [NSRange] {
         guard !text.isEmpty else { return [] }
-        var out: [NSRange] = []
-        for markers in scanLineMarkers(in: text) {
-            guard let indent = markers.indent, indent.length > 0 else { continue }
-            out.append(indent)
-        }
-        return out
+        return scan(text).indents
     }
 
     /// 某处所在行里 `[ ]` / `[x]` 中间那个字符的区间（勾选切换用，S39）。
@@ -319,7 +356,7 @@ enum MarkdownStyler {
     ///
     /// 只标反引号本身，语言标记留着可见——它是判断块语言的唯一线索。
     static func codeFenceMarkerRanges(in text: String) -> [NSRange] {
-        scanLineMarkers(in: text).compactMap(\.fence)
+        scan(text).fences
     }
 
     /// 每个代码块里「该上色」的内容行 + 语言标记。
@@ -443,12 +480,16 @@ enum MarkdownStyler {
     }
 
     /// 一行上可能出现的行首标记。
-    private struct LineMarkers {
+    struct LineMarkers {
+        /// 整行区间（行首到行尾，不含换行）。合并连续引用块时要用。
+        var lineRange: NSRange = NSRange(location: 0, length: 0)
         var heading: NSRange?
         var todo: NSRange?
         var fence: NSRange?
         var list: ListMarker?
         var quote: NSRange?
+        /// 引用行的嵌套层级（issue #50）。不是引用行时无意义。
+        var quoteLevel: Int = 1
         /// 行首缩进（只在这行确实带块级标记时才有）。编辑器里永远不占宽（issue #41）。
         var indent: NSRange?
     }
@@ -458,12 +499,60 @@ enum MarkdownStyler {
     /// 围栏状态的作用：块内的 `## x` 不变标题、`- [ ]` 不算待办（S17 / S24 / S25）。
     /// 围栏判定与 `WikiScanner` 一致：行首（允许缩进）连续 ≥3 个反引号或波浪号，
     /// 关闭要求同字符且长度不小于开启（S27 的四个反引号因此按长度 4 处理，不嵌套）。
+    /// 一次逐行扫描，五个派生视图都从这一份结果里取（issue #50）。
+    static func scan(_ text: String, maxLevel: Int = 3) -> LineScan {
+        let lines = scanLineMarkers(in: text, maxLevel: maxLevel)
+        return LineScan(
+            listMarkers: lines.compactMap(\.list),
+            indents: lines.compactMap(\.indent).filter { $0.length > 0 },
+            quotes: quoteMarks(from: lines),
+            headings: lines.compactMap(\.heading),
+            todos: lines.compactMap(\.todo),
+            fences: lines.compactMap(\.fence),
+            lines: lines
+        )
+    }
+
+    /// 把逐行的引用标记合并成块：连续、同层级、中间不隔空行的一组算一段。
+    ///
+    /// 竖线按整块画，长引用才不会在行与行之间断开；压宽仍按每行的前缀做。
+    static func quoteMarks(from lines: [LineMarkers]) -> [QuoteMark] {
+        var out: [QuoteMark] = []
+        var index = 0
+        while index < lines.count {
+            guard let prefix = lines[index].quote else {
+                index += 1
+                continue
+            }
+            let level = lines[index].quoteLevel
+            let firstLine = lines[index].lineRange
+            var lastLine = firstLine
+            var next = index + 1
+            while next < lines.count,
+                  let candidate = lines[next].quote,
+                  candidate.length > 0,
+                  lines[next].quoteLevel == level,
+                  lines[next].lineRange.location == lastLine.location + lastLine.length + 1 {
+                lastLine = lines[next].lineRange
+                next += 1
+            }
+            let block = NSRange(
+                location: firstLine.location,
+                length: lastLine.location + lastLine.length - firstLine.location
+            )
+            out.append(QuoteMark(range: prefix, blockRange: block, level: level))
+            index = next
+        }
+        return out
+    }
+
     private static func scanLineMarkers(in text: String, maxLevel: Int = 3) -> [LineMarkers] {
         var out: [LineMarkers] = []
         var fence: (ch: Character, count: Int)? = nil
 
         forEachLine(in: text) { line, offset in
             var markers = LineMarkers()
+            markers.lineRange = NSRange(location: offset, length: line.utf16.count)
 
             // 1. 围栏行
             let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
@@ -533,7 +622,8 @@ enum MarkdownStyler {
                         kind: .todo(checked: mark == "x" || mark == "X"),
                         indent: indentWidth,
                         indentChars: indentChars.count,
-                        markerRange: NSRange(location: offset, length: end)
+                        markerRange: NSRange(location: offset, length: end),
+                        level: ListLayout.level(forIndent: indentChars)
                     )
                 }
             } else if let match = unorderedListRegex.firstMatch(in: raw, range: whole),
@@ -543,7 +633,8 @@ enum MarkdownStyler {
                     kind: .unordered,
                     indent: indentWidth,
                     indentChars: indentChars.count,
-                    markerRange: NSRange(location: offset, length: end)
+                    markerRange: NSRange(location: offset, length: end),
+                    level: ListLayout.level(forIndent: indentChars)
                 )
             } else if let match = orderedListRegex.firstMatch(in: raw, range: whole),
                       !startsWithBrokenTodo(raw, from: match.range.location + match.range.length) {
@@ -556,7 +647,8 @@ enum MarkdownStyler {
                     kind: .ordered(number),
                     indent: indentWidth,
                     indentChars: indentChars.count,
-                    markerRange: NSRange(location: offset, length: end)
+                    markerRange: NSRange(location: offset, length: end),
+                    level: ListLayout.level(forIndent: indentChars)
                 )
             }
 
@@ -573,6 +665,7 @@ enum MarkdownStyler {
                 let rest = Array(afterIndent.dropFirst(quotes))
                 if rest.first == " " { length += 1 }
                 markers.quote = NSRange(location: offset, length: length)
+                markers.quoteLevel = ListLayout.level(forIndent: indentChars)
                 if !indentChars.isEmpty {
                     markers.indent = NSRange(location: offset, length: indentChars.count)
                 }
