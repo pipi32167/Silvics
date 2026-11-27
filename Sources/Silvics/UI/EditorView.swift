@@ -195,6 +195,23 @@ final class EditorTextView: NSTextView {
         }
     }
 
+    /// 源码模式：整篇露源码（对齐 Typora 的 ⌘/）。
+    ///
+    /// 块级标记改成「永不露」之后，必须留一个能看见、能直接改标记的出口：
+    /// 换标题级别、改列表符号、动表格分隔行都走这里，而不是靠光标进出行。
+    var showsSource: Bool = false {
+        didSet {
+            if oldValue != showsSource { needsDisplay = true }
+        }
+    }
+
+    /// 表格块（画网格线，对齐 Typora 的「真表格」观感）。
+    var tableBlocks: [TableBlock] = [] {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
     /// 已画出的复选框数量（测试与自检用）。
     var todoCheckboxCount: Int { todoCheckboxes.count }
 
@@ -281,7 +298,7 @@ final class EditorTextView: NSTextView {
         isLayingOutCheckboxes = true
         defer { isLayingOutCheckboxes = false }
 
-        let wanted = ListLayout.checkboxTodos(listMarkers, caretParagraph: caretParagraph)
+        let wanted = showsSource ? [] : ListLayout.checkboxTodos(listMarkers, caretParagraph: caretParagraph)
         let visible = visibleRect.insetBy(dx: 0, dy: -60)
         var keep: Set<Int> = []
 
@@ -385,7 +402,7 @@ final class EditorTextView: NSTextView {
 
     /// 项目符号、有序序号、引用竖线。
     private func drawListDecorations() {
-        guard textStorage?.length ?? 0 > 0 else { return }
+        guard !showsSource, textStorage?.length ?? 0 > 0 else { return }
         let origin = textContainerOrigin
         let visible = visibleRect
 
@@ -475,6 +492,7 @@ final class EditorTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         drawCodeBlockBackgrounds()
+        drawTableGrid()
         drawListDecorations()
     }
 
@@ -519,6 +537,72 @@ final class EditorTextView: NSTextView {
         guard !paths.isEmpty else { return }
         Theme.codeBackground.setFill()
         for path in paths { path.fill() }
+    }
+
+    /// 表格网格线。
+    ///
+    /// 只画线，不改正文：pipe 字符仍在（横向对齐靠它算 kern），渲染态被染成透明，
+    /// 线条由这里补上。竖线位置取第一行（表头）的 pipe 位置，各行的 pipe 已被 kern 对齐到同一列。
+    private func drawTableGrid() {
+        guard !showsSource, !tableBlocks.isEmpty,
+              let manager = textLayoutManager,
+              let storage = textStorage, storage.length > 0 else { return }
+        let origin = textContainerOrigin
+        var segments: [(CGFloat, CGFloat, CGFloat, CGFloat)] = []  // x1, y1, x2, y2
+
+        for block in tableBlocks {
+            guard block.rows.count >= 2 else { continue }
+            var rowTops: [CGFloat] = []
+            var rowBottoms: [CGFloat] = []
+            for row in block.rows {
+                guard let extent = verticalExtent(of: row.contentRange) else { continue }
+                rowTops.append(origin.y + extent.top)
+                rowBottoms.append(origin.y + extent.bottom)
+            }
+            guard let top = rowTops.min(), let bottom = rowBottoms.max() else { continue }
+
+            // 竖线：取第一行的 pipe。
+            guard let firstRow = block.rows.first, !firstRow.pipes.isEmpty else { continue }
+            let xs = firstRow.pipes.compactMap { xPosition(ofCharacterAt: $0.location) }
+            guard let left = xs.first, let right = xs.last, right > left else { continue }
+            for x in xs {
+                segments.append((x, top, x, bottom))
+            }
+            // 行线：块顶 + 每行底（含表头底，正好当表头分隔线）。
+            segments.append((left, top, right, top))
+            for y in rowBottoms {
+                segments.append((left, y, right, y))
+            }
+        }
+        guard !segments.isEmpty else { return }
+        Theme.tableBorder.setStroke()
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        for segment in segments {
+            path.move(to: NSPoint(x: segment.0, y: segment.1))
+            path.line(to: NSPoint(x: segment.2, y: segment.3))
+        }
+        path.stroke()
+    }
+
+    /// 某个字符在容器坐标里的 x（表格竖线定位用）。
+    private func xPosition(ofCharacterAt index: Int) -> CGFloat? {
+        guard let manager = textLayoutManager, let storage = textStorage,
+              index >= 0, index < storage.length else { return nil }
+        guard let location = manager.location(manager.documentRange.location, offsetBy: index),
+              let fragment = manager.textLayoutFragment(for: location) else { return nil }
+        let ns = string as NSString
+        let paragraphStart = ns.paragraphRange(for: NSRange(location: index, length: 0)).location
+        var base = 0
+        for lineFragment in fragment.textLineFragments {
+            let length = lineFragment.characterRange.length
+            if index >= paragraphStart + base, index < paragraphStart + base + length {
+                let point = lineFragment.locationForCharacter(at: index - paragraphStart - base)
+                return textContainerOrigin.x + fragment.layoutFragmentFrame.minX + point.x
+            }
+            base += length
+        }
+        return nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -821,10 +905,19 @@ final class EditorTextView: NSTextView {
         return true
     }
 
+    /// ⌘/ 切源码模式（Typora 同款快捷键）。
+    var onToggleSourceMode: (() -> Void)?
+
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains([.command, .shift]),
            event.charactersIgnoringModifiers?.lowercased() == "k",
            onConvertMention?() == true {
+            return
+        }
+        if event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.shift),
+           event.charactersIgnoringModifiers == "/" {
+            onToggleSourceMode?()
             return
         }
         super.keyDown(with: event)
@@ -1081,8 +1174,10 @@ struct NoteEditorView: NSViewRepresentable {
         var canRedo: Bool { pendingEdit == nil && undoStack.canRedo }
         private var completionRange: NSRange?
         private var currentQuery: String = ""
-        /// 上一次算出来的语法标记（与光标无关的部分），光标移动时只需重新分桶。
-        private var lastSyntaxMarkers: [NSRange] = []
+        /// 上一次算出来的行内语法标记（带归属区间）。光标在段内进出时要它。
+        private var lastInlineMarks: [InlineSyntaxMark] = []
+        /// 上一次算出来的围栏行（整行）。渲染态整行折殁，光标进去才恢复。
+        private var lastFenceLines: [NSRange] = []
         /// 上一次算出来的「带标记行的行首缩进」。光标移动不走它，但它必须一直压着（issue #41）。
         private var lastLineIndents: [NSRange] = []
         /// 上一次算出来的列表行（含缩进与标记区间），光标移动时重算压宽。
@@ -1095,6 +1190,8 @@ struct NoteEditorView: NSViewRepresentable {
         private var lastHeadingMarkers: [NSRange] = []
         /// 上一次的分桶依据，避免同段落内的每次光标移动都重设属性。
         private var lastCaretParagraph: NSRange?
+        /// 行内标记按「光标是否落在这一处」切，同一段内挪光标也要重刷，所以要记选区。
+        private var lastCaretKey: String = "none"
 
         /// 上一次回报给外部的正文，用于避免回环。
         fileprivate var lastPublishedText: String = ""
@@ -1258,6 +1355,11 @@ struct NoteEditorView: NSViewRepresentable {
             textView.onRedo = { [weak self] in self?.performRedo() ?? false }
             textView.canUndoAction = { [weak self] in self?.canUndo ?? false }
             textView.canRedoAction = { [weak self] in self?.canRedo ?? false }
+            textView.onToggleSourceMode = { [weak self, weak textView] in
+                guard let textView else { return }
+                textView.showsSource.toggle()
+                self?.restyle(force: true)
+            }
         }
 
         func attach(textView: EditorTextView, scrollView: NSScrollView) {
@@ -1462,13 +1564,11 @@ struct NoteEditorView: NSViewRepresentable {
             let tableBlocks = plan.tables
             let fullRange = NSRange(location: 0, length: storage.length)
             let caretParagraph = parent.editable ? paragraphRange(at: textView.selectedRange().location) : nil
-            let marks = MarkdownStyler.syntaxMarkerRanges(
-                in: text,
-                caretParagraph: caretParagraph,
-                spans: spans,
-                links: wikis,
-                scan: scan
-            )
+            let caret = parent.editable ? textView.selectedRange() : nil
+            // 行内标记：渲染态压宽，光标落进那一段才露出（对齐 Typora）。
+            let inlineMarks = MarkdownStyler.inlineSyntaxMarks(in: text, spans: spans, links: wikis)
+            // 源码模式（⌘/）：所有标记恢复原宽，装饰一律不画。
+            let expanded = textView.showsSource
 
             let selection = textView.selectedRanges
             storage.beginEditing()
@@ -1477,31 +1577,39 @@ struct NoteEditorView: NSViewRepresentable {
 
             applyHeadings(spans, storage, fullRange)
             // 标题前缀与列表标记同一套：隐藏态压到 0 宽（issue #8）。
-            applyHeadingMarkers(spans.headingMarkers, caretParagraph: caretParagraph, storage: storage)
+            applyHeadingMarkers(
+                spans.headingMarkers, caretParagraph: caretParagraph, expanded: expanded, storage: storage
+            )
             // 表格先写等宽 + kern，`applyInline` 的加粗 / 斜体再叠在它上面。
-            applyTables(tableBlocks, in: text, caretParagraph: caretParagraph, storage: storage)
+            applyTables(tableBlocks, in: text, caretParagraph: caretParagraph, expanded: expanded, storage: storage)
             applyInline(spans, storage, fullRange)
             applyBlocks(spans, in: text, fenceLines: plan.fenceLines, storage, fullRange)
-            applyLists(listMarkers, quotes: quoteMarks, caretParagraph: caretParagraph, storage: storage)
+            applyFenceLines(plan.fenceLines, caretParagraph: caretParagraph, expanded: expanded, storage: storage)
+            applyLists(
+                listMarkers, quotes: quoteMarks, caretParagraph: caretParagraph, expanded: expanded, storage: storage
+            )
             applyWikiLinks(wikis, in: text, storage, fullRange)
             applyMentions(storage)
-            applySyntaxMarks(marks, storage)
+            applyInlineMarks(inlineMarks, caret: caret, expanded: expanded, storage: storage)
             // 放在最后：`applyLists` 在光标段落会把整段前缀恢复原宽，缩进要再压回去。
             applyLineIndents(lineIndents, storage: storage)
 
             storage.endEditing()
 
-            lastSyntaxMarkers = marks.all
+            lastInlineMarks = inlineMarks
+            lastFenceLines = plan.fenceLines
             lastListMarkers = listMarkers
             lastLineIndents = lineIndents
             lastQuoteMarks = quoteMarks
             lastTableBlocks = tableBlocks
             lastHeadingMarkers = spans.headingMarkers
             lastCaretParagraph = caretParagraph
+            lastCaretKey = caret.map { "\($0.location)-\($0.length)" } ?? "none"
             // 块底色由视图自绘，区间变了要重画。
             textView.codeBlockRanges = spans.codeBlocks
             textView.setListMarkers(listMarkers, parsedFrom: text)
             textView.quoteMarks = quoteMarks
+            textView.tableBlocks = tableBlocks
             textView.caretParagraph = caretParagraph
 
             textView.typingAttributes = Theme.typingAttributes()
@@ -1526,7 +1634,63 @@ struct NoteEditorView: NSViewRepresentable {
             }
         }
 
-        /// 语法标记可见性：光标段落露出来，其余藏起来。只改字色，不改字符。
+        /// 行内语法标记：渲染态压到 ≈ 0 宽，光标落进它那一段才恢复原宽、染色。
+        ///
+        /// 为何要压宽（对齐 Typora）：只把字符染色成透明的话，`**加粗**` 里那两个星号
+        /// 仍然占 14 pt，渲染态正文里到处是空洞（issue #50 审计 01）。
+        private func applyInlineMarks(
+            _ marks: [InlineSyntaxMark],
+            caret: NSRange?,
+            expanded: Bool,
+            storage: NSTextStorage
+        ) {
+            guard !marks.isEmpty else { return }
+            let split = expanded
+                ? (show: marks.map(\.range), hide: [NSRange]())
+                : MarkdownStyler.splitInline(marks, caret: caret)
+            let ns = storage.string as NSString
+            for range in split.hide {
+                guard let r = clamp(range, storage.length) else { continue }
+                let marker = ns.substring(with: r)
+                storage.addAttributes(Theme.compressedMarkerAttributes(for: marker), range: r)
+            }
+            for range in split.show {
+                guard let r = clamp(range, storage.length) else { continue }
+                // 只撤 kern、换字色：字重 / 等宽字号留给所属 span，露出来的就是原文。
+                storage.removeAttribute(.kern, range: r)
+                storage.addAttribute(.foregroundColor, value: Theme.syntaxMarkActive, range: r)
+            }
+        }
+
+        /// 围栏行（` ```swift ` / ` ``` `）：渲染态整行折殁，光标进入才恢复。
+        ///
+        /// 不折的话围栏行里的语言名（`swift`）会孤零零留在块顶，而且那块白高出一整行。
+        private func applyFenceLines(
+            _ lines: [NSRange],
+            caretParagraph: NSRange?,
+            expanded: Bool,
+            storage: NSTextStorage
+        ) {
+            guard !lines.isEmpty else { return }
+            let ns = storage.string as NSString
+            for range in lines {
+                guard let r = clamp(range, storage.length) else { continue }
+                if expanded || (caretParagraph.map { overlaps(range, $0) } ?? false) {
+                    storage.addAttribute(.foregroundColor, value: Theme.secondaryText, range: r)
+                } else {
+                    let line = ns.substring(with: r)
+                    storage.addAttributes(Theme.collapsedLineAttributes(for: line), range: r)
+                }
+            }
+        }
+
+        private func overlaps(_ range: NSRange, _ other: NSRange) -> Bool {
+            guard other.length > 0, range.length > 0 else { return false }
+            return range.location < other.location + other.length
+                && other.location < range.location + range.length
+        }
+
+        /// 语法标记可见性（旧通道）：只改字色。已由 `applyInlineMarks` 接管行内标记。
         private func applySyntaxMarks(_ marks: SyntaxMarkVisibility, _ storage: NSTextStorage) {
             for range in marks.hide {
                 guard let r = clamp(range, storage.length) else { continue }
@@ -1542,38 +1706,42 @@ struct NoteEditorView: NSViewRepresentable {
         private func refreshSyntaxMarksForCaret() {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles, !textView.hasMarkedText(), !textView.isComposingText else { return }
-            guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarks.isEmpty
+            guard !lastInlineMarks.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarks.isEmpty
                     || !lastTableBlocks.isEmpty || !lastHeadingMarkers.isEmpty
-                    || !lastLineIndents.isEmpty else {
+                    || !lastLineIndents.isEmpty || !lastFenceLines.isEmpty else {
                 return
             }
+            let caret = parent.editable ? textView.selectedRange() : nil
             let caretParagraph = parent.editable ? paragraphRange(at: textView.selectedRange().location) : nil
-            guard caretParagraph != lastCaretParagraph else { return }
+            // 行内标记按「光标是否在这一段里」切，光标在同一段内逐个字符挪也要跟着变。
+            let caretKey = caret.map { "\($0.location)-\($0.length)" } ?? "none"
+            guard caretParagraph != lastCaretParagraph || caretKey != lastCaretKey else { return }
 
-            let marks = MarkdownStyler.split(lastSyntaxMarkers, caretParagraph: caretParagraph)
             storage.beginEditing()
-            applySyntaxMarks(marks, storage)
-            // 标记宽度随光标段落切换：新段落恢复可读宽度，旧段落重新压到 ∹0。
-            applyLists(lastListMarkers, quotes: lastQuoteMarks, caretParagraph: caretParagraph, storage: storage)
-            applyHeadingMarkers(lastHeadingMarkers, caretParagraph: caretParagraph, storage: storage)
-            // 表格同理：光标行撤 kern 露源码，其他行恢复对齐。
-            applyTables(lastTableBlocks, in: storage.string, caretParagraph: caretParagraph, storage: storage)
-            // 行首缩进与光标无关：换段落也压着（issue #41）。
-            applyLineIndents(lastLineIndents, storage: storage)
+            let expanded = textView.showsSource
+            applyInlineMarks(lastInlineMarks, caret: caret, expanded: expanded, storage: storage)
+            // 围栏行 / 表格分隔行：渲染态折殁，光标进去才恢复（其余块级标记已不再随光标变化）。
+            applyFenceLines(lastFenceLines, caretParagraph: caretParagraph, expanded: expanded, storage: storage)
+            applyTables(
+                lastTableBlocks, in: storage.string, caretParagraph: caretParagraph,
+                expanded: expanded, storage: storage
+            )
             storage.endEditing()
             lastCaretParagraph = caretParagraph
+            lastCaretKey = caretKey
             textView.caretParagraph = caretParagraph
         }
 
-        /// 列表行：段落缩进按层级算，行首标记按光标段落切两组宽度。
+        /// 列表行：段落缩进按层级算，行首标记**永远**压到 ≈ 0 宽。
         ///
         /// 第 1 级与标题、正文同左缘（issue #50）；每深一级右移 `ListLayout.levelStep`。
-        /// 隐藏组：字号 0.1 + 负 kern，标记总宽 ≈ 0，正文从缩进处开始（S36）。
-        /// 可见组（光标段落）：正常字号、无 kern，能看能改（S37）。
+        /// 为什么不再随光标露出（对齐 Typora）：一露就是 10–28 pt 的横向位移，
+        /// 写列表时每行都在跳（审计 03 / 04）。改标记靠快捷键与源码模式。
         private func applyLists(
             _ markers: [ListMarker],
             quotes: [QuoteMark],
             caretParagraph: NSRange?,
+            expanded: Bool,
             storage: NSTextStorage
         ) {
             let ns = storage.string as NSString
@@ -1591,23 +1759,17 @@ struct NoteEditorView: NSViewRepresentable {
                     range: whole
                 )
 
-                setMarkerWidth(
-                    marker.markerRange,
-                    compressed: !ListLayout.isInCaretParagraph(marker, caretParagraph),
-                    storage: storage
-                )
+                setMarkerWidth(marker.markerRange, compressed: !expanded, storage: storage)
             }
-            // 引用前缀同一套：非光标段落压宽，光标段落露源码。
+            // 引用：**每一行**的前缀都压宽。只压第一行会让第 2 行起右移一个 `> ` 的宽度（审计 05）。
             for mark in quotes {
-                let range = mark.range
-                let inCaret = caretParagraph.map { caret in
-                    range.location < caret.location + caret.length && caret.location < range.location + range.length
-                } ?? false
-                setMarkerWidth(range, compressed: !inCaret, storage: storage)
+                for range in mark.allPrefixes {
+                    setMarkerWidth(range, compressed: !expanded, storage: storage)
+                }
                 // 引用行的段落缩进按它自己的层级：`  > 甲` 比 `> 甲` 深一级。
                 guard ns.length > 0 else { continue }
                 let paragraph = ns.paragraphRange(for: NSRange(
-                    location: min(max(0, range.location), ns.length - 1),
+                    location: min(max(0, mark.range.location), ns.length - 1),
                     length: 0
                 ))
                 guard let whole = clamp(paragraph, storage.length) else { continue }
@@ -1627,11 +1789,14 @@ struct NoteEditorView: NSViewRepresentable {
             _ blocks: [TableBlock],
             in text: String,
             caretParagraph: NSRange?,
+            expanded: Bool,
             storage: NSTextStorage
         ) {
             guard !blocks.isEmpty else { return }
             for block in blocks {
-                for item in TableLayout.attributes(for: block, in: text, caretParagraph: caretParagraph) {
+                for item in TableLayout.attributes(
+                    for: block, in: text, caretParagraph: caretParagraph, expanded: expanded
+                ) {
                     guard let r = clamp(item.range, storage.length) else { continue }
                     storage.addAttributes(item.attributes, range: r)
                 }
@@ -1689,6 +1854,7 @@ struct NoteEditorView: NSViewRepresentable {
         private func applyHeadingMarkers(
             _ ranges: [NSRange],
             caretParagraph: NSRange?,
+            expanded: Bool,
             storage: NSTextStorage
         ) {
             guard !ranges.isEmpty else { return }
@@ -1698,10 +1864,10 @@ struct NoteEditorView: NSViewRepresentable {
                 guard let r = clamp(range, storage.length) else { continue }
                 let marker = ns.substring(with: r)
                 storage.removeAttribute(.kern, range: r)
-                storage.addAttributes(
-                    HeadingLayout.attributes(forMarker: marker, range: r, caretParagraph: caretParagraph),
-                    range: r
-                )
+                let attributes = expanded
+                    ? HeadingLayout.visibleAttributes(forMarker: marker)
+                    : HeadingLayout.attributes(forMarker: marker, range: r, caretParagraph: caretParagraph)
+                storage.addAttributes(attributes, range: r)
             }
         }
 
@@ -1733,10 +1899,11 @@ struct NoteEditorView: NSViewRepresentable {
                     .foregroundColor: Theme.secondaryText,
                 ], range: r)
             }
-            // 普通 Markdown 链接
+            // 普通 Markdown 链接：`[...](url)` 的定界符已被压宽，只剩链接文字，
+            // 所以这里要给「像链接」的色，而不是次级灰（否则渲染态看着像删除线文本）。
             for range in spans.markdownLinks {
                 guard let r = clamp(range, storage.length) else { continue }
-                storage.addAttribute(.foregroundColor, value: Theme.secondaryText, range: r)
+                storage.addAttribute(.foregroundColor, value: Theme.linkText, range: r)
             }
         }
 
@@ -1755,6 +1922,9 @@ struct NoteEditorView: NSViewRepresentable {
                     .font: Theme.codeFont,
                     .paragraphStyle: Theme.codeParagraph(),
                 ], range: r)
+                // 块内换行不是新段落：行与行之间不该吃 `paragraphSpacing`。
+                // 不压的话 10pt 段后距会把每行推开，13pt 的代码排成 36pt 行距（审计 07）。
+                applyCodeLineSpacing(in: r, storage: storage)
             }
             // 围栏行只淡化：整行次级色，不加底色、不改字重。
             for range in fenceLines {
@@ -1768,6 +1938,30 @@ struct NoteEditorView: NSViewRepresentable {
                     .foregroundColor: Theme.secondaryText,
                     .paragraphStyle: Theme.quoteParagraph(),
                 ], range: r)
+            }
+        }
+
+        /// 代码块内逐行压掉段间距：首行留 `paragraphSpacingBefore`，末行留 `paragraphSpacing`，
+        /// 中间行两头都归零。行距只由 `lineSpacing` 决定。
+        private func applyCodeLineSpacing(in block: NSRange, storage: NSTextStorage) {
+            let ns = storage.string as NSString
+            guard block.length > 0, block.location + block.length <= ns.length else { return }
+            var lines: [NSRange] = []
+            var index = block.location
+            let end = block.location + block.length
+            while index < end {
+                let line = ns.lineRange(for: NSRange(location: index, length: 0))
+                guard line.length > 0 else { break }
+                lines.append(line)
+                index = line.location + line.length
+            }
+            guard lines.count > 2 else { return }
+            for (offset, line) in lines.enumerated() {
+                guard let r = clamp(line, storage.length) else { continue }
+                let style = Theme.codeParagraph().mutableCopy() as! NSMutableParagraphStyle
+                if offset > 0 { style.paragraphSpacingBefore = 0 }
+                if offset < lines.count - 1 { style.paragraphSpacing = 0 }
+                storage.addAttribute(.paragraphStyle, value: style, range: r)
             }
         }
 

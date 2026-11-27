@@ -71,6 +71,15 @@ enum DebugCapture {
             app.updateAppearance(settings)
         }
 
+        // `SILVICS_SOURCE=1`：取证时切到源码模式（⌘/），用来出「源码 / 渲染」对照图。
+        if ProcessInfo.processInfo.environment["SILVICS_SOURCE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                guard let root = NSApp.windows.first(where: { $0.isVisible })?.contentView,
+                      let textView = findEditorTextView(in: root) else { return }
+                textView.onToggleSourceMode?()
+            }
+        }
+
         // `SILVICS_JOURNAL_MENTIONS=1|0`：取证时切换日记提及开关（对比图用）。
         if let raw = ProcessInfo.processInfo.environment["SILVICS_JOURNAL_MENTIONS"] {
             app.setJournalScanMentions(raw == "1")

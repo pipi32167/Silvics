@@ -110,13 +110,17 @@ final class EditorIndentTests: XCTestCase {
     /// 列表正文的理论左缘：容器左缘 + 行片段留白 + 该层缩进 + 可见标记宽度。
     ///
     /// 第 1 级 `ListLayout.indent` 是 0，与标题、正文同左缘；每深一级加 `levelStep`（issue #50）。
+    /// 列表正文的理论左缘。
+    ///
+    /// 对齐 Typora 之后：行首标记**永远**不占宽，光标在不在这一行都一样，
+    /// 所以这里不再加 `visibleMarkerWidth`。`visiblePrefix` 只留给调用点做对照值。
     private func expectedBodyStart(
         _ textView: EditorTextView,
         visiblePrefix: String,
         level: Int = 1
     ) -> CGFloat {
-        textView.textContainerOrigin.x + 5 + ListLayout.offset(level: level)
-            + Theme.visibleMarkerWidth(visiblePrefix)
+        _ = visiblePrefix
+        return textView.textContainerOrigin.x + 5 + ListLayout.offset(level: level)
     }
 
     private func assertClose(
@@ -198,9 +202,8 @@ final class EditorIndentTests: XCTestCase {
         let quoteIndent = textView.textContainerOrigin.x + 5 + ListLayout.offset(level: 2)
         assertClose(characterX(textView, at: lineStart + 2), quoteIndent,
                    "`>` 应落在引用缩进处，行首两个空格不占宽")
-        assertClose(characterX(textView, at: lineStart + 4),
-                   quoteIndent + Theme.visibleMarkerWidth("> "),
-                   "正文让出 `> ` 的宽度")
+        assertClose(characterX(textView, at: lineStart + 4), quoteIndent,
+                   "`> ` 压宽之后，引用正文与第 2 级左缘同线（不再让出 `> ` 的宽度）")
 
         XCTAssertEqual(textView.string, text)
     }

@@ -112,19 +112,20 @@ enum ListLayout {
     }
 
     /// 要画项目符号 / 序号的列表行（待办另画复选框）。
+    ///
+    /// 与光标无关：标记永远不露源码（对齐 Typora）。
+    /// 早先光标进这一行会改成一个字面 `- `，行内文字立刻右移 10 pt，续行不动，段内错位。
     static func markersToRender(_ markers: [ListMarker], caretParagraph: NSRange?) -> [ListMarker] {
-        markers.filter { marker in
-            guard !marker.isTodo else { return false }
-            return !isInCaretParagraph(marker, caretParagraph)
-        }
+        _ = caretParagraph
+        return markers.filter { !$0.isTodo }
     }
 
-    /// 要画待办复选框的列表行。光标段落不画（改为露源码），S40。
+    /// 要画待办复选框的列表行。
+    ///
+    /// 与光标无关：光标进待办行时复选框仍要在（否则那一下既丢了可点区域，又把正文推右 28 pt）。
     static func checkboxTodos(_ markers: [ListMarker], caretParagraph: NSRange?) -> [ListMarker] {
-        markers.filter { marker in
-            guard marker.isTodo else { return false }
-            return !isInCaretParagraph(marker, caretParagraph)
-        }
+        _ = caretParagraph
+        return markers.filter(\.isTodo)
     }
 
     /// 行首缩进：编辑器里永远不占宽。

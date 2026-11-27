@@ -356,27 +356,27 @@ final class ListRenderingTests: XCTestCase {
 
     // MARK: - S40 光标行不画复选框
 
-    func testS40CaretParagraphHasNoCheckbox() {
+    func testS40CheckboxIgnoresCaretParagraph() {
         let text = "- [ ] 甲\n- [x] 乙"
         let list = markers(text)
 
-        // 纯分组：光标在第一段时，只有第二行要画复选框
+        // 对齐 Typora 之后：复选框与光标无关，光标落在哪一行都照画（原 S40 已作废）。
         let caretFirst = ListLayout.checkboxTodos(list, caretParagraph: paragraph(text, line: 0))
-        XCTAssertEqual(caretFirst.count, 1)
-        XCTAssertEqual(caretFirst.first?.markerRange.location, paragraph(text, line: 1).location)
-
+        XCTAssertEqual(caretFirst.count, 2)
         let noCaret = ListLayout.checkboxTodos(list, caretParagraph: nil)
         XCTAssertEqual(noCaret.count, 2)
+        XCTAssertEqual(ListLayout.markersToRender(list, caretParagraph: nil).count, 0,
+                       "待办一律不画项目符号")
 
-        // 渲染层：光标段落不出现 NSButton，移开后补上
+        // 渲染层：光标进出哪一行，方框数量都不变（可点区域不能闪没）。
         let (editor, _) = makeEditor(text)
         editor.setListMarkers(list, parsedFrom: text)
         editor.caretParagraph = paragraph(text, line: 0)
         editor.layoutSubtreeIfNeeded()
-        XCTAssertEqual(editor.todoCheckboxCount, 1, "光标段落的待办不画方框，露源码")
+        XCTAssertEqual(editor.todoCheckboxCount, 2)
         editor.caretParagraph = paragraph(text, line: 1)
         editor.layoutSubtreeIfNeeded()
-        XCTAssertEqual(editor.todoCheckboxCount, 1)
+        XCTAssertEqual(editor.todoCheckboxCount, 2)
         editor.caretParagraph = nil
         editor.layoutSubtreeIfNeeded()
         XCTAssertEqual(editor.todoCheckboxCount, 2)

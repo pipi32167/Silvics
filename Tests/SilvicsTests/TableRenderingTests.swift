@@ -278,7 +278,7 @@ final class TableRenderingTests: XCTestCase {
 
     // MARK: - 渲染属性
 
-    func testHeaderRowIsBoldAndUnderlined() {
+    func testHeaderRowIsBold() {
         guard let block = blocks(table).first else { return XCTFail("没识别到表格") }
         let items = TableLayout.attributes(for: block, in: table, caretParagraph: nil)
         let header = paragraph(table, containing: block.rows[0].contentRange.location)
@@ -289,10 +289,10 @@ final class TableRenderingTests: XCTestCase {
         XCTAssertEqual(font.pointSize, Theme.tableFontSize)
         XCTAssertTrue(isBold(font))
         XCTAssertTrue(font.isFixedPitch)
-        XCTAssertEqual(row.attributes[.underlineStyle] as? Int, NSUnderlineStyle.single.rawValue)
-        XCTAssertNotNil(row.attributes[.underlineColor])
+        // 表头分隔线改成网格线（`drawTableGrid`），行属性里不再挂下划线。
+        XCTAssertNil(row.attributes[.underlineStyle])
 
-        // 数据行不加粗、不加下划线。
+        // 数据行不加粗。
         let body = paragraph(table, containing: block.rows[2].contentRange.location)
         guard let bodyRow = items.first(where: { $0.range == body && $0.attributes[.paragraphStyle] != nil })
         else { return XCTFail("数据行没有整行属性") }
@@ -301,13 +301,17 @@ final class TableRenderingTests: XCTestCase {
         XCTAssertNil(bodyRow.attributes[.underlineStyle])
     }
 
-    func testDelimiterRowFadesWithoutChangingText() {
+    func testDelimiterRowIsInvisibleAndFlatWithoutChangingText() {
         guard let block = blocks(table).first else { return XCTFail("没识别到表格") }
         let items = TableLayout.attributes(for: block, in: table, caretParagraph: nil)
         let delimiter = paragraph(table, containing: block.rows[1].contentRange.location)
         guard let row = items.first(where: { $0.range == delimiter && $0.attributes[.paragraphStyle] != nil })
         else { return XCTFail("分隔行没有整行属性") }
-        XCTAssertTrue((row.attributes[.foregroundColor] as AnyObject) === Theme.tableDelimiter)
+        // 渲染态：分隔行整行透明、行高 1pt（Typora 里压根看不到 `---` 这一行）。
+        XCTAssertTrue((row.attributes[.foregroundColor] as AnyObject) === NSColor.clear)
+        let style = row.attributes[.paragraphStyle] as? NSParagraphStyle
+        XCTAssertEqual(style?.minimumLineHeight ?? -1, 1, accuracy: 0.01)
+        XCTAssertEqual(style?.maximumLineHeight ?? -1, 1, accuracy: 0.01)
 
         // 应用全部属性后正文一个字符都不变。
         let storage = NSMutableAttributedString(string: table, attributes: Theme.baseAttributes())

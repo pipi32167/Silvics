@@ -137,9 +137,10 @@ final class EditorComposeRenderTests: XCTestCase {
     }
 
     private func expectedBoxes(_ editor: Editor, caretParagraph: NSRange?) -> [ExpectedBox] {
+        // 复选框与光标无关：光标落在待办行里也照画（对齐 Typora，见 `EditorTyporaModeTests`）。
+        _ = caretParagraph
         var out: [ExpectedBox] = []
         for marker in MarkdownStyler.listMarkers(in: editor.textView.string) where marker.isTodo {
-            if ListLayout.isInCaretParagraph(marker, caretParagraph) { continue }
             guard let y = lineY(editor.textView, at: marker.markerRange.location) else { continue }
             guard editor.textView.visibleRect.insetBy(dx: 0, dy: -60).intersects(
                 NSRect(x: 0, y: y, width: 10, height: ListLayout.checkboxSize)
@@ -355,9 +356,9 @@ final class EditorComposeRenderTests: XCTestCase {
                        "组字期间列表标记区间过期")
     }
 
-    // MARK: - R06 光标段落露源码，且不画复选框（S40 回归）
+    // MARK: - R06 光标进待办行：标记仍压宽、复选框仍在（对齐 Typora，原 S40 已作废）
 
-    func testCaretParagraphShowsSourceWithoutCheckbox() {
+    func testCaretParagraphKeepsCompressedMarkerAndCheckbox() {
         let text = document()
         let caret = lineStart(text, 1) + 2
         let editor = makeEditor(text, caret: caret)
@@ -366,9 +367,9 @@ final class EditorComposeRenderTests: XCTestCase {
             return XCTFail("没识别出第一条待办")
         }
         let font = editor.textView.textStorage?.attribute(.font, at: firstTodo.markerRange.location, effectiveRange: nil) as? NSFont
-        XCTAssertEqual(font?.pointSize ?? 0, Theme.bodyFont.pointSize, accuracy: 0.01, "光标段落标记要恢复原字号")
-        XCTAssertTrue(editor.textView.todoCheckboxItems.allSatisfy { $0.location != firstTodo.markerRange.location },
-                      "光标段落不画复选框")
+        XCTAssertLessThan(font?.pointSize ?? 99, 1, "光标在待办行时标记也要压宽，否则正文会右移")
+        XCTAssertTrue(editor.textView.todoCheckboxItems.contains { $0.location == firstTodo.markerRange.location },
+                      "光标在待办行时复选框还要在，可点区域不能闪没")
         assertBoxesMatchText(editor, "光标在待办行")
     }
 }

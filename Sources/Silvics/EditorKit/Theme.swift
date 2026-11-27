@@ -104,7 +104,8 @@ enum Theme {
     static var tableFont: NSFont { NSFont.monospacedSystemFont(ofSize: tableFontSize, weight: .regular) }
     static var tableHeaderFont: NSFont { NSFont.monospacedSystemFont(ofSize: tableFontSize, weight: .bold) }
 
-    /// pipe 的淡色。对齐验收要靠截图里的 pipe，所以不能设成 `.clear`。
+    /// pipe 的淡色。渲染态 pipe 本身不画（网格线代替它），
+    /// 只有光标进到那一行时才用这个色把源码露出来。
     static let tablePipe = NSColor(name: "tablePipe") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(white: 1, alpha: 0.38)
@@ -114,6 +115,13 @@ enum Theme {
     /// 分隔行 `| --- |`：淡化到 40%，光标行恢复 `labelColor`。
     static let tableDelimiter = NSColor(name: "tableDelimiter") { appearance in
         NSColor.labelColor.withAlphaComponent(0.4)
+    }
+
+    /// 表格网格线（竖线 + 行线）。与表头分隔线同色，合成一个「真表格」的观感（对齐 Typora）。
+    static let tableBorder = NSColor(name: "tableBorder") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.22)
+            : NSColor(white: 0, alpha: 0.16)
     }
 
     /// 表头行下方的淡分隔线（下划线）。
@@ -299,6 +307,33 @@ enum Theme {
             .font: bodyFont,
             .foregroundColor: syntaxMarkActive,
         ]
+    }
+
+    /// 整行折叠（围栏行、表格分隔行）。
+    ///
+    /// 这两类行在渲染态没有阅读价值，还会把块顶与表格内部顶出一条空行：
+    /// 整行字号压到 0.1 + 负 kern → 宽 ≈ 0，再把行高压到 1 pt。
+    /// 光标落在这一行时改回原文（否则那一行没法直接改）。
+    static func collapsedLineAttributes(for line: String) -> [NSAttributedString.Key: Any] {
+        [
+            .font: hiddenMarkerFont,
+            .kern: compressedMarkerKern(for: line),
+            .foregroundColor: syntaxMarkHidden,
+            .paragraphStyle: collapsedParagraph(),
+        ]
+    }
+
+    /// 折叠行的段落样式：行高与段间距都压到最小。
+    static func collapsedParagraph() -> NSParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.minimumLineHeight = 1
+        p.maximumLineHeight = 1
+        p.lineSpacing = 0
+        p.paragraphSpacing = 0
+        p.paragraphSpacingBefore = 0
+        p.firstLineHeadIndent = 0
+        p.headIndent = 0
+        return p
     }
 
     // MARK: - 基础属性
