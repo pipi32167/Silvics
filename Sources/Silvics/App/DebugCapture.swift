@@ -669,9 +669,12 @@ enum DebugCapture {
     /// - `tables`：量出每个表格每行 pipe 的 x，打印列偏差（验收需要具体数字）。
     @MainActor
     static func runSelfTest(_ app: AppState) {
-        let raw = ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] ?? "nil"
-        print("[Silvics] selftest=\(raw) seed=\(DemoSeeder.isRequested) window=\(NSApp.windows.count)")
-        switch ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] {
+        let raw = ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] ?? ""
+        // 只在真的跑自检时打印：测试宿主也会走 onAppear，否则每个测试日志里都多一行噪声。
+        if !raw.isEmpty {
+            print("[Silvics] selftest=\(raw) seed=\(DemoSeeder.isRequested) window=\(NSApp.windows.count)")
+        }
+        switch raw {
         case "convert": runConvertSelfTest(app)
         case "tables": runTableSelfTest()
         case "link-jump": runLinkJumpSelfTest(app)
