@@ -7,8 +7,8 @@ OLD=/tmp/ab-old-shots
 NEW=/tmp/ab-new-shots
 rm -rf "$DIR"
 
-$SC init --dir "$DIR" --project silvics --branch fix-ime-render-issue49 \
-  --commit "$(cd ~/work/dev/Silvics-ime-render && git rev-parse --short HEAD)+工作区" \
+$SC init --dir "$DIR" --project silvics --branch ime-render-v0.8.1 \
+  --commit "${COMMIT_REF:-$(cd ~/work/dev/Silvics-ime-render && git rev-parse --short HEAD)}" \
   --env "macOS 27 / Xcode 27.2 / Swift 6.4 / Debug / App Sandbox 关" \
   --data "SILVICS_DB 临时库 + SILVICS_SEED=1；自检把一篇含各类 markdown 的正文装进编辑区" \
   --cache "SPM SourcePackages 复用，DerivedData .build" --tester pi >/dev/null

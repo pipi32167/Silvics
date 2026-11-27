@@ -1,11 +1,11 @@
-# silvics · fix-ime-render-issue49 验收报告
+# silvics · ime-render-v0.8.1 验收报告
 
 ## 元信息
 
 | 项 | 值 |
 | --- | --- |
-| commit | 85fc655+工作区 |
-| 验收时间 | 2026-11-27 17:16 CST |
+| commit | 2cf5f74 |
+| 验收时间 | 2026-11-27 17:29 CST |
 | 环境 | macOS 27 / Xcode 27.2 / Swift 6.4 / Debug / App Sandbox 关 |
 | 数据 | SILVICS_DB 临时库 + SILVICS_SEED=1；自检把一篇含各类 markdown 的正文装进编辑区 |
 | 缓存版本 | SPM SourcePackages 复用，DerivedData .build |
