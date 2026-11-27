@@ -49,8 +49,8 @@ targets:
       properties:
         CFBundleName: Silvics
         CFBundleDisplayName: Silvics
-        CFBundleShortVersionString: "0.8.1"
-        CFBundleVersion: "174"
+        CFBundleShortVersionString: "0.9.0"
+        CFBundleVersion: "179"
         CFBundlePackageType: APPL
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.productivity
