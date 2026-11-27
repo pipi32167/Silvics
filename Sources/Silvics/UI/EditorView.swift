@@ -201,7 +201,10 @@ final class EditorTextView: NSTextView {
     /// 换标题级别、改列表符号、动表格分隔行都走这里，而不是靠光标进出行。
     var showsSource: Bool = false {
         didSet {
-            if oldValue != showsSource { needsDisplay = true }
+            guard oldValue != showsSource else { return }
+            needsDisplay = true
+            // 复选框在源码模式下不画、切回来要补上（不能只靠 needsDisplay 等下一次布局）。
+            relayoutTodoCheckboxes()
         }
     }
 
