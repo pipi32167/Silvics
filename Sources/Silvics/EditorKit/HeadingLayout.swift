@@ -20,21 +20,27 @@ enum HeadingLayout {
             && caret.location < marker.location + marker.length
     }
 
+    /// 源码模式下的前缀：原标题字号 + 语法色，能看能改。
+    static func visibleAttributes(forMarker marker: String) -> [NSAttributedString.Key: Any] {
+        [
+            .font: Theme.headingFont(level: level(ofMarker: marker)),
+            .foregroundColor: Theme.syntaxMarkActive,
+        ]
+    }
+
     /// 前缀该用哪套属性。
     ///
-    /// 可见态只改颜色，字号仍是标题字号 —— 露出来的是源码，不是正文。
-    /// 隐藏态与列表标记共用 `Theme.compressedMarkerAttributes`：字号 0.1 加负 kern。
+    /// 决定（对齐 Typora）：标题前缀**永远**压到 ≈ 0 宽。
+    /// 早先的做法是「光标段落露源码」，代价是光标一进标题行整行右移 33 pt，
+    /// 写标题时每行都在横跳。标题级别改用快捷键 / 源码模式改，不再靠露源码。
+    /// `caretParagraph` 保留在签名里（调用点与测试都用它），不再参与判断。
     static func attributes(
         forMarker marker: String,
         range: NSRange,
         caretParagraph: NSRange?
     ) -> [NSAttributedString.Key: Any] {
-        guard isInCaret(range, caretParagraph: caretParagraph) else {
-            return Theme.compressedMarkerAttributes(for: marker)
-        }
-        return [
-            .font: Theme.headingFont(level: level(ofMarker: marker)),
-            .foregroundColor: Theme.syntaxMarkActive,
-        ]
+        _ = range
+        _ = caretParagraph
+        return Theme.compressedMarkerAttributes(for: marker)
     }
 }

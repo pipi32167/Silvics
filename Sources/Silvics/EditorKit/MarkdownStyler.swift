@@ -17,12 +17,18 @@ struct EditorSpans {
 
 /// 一段引用：每行前缀 `> `（压宽用）+ 整块区间（画竖线用）+ 嵌套层级。
 struct QuoteMark: Equatable {
-    /// 第一行的 `>` 加其后空格（允许前导缩进）的区间。语法标记压宽只碰这一段。
+    /// 第一行的 `>` 加其后空格（允许前导缩进）的区间。
+    /// 保留它是为了让「整块第一行」有一个稳定的代表区间（竖线定位、测试断言都用它）。
     var range: NSRange
+    /// 块内**每一行**的前缀区间。压宽要逐行做：只压第一行会让第 2 行起正文右移一截。
+    var prefixes: [NSRange] = []
     /// 连续同级引用行的整块区间（首行行首到末行行尾，不含换行）。竖线按它算高度。
     var blockRange: NSRange
     /// 缩进层级，从 1 起。2 空格或 1 个 tab 算一级。
     var level: Int
+
+    /// 该压宽的区间（有 `prefixes` 用它，老调用点退回 `range`）。
+    var allPrefixes: [NSRange] { prefixes.isEmpty ? [range] : prefixes }
 }
 
 /// 一次逐行扫描的全部结果（issue #50：性能与多级缩进）。
@@ -52,6 +58,17 @@ struct SyntaxMarkVisibility: Equatable {
     var show: [NSRange] = []
     /// 其他段落：设为 `.clear`（看不见，但字符还在）。
     var hide: [NSRange] = []
+}
+
+/// 行内语法标记 + 它属于哪一段（对齐 Typora 的「行内露源码」）。
+///
+/// 与 `SyntaxMarkVisibility` 的区别是**粒度**：块级标记按段分（而且永不露），
+/// 行内标记按自己那一段分——光标落在粗体里就只露这一处 `**`，同行的其他标记继续藏着。
+struct InlineSyntaxMark: Equatable {
+    /// 要压宽 / 露出的标记区间（`**`、反引号、`[[`、`](url)`）。
+    var range: NSRange
+    /// 所属的那一段。光标落在它里面才把这处标记露出来。
+    var owner: NSRange
 }
 
 /// 一个代码块里「该上色」的那段：内容行，不含围栏行。
@@ -301,6 +318,110 @@ enum MarkdownStyler {
         return normalize(out, length: ns.length)
     }
 
+    /// 行内标记：收集全部行内标记与它们的归属区间。
+    ///
+    /// 覆盖粗体 `**` / 斜体 `*` 的定界符、行内代码反引号、`[[ ]]`、链接的 `[` 与 `](url)`。
+    /// 渲染层按 `splitInline` 分两桶：光标在段内就露出原宽，否则压到 ≈ 0 宽。
+    static func inlineSyntaxMarks(
+        in text: String,
+        spans: EditorSpans,
+        links: [WikiLink]? = nil
+    ) -> [InlineSyntaxMark] {
+        guard !text.isEmpty else { return [] }
+        let ns = text as NSString
+        var out: [InlineSyntaxMark] = []
+
+        for span in spans.inlineCodes {
+            out += delimiterRanges(in: ns, span: span, allowed: [backtick]).map {
+                InlineSyntaxMark(range: $0, owner: span)
+            }
+        }
+        for span in spans.strongs {
+            out += delimiterRanges(in: ns, span: span, allowed: [asterisk, underscore]).map {
+                InlineSyntaxMark(range: $0, owner: span)
+            }
+        }
+        for span in spans.emphases {
+            out += delimiterRanges(in: ns, span: span, allowed: [asterisk, underscore]).map {
+                InlineSyntaxMark(range: $0, owner: span)
+            }
+        }
+        for span in spans.markdownLinks {
+            out += linkDelimiterRanges(in: ns, span: span).map {
+                InlineSyntaxMark(range: $0, owner: span)
+            }
+        }
+        for link in links ?? WikiScanner.scan(text) {
+            let range = link.nsRange(in: text)
+            guard range.length >= 4, range.location + range.length <= ns.length else { continue }
+            out.append(InlineSyntaxMark(
+                range: NSRange(location: range.location, length: 2), owner: range
+            ))
+            out.append(InlineSyntaxMark(
+                range: NSRange(location: range.location + range.length - 2, length: 2), owner: range
+            ))
+        }
+
+        // 同一段可能被 strong / emph 同时命中（`***甲***`），按位置去重。
+        var seen = Set<String>()
+        var unique: [InlineSyntaxMark] = []
+        for mark in out where mark.range.length > 0 {
+            let key = "\(mark.range.location):\(mark.range.length)"
+            guard seen.insert(key).inserted else { continue }
+            unique.append(mark)
+        }
+        unique.sort { $0.range.location < $1.range.location }
+        return unique
+    }
+
+    /// 按光标位置分行内标记：光标落在哪一段里，那一段的标记就露出。
+    static func splitInline(
+        _ marks: [InlineSyntaxMark],
+        caret: NSRange?
+    ) -> (show: [NSRange], hide: [NSRange]) {
+        var show: [NSRange] = []
+        var hide: [NSRange] = []
+        let caretEnd = caret.map { $0.location + $0.length }
+        for mark in marks {
+            let ownerEnd = mark.owner.location + mark.owner.length
+            let inside: Bool
+            if let caret, let caretEnd {
+                inside = caret.location >= mark.owner.location
+                    && caret.location <= ownerEnd
+                    && caretEnd >= mark.owner.location
+            } else {
+                inside = false
+            }
+            if inside { show.append(mark.range) } else { hide.append(mark.range) }
+        }
+        return (show, hide)
+    }
+
+    /// 链接的定界符：头 `[`、尾 `](url)`。
+    ///
+    /// 渲染态只留链接文字（Typora 同），光标进这一段才把原文露出来。
+    static func linkDelimiterRanges(in ns: NSString, span: NSRange) -> [NSRange] {
+        guard span.length >= 3, span.location >= 0,
+              span.location + span.length <= ns.length else { return [] }
+        let start = span.location
+        let end = span.location + span.length
+        var out: [NSRange] = []
+        if ns.character(at: start) == UInt16(UInt8(ascii: "[")) {
+            out.append(NSRange(location: start, length: 1))
+        }
+        // `](url)` 在段尾：从后往前找 `](`。
+        var index = end - 1
+        while index > start {
+            if ns.character(at: index) == UInt16(UInt8(ascii: "(")),
+               ns.character(at: index - 1) == UInt16(UInt8(ascii: "]")) {
+                out.append(NSRange(location: index - 1, length: end - index + 1))
+                break
+            }
+            index -= 1
+        }
+        return out
+    }
+
     /// 待办标记：`- [ ] ` / `* [x] `，从缩进后的项目符号到 `]` 后的空格（S06–S10）。
     static func todoMarkerRanges(in text: String) -> [NSRange] {
         scan(text).todos
@@ -527,12 +648,14 @@ enum MarkdownStyler {
             let level = lines[index].quoteLevel
             let firstLine = lines[index].lineRange
             var lastLine = firstLine
+            var prefixes = [prefix]
             var next = index + 1
             while next < lines.count,
                   let candidate = lines[next].quote,
                   candidate.length > 0,
                   lines[next].quoteLevel == level,
                   lines[next].lineRange.location == lastLine.location + lastLine.length + 1 {
+                prefixes.append(candidate)
                 lastLine = lines[next].lineRange
                 next += 1
             }
@@ -540,7 +663,7 @@ enum MarkdownStyler {
                 location: firstLine.location,
                 length: lastLine.location + lastLine.length - firstLine.location
             )
-            out.append(QuoteMark(range: prefix, blockRange: block, level: level))
+            out.append(QuoteMark(range: prefix, prefixes: prefixes, blockRange: block, level: level))
             index = next
         }
         return out

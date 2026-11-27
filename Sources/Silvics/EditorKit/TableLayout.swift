@@ -301,7 +301,8 @@ enum TableLayout {
     static func attributes(
         for block: TableBlock,
         in text: String,
-        caretParagraph: NSRange?
+        caretParagraph: NSRange?,
+        expanded: Bool = false
     ) -> [(range: NSRange, attributes: [NSAttributedString.Key: Any])] {
         let ns = text as NSString
         guard !block.rows.isEmpty else { return [] }
@@ -315,24 +316,35 @@ enum TableLayout {
         for (index, row) in block.rows.enumerated() {
             let isHeader = row.isHeader
             let font = isHeader ? Theme.tableHeaderFont : Theme.tableFont
-            let inCaret = overlaps(row.contentRange, caretParagraph)
+            let inCaret = expanded || overlaps(row.contentRange, caretParagraph)
             let paragraph = ns.paragraphRange(for: NSRange(location: row.contentRange.location, length: 0))
-            let faded = row.isDelimiter && !inCaret
+
+            // 分隔行（`| --- | --- |`）：渲染态**不可见且压扁**，光标进去才恢复原文。
+            //
+            // 只压行高、不压字宽：这一行的 pipe 位置还是各列的横向基准，
+            // 一压宽整张表的竖线就散开（`testRenderedTablePipesAlignWithinOnePoint`）。
+            let collapsedRow = row.isDelimiter && !inCaret
+            let paragraphStyle = Theme.tableParagraph(
+                first: index == 0,
+                last: index == block.rows.count - 1
+            ).mutableCopy() as! NSMutableParagraphStyle
+            if collapsedRow {
+                paragraphStyle.minimumLineHeight = 1
+                paragraphStyle.maximumLineHeight = 1
+                paragraphStyle.lineSpacing = 0
+                paragraphStyle.paragraphSpacing = 0
+                paragraphStyle.paragraphSpacingBefore = 0
+            }
 
             var rowAttributes: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: faded ? Theme.tableDelimiter : Theme.text,
-                .paragraphStyle: Theme.tableParagraph(
-                    first: index == 0,
-                    last: index == block.rows.count - 1
-                ),
+                .foregroundColor: collapsedRow ? NSColor.clear : Theme.text,
+                .paragraphStyle: paragraphStyle,
                 // 先清零：光标移进 / 移出这一行时，旧的 kern 必须被清掉。
                 .kern: 0,
             ]
-            if isHeader {
-                rowAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                rowAttributes[.underlineColor] = Theme.tableHeaderRule
-            }
+            // 表头分隔线不再用下划线：下划线会跟着整行宽度铺到表格外面，
+            // 现在由 `EditorTextView.drawTableGrid` 按表格宽度画网格线。
             out.append((paragraph, rowAttributes))
 
             if !inCaret {
@@ -344,9 +356,11 @@ enum TableLayout {
                 }
             }
 
-            let pipeColor = faded ? Theme.tableDelimiter : Theme.tablePipe
+            // pipe 渲染态一律不画：表格的竖线由视图自绘网格线（`drawTableGrid`）。
+            // 光标所在行例外——那一行是源码，pipe 要看得见。
             for pipe in row.pipes {
-                out.append((pipe, [.foregroundColor: pipeColor]))
+                let color: NSColor = inCaret ? Theme.tablePipe : .clear
+                out.append((pipe, [.foregroundColor: color]))
             }
         }
         return out

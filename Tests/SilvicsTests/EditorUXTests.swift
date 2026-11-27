@@ -298,8 +298,8 @@ final class EditorUXTests: XCTestCase {
             let width = NSAttributedString(string: marker, attributes: attributes).size().width
             XCTAssertLessThan(width, 0.5, "隐藏态标题前缀「\(marker)」总宽应 ≈0，实际 \(width)")
         }
-        // 对照：不压缩时明显更宽，证明上面不是恒真
-        let visible = NSAttributedString(
+        // 对齐 Typora 之后：光标在标题行里也照样压宽（否则整行右移 33pt）。
+        let inCaret = NSAttributedString(
             string: "## ",
             attributes: HeadingLayout.attributes(
                 forMarker: "## ",
@@ -307,7 +307,7 @@ final class EditorUXTests: XCTestCase {
                 caretParagraph: NSRange(location: 0, length: 5)
             )
         )
-        XCTAssertGreaterThan(visible.size().width, 5)
+        XCTAssertLessThan(inCaret.size().width, 0.5, "光标段落里的标题前缀同样是 0 宽")
     }
 
     func testHeadingMarkerVisibleInCaretParagraphOnly() {
@@ -335,7 +335,7 @@ final class EditorUXTests: XCTestCase {
         XCTAssertEqual(textView.string, text)
     }
 
-    func testHeadingMarkerShowsSourceInsideCaretParagraph() {
+    func testHeadingMarkerStaysCompressedInsideCaretParagraph() {
         let text = "## 甲\n## 乙"
         let (textView, _) = makeTextView(text)
         let caret = paragraph(text, line: 1)
@@ -345,8 +345,8 @@ final class EditorUXTests: XCTestCase {
         let origin = textView.textContainerOrigin.x + 5
         let second = characterX(textView, at: text.utf16.count - 1) // 「乙」
         XCTAssertNotNil(second)
-        XCTAssertGreaterThan(second ?? -1, origin + 5,
-                             "光标段落的标题要露出 `## `（实际 \(second ?? -1)）")
+        XCTAssertEqual(second ?? -1, origin, accuracy: 0.5,
+                       "光标进标题行也不该露出 `## `（实际 \(second ?? -1)）")
     }
 
     /// 模拟 `Coordinator.applyHeadingMarkers`：直接调生产代码里的属性构造。

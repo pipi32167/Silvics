@@ -466,6 +466,24 @@ open -a .build/Build/Products/Debug/Silvics.app \
 - 未做：流式输出、外部联网服务（DeepSeek Web Tools / Tavily 已核额度未接）、会话加密。
 - 验收：`docs/acceptance/ai-chat-v0.7.0/report.md`。取证钩子：`SILVICS_AI_PROVIDER=1`、`SILVICS_SHOW=ai-chat|ai-quote|ai-evidence|ai-sending|ai-error|ai-details|settings-ai`、`SILVICS_CONTEXT_WIDTH`、`SILVICS_SETTINGS_SIZE`。
 
+### 编辑器渲染模型：对齐 Typora（分支 `feat/typora-mode`）
+
+- **块级标记永远不露源码**：标题 `#`、列表 `-`/`1.`、待办 `[ ]`、引用 `>` 在任何光标位置都压到 ≈ 0 宽，
+  由视图自绘符号。取消「光标段落露源码」这一态 —— 它是「输入 / 渲染割裂」的根源：
+  光标一进那一行，正文要横跳 33 pt（标题）/ 28 pt（待办）/ 13 pt（引用）/ 10 pt（列表），
+  而且首行比软换行的续行凸出。改这几处要看 `HeadingLayout.attributes`、`Coordinator.applyLists`、
+  `ListLayout.markersToRender` / `checkboxTodos`（都已不再看 `caretParagraph`）。
+- **行内标记零宽 + 光标进段才露**：`MarkdownStyler.inlineSyntaxMarks` 返回「标记区间 + 所属 span」，
+  `splitInline` 按光标切两桶。渲染态压到 ≈ 0 宽（早先只染透明，正文里到处是 9–14 pt 空洞）。
+- **链接只显文字**：`[文字](url)` 的 `[` 与 `](url)` 都进 `inlineSyntaxMarks`，URL 不再露在正文里。
+- **围栏行 / 表格分隔行折殁**：整行透明 + 行高 1 pt（`Theme.collapsedLineAttributes`），
+  光标落在那一行才恢复。围栏里的语言名因此不会残留在块顶。
+- **表格网格线**：pipe 渲染态不可见，`EditorTextView.drawTableGrid` 按 pipe 的 x 画块框 + 行线 + 列线。
+  分隔行的**字宽不能压**，只压行高 —— pipe 是各列横向基准，压宽会把整张表的竖线拉散。
+- **代码块行距**：`applyCodeLineSpacing` 把块内中间行的 `paragraphSpacing` 归零，行距只由 `lineSpacing` 决定。
+- **验收判据变了**：光标进出任意一行，两次截图 md5 必须相同（`docs/日记编辑器边界用例.md` S68）。
+  原 S37 / S40 / S49 / S50 的「光标段落露源码」已作废。
+
 ### 编辑器体验（issue #50，分支 `feat/ux-issue50`）
 
 - **左缘规则改了**：第 1 级列表 / 待办 / 引用的正文不再固定右移 22 pt，与标题、正文同左缘；
