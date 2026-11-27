@@ -77,6 +77,37 @@ final class StylerTests: XCTestCase {
         XCTAssertEqual(ns.substring(with: range), "**长期留存**")
     }
 
+    /// 块引用的懒惰续行：上一行 `> 引用`，下一行不写 `>` 接着写。
+    ///
+    /// cmark 把 `> ` 的宽度算进了续行的 column，整行右移两位，
+    /// 于是 `**粗**` 取成 `粗**`：星号露在屏幕上、粗体错位（issue #49 顺带发现）。
+    func testInlineRangesOnLazyBlockquoteContinuation() {
+        let text = "> 引用一行\n行内的 `code`、**粗**、*斜*。"
+        let spans = MarkdownStyler.analyze(text)
+        let ns = text as NSString
+        XCTAssertEqual(spans.strongs.map { ns.substring(with: $0) }, ["**粗**"])
+        XCTAssertEqual(spans.emphases.map { ns.substring(with: $0) }, ["*斜*"])
+        XCTAssertEqual(spans.inlineCodes.map { ns.substring(with: $0) }, ["`code`"])
+    }
+
+    /// 显式写了 `> ` 的续行不受影响（这类行 cmark 的 column 本来就是原始列）。
+    func testInlineRangesOnExplicitBlockquoteContinuation() {
+        let text = "> 引用一行\n> 行内的 `code`、**粗**、*斜*。"
+        let spans = MarkdownStyler.analyze(text)
+        let ns = text as NSString
+        XCTAssertEqual(spans.strongs.map { ns.substring(with: $0) }, ["**粗**"])
+        XCTAssertEqual(spans.emphases.map { ns.substring(with: $0) }, ["*斜*"])
+        XCTAssertEqual(spans.inlineCodes.map { ns.substring(with: $0) }, ["`code`"])
+    }
+
+    /// 普通段落里重复字不该被偏移修正带偏：原位置能对上就一个字节都不动。
+    func testRepeatedTextInPlainParagraphKeepsRanges() {
+        let text = "甲 甲 **甲** 与 甲"
+        let spans = MarkdownStyler.analyze(text)
+        let ns = text as NSString
+        XCTAssertEqual(spans.strongs.map { ns.substring(with: $0) }, ["**甲**"])
+    }
+
     func testHeadingRange() {
         let text = "# 稀疏重复优于集中突击\n\n正文一段。"
         let spans = MarkdownStyler.analyze(text)

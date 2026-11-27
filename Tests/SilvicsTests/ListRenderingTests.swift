@@ -322,7 +322,7 @@ final class ListRenderingTests: XCTestCase {
     func testS39CheckboxClickTogglesText() {
         // 真的点一下浮层复选框：target/action 接线、正文改写、状态刷新都要通。
         let (editor, _) = makeEditor("- [ ] 甲\n- [x] 乙")
-        editor.listMarkers = MarkdownStyler.listMarkers(in: editor.string)
+        editor.setListMarkers(MarkdownStyler.listMarkers(in: editor.string), parsedFrom: editor.string)
         editor.caretParagraph = nil
         editor.layoutSubtreeIfNeeded()
 
@@ -370,7 +370,7 @@ final class ListRenderingTests: XCTestCase {
 
         // 渲染层：光标段落不出现 NSButton，移开后补上
         let (editor, _) = makeEditor(text)
-        editor.listMarkers = list
+        editor.setListMarkers(list, parsedFrom: text)
         editor.caretParagraph = paragraph(text, line: 0)
         editor.layoutSubtreeIfNeeded()
         XCTAssertEqual(editor.todoCheckboxCount, 1, "光标段落的待办不画方框，露源码")
@@ -385,7 +385,7 @@ final class ListRenderingTests: XCTestCase {
     func testS40CheckboxSitsLeftOfTextAndCentersOnLine() {
         let text = "- [x] 甲\n\n正文"
         let (editor, _) = makeEditor(text)
-        editor.listMarkers = markers(text)
+        editor.setListMarkers(markers(text), parsedFrom: text)
         editor.caretParagraph = paragraph(text, line: 2)
         editor.layoutSubtreeIfNeeded()
         guard let box = editor.todoCheckboxFrames.first else {

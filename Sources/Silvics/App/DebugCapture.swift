@@ -669,12 +669,15 @@ enum DebugCapture {
     /// - `tables`：量出每个表格每行 pipe 的 x，打印列偏差（验收需要具体数字）。
     @MainActor
     static func runSelfTest(_ app: AppState) {
+        let raw = ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] ?? "nil"
+        print("[Silvics] selftest=\(raw) seed=\(DemoSeeder.isRequested) window=\(NSApp.windows.count)")
         switch ProcessInfo.processInfo.environment["SILVICS_SELFTEST"] {
         case "convert": runConvertSelfTest(app)
         case "tables": runTableSelfTest()
         case "link-jump": runLinkJumpSelfTest(app)
         case "cursor-unfocused": runUnfocusedCursorSelfTest(app)
         case "ime": runIMESelfTest(app)
+        case "ime-render": runIMERenderSelfTest(app)
         case "watch": startIMEWatch(app)
         case "undo": runUndoSelfTest(app)
         case "undo-same": runUndoSameNoteSelfTest(app)
@@ -1637,8 +1640,174 @@ enum DebugCapture {
     }
 
     /// 只找编辑区的 `EditorTextView`，不要拿列表栏搜索框的 field editor 充数。
-    private static func findEditorTextView(in view: NSView) -> EditorTextView? {
-        if let textView = view as? EditorTextView { return textView }
+    /// `SILVICS_SELFTEST=ime-render`：issue #49 取证。
+    ///
+    /// 把一篇含各类 markdown 的正文装进编辑区，光标停在第一条待办末尾，
+    /// 再按 `NSTextInputClient` 协议走「组合 → 上屏」。每步存一张图，
+    /// 同时打印「正文解析出的待办」与「屏幕上真实画出来的复选框」的账，
+    /// 错位、串态一眼能看出来。
+    @MainActor
+    private static func runIMERenderSelfTest(_ app: AppState, after delay: TimeInterval? = nil) {
+        let env = ProcessInfo.processInfo.environment
+        let delay = delay ?? Double(env["SILVICS_IME_DELAY"] ?? "") ?? 2.5
+        let gap = Double(env["SILVICS_IME_GAP"] ?? "") ?? 0.6
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            app.openTitle("渲染回归-issue49")
+            print("[ime-render] 打开标题完 current=\(app.current?.title ?? "nil") 笔记数=\(app.summaries.count)")
+            var waited = 0
+            while app.current == nil && waited < 40 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let textView = findEditorTextView(in: window.contentView!) else {
+                print("[ime-render] 找不到编辑区 笔记数=\(app.summaries.count)")
+                return
+            }
+            print("[ime-render] 找到编辑区")
+            // 走应用自己的「外部改写」路径装正文：直接 `textView.string =` 会跟 SwiftUI 回灌打架。
+            let body = sampleBody()
+            if let note = app.current {
+                app.bodyDidChange(body)
+                app.flushPendingSave()
+                app.loadNote(id: note.id)
+            }
+            try? await Task.sleep(nanoseconds: UInt64(gap * 1_000_000_000))
+
+            window.makeFirstResponder(textView)
+            let live = findEditorTextView(in: window.contentView!) ?? textView
+            print("[ime-render] 视图正文尾=\(tail(live.string, 8))")
+            let caretLine = "- [ ] qiayaoj"
+            let caret = (body as NSString).range(of: caretLine).location + (caretLine as NSString).length
+            live.setSelectedRange(NSRange(location: caret, length: 0))
+            live.needsLayout = true
+            live.layoutSubtreeIfNeeded()
+            print("[ime-render] 光标段落=\(live.caretParagraph.map(NSStringFromRange) ?? "nil")"
+                + " 建视图次数=\(NoteEditorView.makeCount)")
+            report(live, "01 渲染态")
+            capture("01-rendered")
+
+            // 组合分两步：先短拼音，再整串。每步都过一遍布局。
+            live.setMarkedText("qia", selectedRange: NSRange(location: 3, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+            live.needsLayout = true
+            live.layoutSubtreeIfNeeded()
+            report(live, "02 组字中 qia")
+            capture("02-composing-short")
+
+            live.setMarkedText("qia'yao'j", selectedRange: NSRange(location: 9, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+            live.needsLayout = true
+            live.layoutSubtreeIfNeeded()
+            print("[ime-render] 组字中 marked=\(live.hasMarkedText()) 光标段落=\(live.caretParagraph.map(NSStringFromRange) ?? "nil")")
+            report(live, "03 组字中 qia'yao'j")
+            capture("03-composing")
+
+            live.insertText("髂腰肌", replacementRange: NSRange(location: NSNotFound, length: 0))
+            live.needsLayout = true
+            live.layoutSubtreeIfNeeded()
+            print("[ime-render] 上屏后 marked=\(live.hasMarkedText()) 正文尾=\(tail(live.string))")
+            report(live, "04 上屏后")
+            capture("04-committed")
+
+            // 05：组字长到换行，下面的行整体下移。块级装饰（引用竖线、代码块底色）
+            // 与复选框都必须跟着走，不能停在组字前的位置。
+            live.setSelectedRange(NSRange(
+                location: caret + ("髂腰肌" as NSString).length, length: 0
+            ))
+            let long = String(repeating: "zhongguoren", count: 6)
+            live.setMarkedText(long, selectedRange: NSRange(location: (long as NSString).length, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+            live.needsLayout = true
+            live.layoutSubtreeIfNeeded()
+            report(live, "05 组字换行")
+            capture("05-composing-wrap")
+            live.unmarkText()
+            live.needsLayout = true
+            live.layoutSubtreeIfNeeded()
+
+            if env["SILVICS_QUIT_AFTER_SELFTEST"] == "1" {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    /// 取证用的正文：待办（未完成 / 已完成 / 嵌套）+ 其他 markdown 组件。
+    private static func sampleBody() -> String {
+        """
+        # 锻炼
+        - [ ] qiayaoj
+        - [x] 已完成的一组
+        - [ ] 未完成的另一组
+
+        ## 生活
+        - [x] 拿口罩
+        - [ ] 买牛奶
+
+        ## 工作
+        - [x] 迁移 gitlab runner & pg 到上海机器上
+          - [ ] 修改测试服务器的配置
+        - [ ] 补周报
+
+        ## 阅读
+        > 引用一行，看竖线与底色
+        行内的 `code`、**粗**、*斜* 与 [[甲]]、[[乙|别名]]。
+
+        | 列一 | 列二 |
+        | --- | --- |
+        | 甲 | 乙 |
+
+        ```swift
+        let a = 1
+        ```
+
+        # 日记
+        """
+    }
+
+    /// 浮层对账：正文里的待办 vs 屏幕上画出来的方框。
+    @MainActor
+    private static func report(_ textView: EditorTextView, _ label: String) {
+        let parsed = MarkdownStyler.listMarkers(in: textView.string)
+        let lineOf: (Int) -> Int = { offset in
+            let prefix = (textView.string as NSString).substring(to: min(offset, (textView.string as NSString).length))
+            return prefix.components(separatedBy: "\n").count
+        }
+        print("[ime-render] \(label) 待办= " + parsed.filter(\.isTodo).map {
+            "行\(lineOf($0.markerRange.location))\($0.kind == .todo(checked: true) ? "☑" : "☐")"
+        }.joined(separator: " "))
+        print("[ime-render] \(label) 方框= " + textView.todoCheckboxItems.map {
+            "行\(lineOf($0.location))\($0.checked ? "☑" : "☐")@y\(Int($0.frame.minY))"
+        }.joined(separator: " "))
+        print("[ime-render] \(label) 视图标记= " + textView.listMarkers.map {
+            "\(NSStringFromRange($0.markerRange))" + ($0.kind == .todo(checked: true) ? "☑" : ($0.isTodo ? "☐" : "·"))
+        }.joined(separator: " "))
+        print("[ime-render] \(label) 解析标记= " + parsed.map {
+            "\(NSStringFromRange($0.markerRange))" + ($0.kind == .todo(checked: true) ? "☑" : ($0.isTodo ? "☐" : "·"))
+        }.joined(separator: " "))
+        if let caret = textView.caretParagraph {
+            print("[ime-render] \(label) 光标段落=\(NSStringFromRange(caret))")
+        }
+        print("[ime-render] \(label) 引用区间=\(textView.quoteRanges.map(NSStringFromRange).joined(separator: ","))"
+            + " 代码块区间=\(textView.codeBlockRanges.map(NSStringFromRange).joined(separator: ","))")
+        // 第一条待办的行首标记：字号 0.1 表示压宽（渲染态），16.5 表示露源码。
+        if let first = parsed.first(where: { $0.isTodo }) {
+            let font = textView.textStorage?.attribute(.font, at: first.markerRange.location, effectiveRange: nil) as? NSFont
+            print("[ime-render] \(label) 待办行首标记字号=\(font?.pointSize ?? -1)")
+        }
+    }
+
+    /// 存一张图：`<SILVICS_CAPTURE 前缀>-<name>.png`。
+    @MainActor
+    private static func capture(_ name: String) {
+        guard let path, let ext = path.split(separator: ".").last, ext == "png" else { return }
+        let base = String(path.dropLast(4))
+        captureAll(to: "\(base)-\(name).png")
+    }
+
+    private static func findEditorTextView(in view: NSView) -> EditorTextView? {        if let textView = view as? EditorTextView { return textView }
         for sub in view.subviews {
             if let found = findEditorTextView(in: sub) { return found }
         }

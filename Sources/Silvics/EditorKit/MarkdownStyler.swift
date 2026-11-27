@@ -47,17 +47,30 @@ enum MarkdownStyler {
 
         let byteToUTF16 = buildByteToUTF16Map(text)
         let lineStarts = buildUTF8LineStarts(text)
+        let document = Document(parsing: text, options: [.parseBlockDirectives])
+        // 块引用懒惰续行的列偏移修正，见 `columnShifts(in:text:)`。
+        let shifts = columnShifts(in: document, text: text)
         let byteCount = text.utf8.count
         let uint16Count = text.utf16.count
 
+        /// 块级区间：column 就是原始行的字节列，不用修正。
         func nsRange(_ range: SourceRange?) -> NSRange? {
+            convert(range, shifts: [:])
+        }
+
+        /// 行内区间（粗体 / 斜体 / 行内代码 / 链接）：块引用里可能整行偏移，按行修正。
+        func inlineRange(_ range: SourceRange?) -> NSRange? {
+            convert(range, shifts: shifts)
+        }
+
+        func convert(_ range: SourceRange?, shifts: [Int: Int]) -> NSRange? {
             guard let range else { return nil }
             let lo = range.lowerBound
             let hi = range.upperBound
             guard lo.line >= 1, lo.line <= lineStarts.count,
                   hi.line >= 1, hi.line <= lineStarts.count else { return nil }
-            let loByte = lineStarts[lo.line - 1] + lo.column - 1
-            let hiByte = lineStarts[hi.line - 1] + hi.column - 1
+            let loByte = lineStarts[lo.line - 1] + lo.column - 1 + (shifts[lo.line] ?? 0)
+            let hiByte = lineStarts[hi.line - 1] + hi.column - 1 + (shifts[hi.line] ?? 0)
             guard loByte >= 0, hiByte >= 0,
                   loByte <= byteCount, hiByte <= byteCount,
                   loByte <= hiByte else { return nil }
@@ -68,19 +81,19 @@ enum MarkdownStyler {
         }
 
         var collector = Collector()
-        collector.visit(Document(parsing: text, options: [.parseBlockDirectives]))
+        collector.visit(document)
 
         var spans = EditorSpans()
         spans.headings = collector.headings.compactMap { level, source in
             nsRange(source).map { (level, $0) }
         }
-        spans.strongs = collector.strongs.compactMap(nsRange)
-        spans.emphases = collector.emphases.compactMap(nsRange)
-        spans.inlineCodes = collector.inlineCodes.compactMap(nsRange)
+        spans.strongs = collector.strongs.compactMap(inlineRange)
+        spans.emphases = collector.emphases.compactMap(inlineRange)
+        spans.inlineCodes = collector.inlineCodes.compactMap(inlineRange)
         spans.codeBlocks = collector.codeBlocks.compactMap(nsRange)
         spans.blockQuotes = collector.blockQuotes.compactMap(nsRange)
         spans.listItems = collector.listItems.compactMap(nsRange)
-        spans.markdownLinks = collector.links.compactMap(nsRange)
+        spans.markdownLinks = collector.links.compactMap(inlineRange)
         spans.headingMarkers = headingMarkerRanges(in: text)
         return spans
     }
@@ -93,6 +106,49 @@ enum MarkdownStyler {
     }
 
     // MARK: - 偏移映射
+
+    /// 每行的**行内**列偏移修正（单位：UTF-8 字节），只对「column 与原始行对不上」的行有值。
+    ///
+    /// 触发场景：块引用的**懒惰续行**。上一行写 `> 引用`，下一行不写 `>` 直接接着写，
+    /// CommonMark 仍把它算在引用块里，而 cmark 给行内节点报的 column 把 `> ` 的宽度算进去了，
+    /// 于是整行右移两位：`**粗**` 的区间取成 `粗**`，星号留在屏幕上，粗体也错位。
+    /// 反过来，`  > 甲` 这种带前导空格的引用行，行内 column 又把缩进吃掉了。
+    ///
+    /// 只修行内：块级节点（引用 / 列表 / 代码块）的 column 本来就是原始列，
+    /// 一起修会把整块区间推出正文范围。
+    ///
+    /// 校准办法：拿行内 `Text` 节点的原文，在原始行里找回它的真实字节位置，差值就是偏移。
+    /// 找不回来（转义、实体这类改写过的内容）就跳过这一行，保持原样。
+    private static func columnShifts(in document: Document, text: String) -> [Int: Int] {
+        let lines = text.utf8.split(separator: 0x0A, omittingEmptySubsequences: false).map { Array($0) }
+        var shifts: [Int: Int] = [:]
+        var stack: [Markup] = [document]
+        while let node = stack.popLast() {
+            for child in node.children { stack.append(child) }
+            guard let textNode = node as? Text, let range = textNode.range else { continue }
+            let line = range.lowerBound.line
+            guard line >= 1, line <= lines.count, shifts[line] == nil else { continue }
+            let haystack = lines[line - 1]
+            let needle = Array(textNode.string.utf8)
+            guard !needle.isEmpty, needle.count <= haystack.count else { continue }
+            let column = range.lowerBound.column - 1
+            var found: Int?
+            // 先试原位置，再向两侧慢慢搜：偏移就是块引用标记的宽度，最多十几个字节。
+            for delta in 0...12 {
+                for candidate in delta == 0 ? [column] : [column - delta, column + delta] {
+                    guard candidate >= 0, candidate + needle.count <= haystack.count else { continue }
+                    if Array(haystack[candidate..<(candidate + needle.count)]) == needle {
+                        found = candidate
+                        break
+                    }
+                }
+                if found != nil { break }
+            }
+            guard let start = found, start != column else { continue }
+            shifts[line] = start - column
+        }
+        return shifts
+    }
 
     /// 每个 UTF-8 字节边界对应的 UTF-16 偏移。数组长度 = utf8.count + 1。
     static func buildByteToUTF16Map(_ text: String) -> [Int32] {
