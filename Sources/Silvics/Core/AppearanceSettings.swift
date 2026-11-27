@@ -43,10 +43,12 @@ struct AppearanceSettings: Codable, Equatable {
         }
     }
 
-    var bodySize: Double = 15
+    /// 正文默认宋体 16.5 / 行距 7：对应原型的 16.5 / 行高 1.75。
+    /// 只改新装默认值；已存过设置的用户保持自己的值。
+    var bodySize: Double = 16.5
     var codeSize: Double = 13.5
-    var lineSpacing: Double = 5
-    var fontFamily: FontFamily = .system
+    var lineSpacing: Double = 7
+    var fontFamily: FontFamily = .serif
     /// 主题色。默认苔绿。
     var themeColor: ThemeColor = .moss
     /// 右栏（详情 / AI）与弹窗预览的字号。

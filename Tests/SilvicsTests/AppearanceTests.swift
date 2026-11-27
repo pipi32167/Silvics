@@ -13,10 +13,10 @@ final class AppearanceSettingsTests: XCTestCase {
 
     func testDefaults() {
         let settings = AppearanceSettings()
-        XCTAssertEqual(settings.bodySize, 15)
+        XCTAssertEqual(settings.bodySize, 16.5)
         XCTAssertEqual(settings.codeSize, 13.5)
-        XCTAssertEqual(settings.lineSpacing, 5)
-        XCTAssertEqual(settings.fontFamily, .system)
+        XCTAssertEqual(settings.lineSpacing, 7)
+        XCTAssertEqual(settings.fontFamily, .serif)
         XCTAssertTrue(settings.isDefault)
     }
 
@@ -33,7 +33,7 @@ final class AppearanceSettingsTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppearanceSettings.self, from: Data(#"{"bodySize":17}"#.utf8))
         XCTAssertEqual(decoded.bodySize, 17)
         XCTAssertEqual(decoded.codeSize, 13.5)
-        XCTAssertEqual(decoded.fontFamily, .system)
+        XCTAssertEqual(decoded.fontFamily, .serif)
     }
 
     func testClampedProperty() {
@@ -160,7 +160,7 @@ final class ThemeSettingsTests: XCTestCase {
         Theme.apply(settings)
 
         XCTAssertNotEqual(Theme.bodyFont.fontName, systemName, "衬线族应换成不同字体")
-        XCTAssertEqual(Theme.bodyFont.pointSize, 15)
+        XCTAssertEqual(Theme.bodyFont.pointSize, 16.5)
     }
 
     func testMonoFamilyIsMonospaced() {

@@ -35,23 +35,24 @@ struct ClipReaderView: View {
         HStack(spacing: 8) {
             if !site.isEmpty {
                 Text(site)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: Tokens.TypeScale.label.size, weight: .medium))
+                    .foregroundStyle(Tokens.ink2)
             }
             if !author.isEmpty {
                 Text(author)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: Tokens.TypeScale.label.size))
+                    .foregroundStyle(Tokens.ink3)
             }
             if !published.isEmpty {
                 Text(published)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: Tokens.TypeScale.label.size))
+                    .foregroundStyle(Tokens.ink3)
             }
             if !url.isEmpty, let link = URL(string: url) {
                 Link(destination: link) {
                     Label("原文", systemImage: "arrow.up.right.square")
-                        .font(.system(size: 11))
+                        .font(.system(size: Tokens.TypeScale.label.size))
+                        .foregroundStyle(Tokens.accent)
                 }
             }
             Spacer()
@@ -59,7 +60,8 @@ struct ClipReaderView: View {
                 isEditing.toggle()
             } label: {
                 Label(isEditing ? "完成编辑" : "编辑正文", systemImage: isEditing ? "checkmark" : "pencil")
-                    .font(.system(size: 11))
+                    .font(.system(size: Tokens.TypeScale.label.size))
+                    .foregroundStyle(Tokens.ink2)
             }
             .buttonStyle(.borderless)
             .help("剪藏正文默认只读。修正抽取错误时才需要打开编辑。")
@@ -67,7 +69,7 @@ struct ClipReaderView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .frame(height: 30)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+        .background(Tokens.paper)
     }
 
     // MARK: - 正文
