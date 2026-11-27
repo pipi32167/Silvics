@@ -62,6 +62,8 @@ struct ProvidersSettingsPane: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
+        .scrollContentBackground(.hidden)
         .contentMargins(.top, 8, for: .scrollContent)
         .onAppear {
             app.refreshProviders()

@@ -101,6 +101,8 @@ struct AISettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
         .padding(.top, 8)
     }
 

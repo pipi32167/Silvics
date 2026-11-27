@@ -79,6 +79,7 @@ struct SettingsView: View {
         } detail: {
             detail
         }
+        .tint(Tokens.accent)
         .navigationTitle("设置")
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 620, minHeight: 520)
@@ -119,6 +120,7 @@ struct SettingsView: View {
             }
         }
         .navigationTitle(activeTab.title)
+        .background(Tokens.paper)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -150,25 +152,54 @@ private struct SettingsSidebar: View {
     @Binding var selectedTab: SettingsTab?
 
     var body: some View {
-        List(selection: $selectedTab) {
-            ForEach(SettingsTab.allCases) { tab in
-                Label(tab.title, systemImage: tab.systemImage)
-                    .tag(tab)
+        // 不用 List(.sidebar)：系统侧栏材质的底色不受我们控制，取 token 自绘才和主窗一致。
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(spacing: 2) {
+                ForEach(SettingsTab.allCases) { tab in
+                    row(tab)
+                }
             }
+            .padding(.horizontal, 8)
+            .padding(.top, 10)
+
+            Spacer(minLength: 0)
 
             Text(AppVersion.display)
                 .font(.footnote)
                 .fontDesign(.monospaced)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 8)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
+                .foregroundStyle(Tokens.ink3)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
         }
-        .listStyle(.sidebar)
-        .scrollEdgeEffectSoftIfAvailable()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Tokens.rail)
         .navigationTitle("设置")
+    }
+
+    private func row(_ tab: SettingsTab) -> some View {
+        let selected = selectedTab == tab
+        return Button {
+            selectedTab = tab
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: tab.systemImage)
+                    .font(.system(size: 11))
+                    .frame(width: 16)
+                    .foregroundStyle(selected ? Tokens.accent : Tokens.ink3)
+                Text(tab.title)
+                    .font(.system(size: Tokens.TypeScale.body.size))
+                    .foregroundStyle(selected ? Tokens.accent : Tokens.ink)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
+                    .fill(selected ? Tokens.selectedFill : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

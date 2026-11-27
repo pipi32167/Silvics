@@ -17,9 +17,9 @@ struct AppearanceSettingsPane: View {
             Section {
                 LabeledContent("正文字号") {
                     HStack(spacing: 12) {
-                        Slider(value: $draft.bodySize, in: AppearanceSettings.bodySizeRange, step: 1)
+                        Slider(value: $draft.bodySize, in: AppearanceSettings.bodySizeRange, step: 0.5)
                             .frame(width: 190)
-                        Text("\(Int(draft.bodySize)) pt")
+                        Text(String(format: "%.1f pt", draft.bodySize))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .frame(width: 48, alignment: .trailing)
@@ -131,6 +131,8 @@ struct AppearanceSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Tokens.paper)
         .scrollContentBackground(.hidden)
         .contentMargins(.top, 8, for: .scrollContent)
         .onAppear {
