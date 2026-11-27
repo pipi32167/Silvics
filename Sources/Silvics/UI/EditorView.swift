@@ -143,11 +143,39 @@ final class EditorTextView: NSTextView {
     }
 
     /// 当前正文的列表行。项目符号 / 序号 / 待办复选框都按它画。
+    ///
+    /// 与 `listMarkersLength` 一起构成不变量：这份标记必须是从当前正文解析出来的。
+    /// 组字期间正文变了而标记没重算时，按旧偏移摆浮层会把复选框摆到别的行上（issue #49）。
     var listMarkers: [ListMarker] = [] {
         didSet {
             if oldValue != listMarkers { needsDisplay = true }
             relayoutTodoCheckboxes()
         }
+    }
+
+    /// `listMarkers` 是解析自多长的正文。`relayoutTodoCheckboxes` 用它挡住过期偏移。
+    private(set) var listMarkersLength: Int = 0
+
+    /// 换一份标记，同时记下它是从哪份正文解析出来的。
+    func setListMarkers(_ markers: [ListMarker], parsedFrom text: String) {
+        listMarkersLength = (text as NSString).length
+        listMarkers = markers
+    }
+
+    /// 标记与当前正文是否还能对上：长度一致，且每行首偏移确实落在段落起始位置。
+    ///
+    /// 只比长度也够挡住组字这种情况，但同长度改写（选中后重打一个词）不会变长度，
+    /// 多查一次「行首是不是段落起点」就能把这类错位一起挡掉。
+    private var listMarkersMatchCurrentText: Bool {
+        let ns = string as NSString
+        guard listMarkersLength == ns.length else { return false }
+        for marker in listMarkers {
+            let location = marker.markerRange.location
+            guard location >= 0, location < ns.length else { return false }
+            let paragraph = ns.paragraphRange(for: NSRange(location: location, length: 0))
+            guard paragraph.location == location else { return false }
+        }
+        return true
     }
 
     /// 光标所在段落。这一段露源码：标记不压宽，也不画符号与复选框（S37 / S40）。
@@ -173,6 +201,14 @@ final class EditorTextView: NSTextView {
     /// 已画出的复选框位置，按行首升序。
     var todoCheckboxFrames: [NSRect] {
         todoCheckboxes.keys.sorted().map { todoCheckboxes[$0]!.frame }
+    }
+
+    /// 已画出的复选框：行首偏移、勾选态、位置。测试按它对账（issue #49）。
+    var todoCheckboxItems: [(location: Int, checked: Bool, frame: NSRect)] {
+        todoCheckboxes.keys.sorted().map { key in
+            let box = todoCheckboxes[key]!
+            return (key, box.isChecked, box.frame)
+        }
     }
 
     // MARK: 待办复选框浮层
@@ -236,8 +272,12 @@ final class EditorTextView: NSTextView {
     }
 
     /// 按第一视觉行的位置重排复选框：可见范围内才建控件。
+    ///
+    /// 前置条件：`listMarkers` 必须来自当前正文。组字期间正文一变、偏移就作废，
+    /// 此时按偏移量位置会把别的行的复选框画到组字这一行，勾选态也跟着取错（issue #49）。
     private func relayoutTodoCheckboxes() {
         guard !isLayingOutCheckboxes else { return }
+        guard listMarkersMatchCurrentText else { return }
         isLayingOutCheckboxes = true
         defer { isLayingOutCheckboxes = false }
 
@@ -297,7 +337,7 @@ final class EditorTextView: NSTextView {
         didChangeText()
         // 自己先把标记表刷新一遍：勾完立刻换勾选外观，不依赖外部是否重排。
         // `didChangeText` 之后 Coordinator 还会整体 restyle 一次，这次只是让浮层不等它。
-        listMarkers = MarkdownStyler.listMarkers(in: string)
+        setListMarkers(MarkdownStyler.listMarkers(in: string), parsedFrom: string)
         return true
     }
 
@@ -608,11 +648,52 @@ final class EditorTextView: NSTextView {
 
     // MARK: 括号配对（issue #8）
 
-    /// 输入 `[` 自动补 `]`；再输入 `]` 时跨过已补的那个。
+    /// 输入法正在组字。
+    ///
+    /// 从第一次 `setMarkedText` 起为真，到 `unmarkText` / 上屏落回 false。
+    /// 不能只看 `hasMarkedText()`：AppKit 在替换组合串的那一瞬间会短暂清掉 marked range，
+    /// 那一瞬读到的是 false，于是组字被当成普通输入重排一遍（issue #49）。
+    private(set) var isComposingText = false
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        isComposingText = true
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        // 组合串本身就是正文的一部分：浮层位置要跟着它走，属性一律不动（issue #49）。
+        // 不能等 `textDidChange`：组字是「进行中的编辑」，实测它不改正文通知（同 I01）。
+        refreshDecorationsDuringComposition()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        isComposingText = false
+    }
+
+    /// 组字期间只重算「装饰画在哪里」，不碰字符属性、不改光标段落。
+    ///
+    /// `restyle` 在组字期间让路（I01–I04），按字符偏移自绘的装饰于是停在组字前的位置：
+    /// 复选框会摆到别的行、勾选态跟着串行（issue #49），引用竖线与代码块底色会画到上一段。
+    /// 这里只补区间，字体、字色、kern、「哪一段露源码」一律不动：组字期间画面不动，位置对。
+    func refreshDecorationsDuringComposition() {
+        let text = string
+        setListMarkers(MarkdownStyler.listMarkers(in: text), parsedFrom: text)
+        let spans = MarkdownStyler.analyze(text)
+        codeBlockRanges = spans.codeBlocks
+        quoteRanges = spans.blockQuotes
+    }
+
+    /// 组合结束的兜底出口。`unmarkText` 与 `insertText` 都会走到，
+    /// 个别输入法两者都不回调，只好在 `textDidChange` 里看 marked range 收尾。
+    func endComposition() {
+        isComposingText = false
+    }
+
+    /// 输入 `[` 自动补 `]`；再输入 `]` 时跳已补的那个。
     ///
     /// 只处理单字符输入，粘贴与输入法提交都走 `super`。
     /// 中文输入法组合期间（`hasMarkedText`）不介入，避免打乱候选。
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        // 上屏＝组合结束。先落标记，好让 `textDidChange` 里的重排照常跑（I02）。
+        isComposingText = false
         guard isEditable, !hasMarkedText(),
               let typed = string as? String, typed.count == 1 else {
             super.insertText(string, replacementRange: replacementRange)
@@ -1200,7 +1281,7 @@ struct NoteEditorView: NSViewRepresentable {
             guard let textView, let storage = textView.textStorage else { return }
             guard !isApplyingStyles else { return }
             // 中文输入法组合期间不改属性、不重设 typingAttributes（I01–I04）。
-            guard !textView.hasMarkedText() else { return }
+            guard !textView.hasMarkedText(), !textView.isComposingText else { return }
             isApplyingStyles = true
             defer { isApplyingStyles = false }
 
@@ -1255,7 +1336,7 @@ struct NoteEditorView: NSViewRepresentable {
             lastCaretParagraph = caretParagraph
             // 块底色由视图自绘，区间变了要重画。
             textView.codeBlockRanges = spans.codeBlocks
-            textView.listMarkers = listMarkers
+            textView.setListMarkers(listMarkers, parsedFrom: text)
             textView.quoteRanges = spans.blockQuotes
             textView.caretParagraph = caretParagraph
 
@@ -1295,7 +1376,7 @@ struct NoteEditorView: NSViewRepresentable {
         /// 光标换了段落才重刷标记可见性。不重解析 Markdown，不碰选区，不碰 typingAttributes。
         private func refreshSyntaxMarksForCaret() {
             guard let textView, let storage = textView.textStorage else { return }
-            guard !isApplyingStyles, !textView.hasMarkedText() else { return }
+            guard !isApplyingStyles, !textView.hasMarkedText(), !textView.isComposingText else { return }
             guard !lastSyntaxMarkers.isEmpty || !lastListMarkers.isEmpty || !lastQuoteMarkers.isEmpty
                     || !lastTableBlocks.isEmpty || !lastHeadingMarkers.isEmpty
                     || !lastLineIndents.isEmpty else {
@@ -1581,10 +1662,16 @@ struct NoteEditorView: NSViewRepresentable {
             guard parent.editable else { return }
             guard let textView = notification.object as? EditorTextView else { return }
             let text = textView.string
+            // 兜底：marked range 已经没了就说明组合结束（个别输入法不回调 unmarkText）。
+            if textView.isComposingText, !textView.hasMarkedText() { textView.endComposition() }
             // 用户在排队的外部正文落下之前就自己敲了字：以视图为准，丢掉那次外部写入。
             if let pending = pendingExternal, text != pending.text {
                 pendingExternal = nil
                 appliedRevision = pending.revision
+            }
+            if textView.isComposingText {
+                // 组字中属性不动，但浮层位置要跟得上正文：只补标记，不重排样式（issue #49）。
+                textView.refreshDecorationsDuringComposition()
             }
             restyle(force: false)
             parent.onChange(text)
